@@ -42,6 +42,8 @@ pi-for-raviedho/
 │   ├── oauth.ts                # OAuth 2.0 Device Flow login, loopback poll, and token exchange
 │   ├── stream.ts               # Streaming client via OpenAI Chat Completions compatibility
 │   └── types.ts                # Hyper device auth, token, and model schemas
+├── timer/
+│   └── index.ts                # Working status indicator elapsed duration timer
 ├── usage/
 │   ├── antigravity.ts          # Cloud Code Assist quota bucket scraper
 │   ├── codex.ts                # OpenAI Codex /wham/usage quota scraper

@@ -34,6 +34,7 @@ import {
   refreshHyperToken,
 } from "./hyper/oauth.js";
 import { streamHyper } from "./hyper/stream.js";
+import { registerWorkingTimer } from "./timer/index.js";
 import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
 
 export default async function (pi: ExtensionAPI) {
@@ -192,4 +193,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register dynamic OpenAI Codex plan filter and multi-account provider
   registerCodexFilter(pi);
+
+  // Register elapsed working timer for the status indicator
+  registerWorkingTimer(pi);
 }
