@@ -174,8 +174,7 @@ function buildUsageBar(
   }
 
   const accountName = account.email ? account.email : account.id;
-  const planTag = account.planType ? ` · ${account.planType}` : "";
-  const prefix = `${theme.fg("accent", accountName)}${theme.fg("dim", planTag)}`;
+  const prefix = theme.fg("accent", accountName);
 
   const now = Date.now();
   // Check 429 cooldown
