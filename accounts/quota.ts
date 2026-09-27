@@ -113,6 +113,19 @@ export class QuotaManager {
       fetchedAt: Date.now(),
     });
     this.saveDiskCache();
+
+    if (report.error) {
+      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed/i.test(report.error);
+      if (isAuthErr) {
+        const store = AccountStore.getInstance();
+        const acc = store.get(accountId);
+        if (acc && !acc.disabledCause) {
+          acc.disabledCause = `Authentication failed: ${report.error}`;
+          store.upsert(acc);
+        }
+      }
+    }
+
     for (const listener of this.updateListeners) {
       try {
         listener();
@@ -222,6 +235,23 @@ export class QuotaManager {
     }
 
     const report = this.getReport(account.id);
+    if (report?.error) {
+      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed/i.test(report.error);
+      if (isAuthErr && !account.disabledCause) {
+        account.disabledCause = `Authentication failed: ${report.error}`;
+        AccountStore.getInstance().upsert(account);
+      }
+      return {
+        isExhausted: true,
+        usedFraction: 1.0,
+        paceDelta: 1.0,
+        weight: 9999.0,
+        remainingFraction: 0.0,
+        isUnstarted: false,
+        reason: report.error,
+      };
+    }
+
     if (!report || report.groups.length === 0) {
       // No cached report yet: assume unstarted healthy candidate
       return {

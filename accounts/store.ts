@@ -223,6 +223,16 @@ export class AccountStore {
       }
     }
 
+    // Guard: Do not write back to auth.json if the provider is not already in auth.json
+    // and no environment variable is set (avoids undoing user logout).
+    const envVal =
+      provider === "hyper"
+        ? process.env.HYPER_API_KEY?.trim()
+        : undefined;
+    if (!existingAuth && !envVal) {
+      return;
+    }
+
     if (active.type === "oauth") {
       currentAuth[provider] = {
         type: "oauth",
@@ -342,6 +352,7 @@ export class AccountStore {
 
     // Check ~/.pi/agent/auth.json
     const piAuthPath = this.piAuthPath;
+    const authProviders = new Set<string>();
     if (existsSync(piAuthPath)) {
       try {
         const raw = readFileSync(piAuthPath, "utf-8");
@@ -350,6 +361,7 @@ export class AccountStore {
           for (const [provider, entry] of Object.entries(parsed)) {
             if (!SUPPORTED_PROVIDERS.has(provider)) continue;
             if (!entry || typeof entry !== "object") continue;
+            authProviders.add(provider);
             const cred = entry as Record<string, unknown>;
             const access = typeof cred.access === "string" ? cred.access : undefined;
             const refresh = typeof cred.refresh === "string" ? cred.refresh : undefined;
@@ -375,6 +387,24 @@ export class AccountStore {
               (provider === "google-antigravity" ? "free-tier" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
             const existing = findExisting(provider, email, accountId, id, refresh, key);
+
+            // For API key providers, prune any prior accounts whose key does not match the current key in auth.json
+            if (cred.type === "api_key" || key) {
+              const envKeyVal =
+                provider === "hyper"
+                  ? process.env.HYPER_API_KEY?.trim()
+                  : undefined;
+              const priorCount = this.data.accounts.length;
+              this.data.accounts = this.data.accounts.filter((a) => {
+                if (a.provider !== provider || a.type !== "api_key") return true;
+                if (key && (a.apiKey === key || a.access === key)) return true;
+                if (envKeyVal && (a.apiKey === envKeyVal || a.access === envKeyVal)) return true;
+                return false;
+              });
+              if (this.data.accounts.length !== priorCount) {
+                modified = true;
+              }
+            }
 
             if (!existing) {
               const account: AccountCredential = {
@@ -432,6 +462,7 @@ export class AccountStore {
     if (process.env.HYPER_API_KEY) {
       const envKey = process.env.HYPER_API_KEY.trim();
       if (envKey) {
+        authProviders.add("hyper");
         const id = AccountStore.generateAccountId("hyper", "env-key");
         const existing = findExisting("hyper", undefined, undefined, id, undefined, envKey);
         if (!existing) {
@@ -459,12 +490,25 @@ export class AccountStore {
       }
     }
 
+    // If a supported provider has no credentials in auth.json and no env variable,
+    // it was logged out or never configured: prune its accounts from accounts.json
+    for (const provider of SUPPORTED_PROVIDERS) {
+      if (!authProviders.has(provider)) {
+        const countBefore = this.data.accounts.length;
+        this.data.accounts = this.data.accounts.filter((a) => a.provider !== provider);
+        if (this.data.accounts.length !== countBefore) {
+          delete this.data.activeAccounts[provider];
+          modified = true;
+        }
+      }
+    }
+
     if (modified) {
       this.save();
     }
 
     for (const provider of SUPPORTED_PROVIDERS) {
-      if (this.data.activeAccounts[provider]) {
+      if (this.data.activeAccounts[provider] && authProviders.has(provider)) {
         this.syncActiveToPiAuth(provider);
       }
     }
