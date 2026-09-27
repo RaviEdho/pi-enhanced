@@ -315,7 +315,12 @@ async function refreshCandidateAccounts(
   ctx: ExtensionContext,
   force: boolean = false
 ): Promise<void> {
-  const model = ctx.model;
+  let model;
+  try {
+    model = ctx.model;
+  } catch {
+    return;
+  }
   if (!model) return;
 
   const store = AccountStore.getInstance();
@@ -353,7 +358,12 @@ async function refreshSessionAccountQuota(
   ctx: ExtensionContext,
   maxAgeMs: number = 0
 ): Promise<void> {
-  const model = ctx.model;
+  let model;
+  try {
+    model = ctx.model;
+  } catch {
+    return;
+  }
   if (!model) return;
 
   const balancer = AccountBalancer.getInstance();
