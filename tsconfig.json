@@ -11,9 +11,13 @@
   },
   "include": [
     "index.ts",
-    "antigravity/**/*",
-    "usage/**/*",
-    "codex/**/*"
+    "accounts/**/*",
+    "commit/**/*",
+    "continue/**/*",
+    "filter/**/*",
+    "providers/**/*",
+    "timer/**/*",
+    "usage/**/*"
   ],
   "exclude": [
     "node_modules"

@@ -8,9 +8,9 @@ Guidance and instructions for AI agents working in this repository.
 
 ### Key Capabilities
 - **Multi-Account Manager & Balancer (`accounts/`)**: Multi-account store (`accounts.json`), session affinity hashing, weekly reset pace optimization, automatic sync from Pi (`auth.json`), automatic token refresh, and transparent 429 rate limit failover across accounts during streaming turns.
-- **Google Antigravity Provider (`antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
-- **Charm Hyper Provider (`hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
-- **OpenAI Codex Plan Filter (`codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
+- **Google Antigravity Provider (`providers/antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
+- **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
+- **OpenAI Codex Plan Filter (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
 - **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
 - **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
 - **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
@@ -28,17 +28,6 @@ pi-for-raviedho/
 │   ├── store.ts                # AccountStore: persistence, auth.json sync
 │   ├── types.ts                # AccountCredential and store schemas
 │   └── wrapper.ts              # executeWithMultiAccountFailover: stream wrapper with 429 rotation
-├── antigravity/
-│   ├── constants.ts            # Wire profiles, OAuth endpoints, Google client configuration
-│   ├── models.ts               # Dynamic model catalog discovery & collapsing from Google
-│   ├── oauth.ts                # OAuth 2.0 PKCE flow, loopback server, and token refresh
-│   ├── stream.ts               # Cloud Code Assist SSE streaming client & schema transformation
-│   └── types.ts                # Cloud Code Assist protocol schemas
-├── codex/
-│   ├── catalog.ts              # Live catalog fetching from OpenAI & disk caching
-│   ├── index.ts                # Provider wrapper with filterModels hook
-│   ├── plan.ts                 # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
-│   └── types.ts                # Catalog & cache types
 ├── commit/
 │   ├── dialog.ts               # Interactive proposal confirmation dialog with actions & cost metrics
 │   ├── editor.ts               # BlockingCommitEditor with live status & recent action logging
@@ -64,12 +53,24 @@ pi-for-raviedho/
 │   ├── sanitizer.ts            # ANSI stripping, carriage return resolution, line dedup
 │   ├── tracker.ts              # GainTracker analytics store for token/byte reduction
 │   └── types.ts                # Filter, recall, rule, and analytics data types
-├── hyper/
-│   ├── constants.ts            # Base URLs, API endpoints, User-Agent, timeouts
-│   ├── models.ts               # Dynamic model catalog discovery & fallback mapping from Hyper
-│   ├── oauth.ts                # OAuth 2.0 Device Flow login, loopback poll, and token exchange
-│   ├── stream.ts               # Streaming client via OpenAI Chat Completions compatibility
-│   └── types.ts                # Hyper device auth, token, and model schemas
+├── providers/
+│   ├── antigravity/
+│   │   ├── constants.ts        # Wire profiles, OAuth endpoints, Google client configuration
+│   │   ├── models.ts           # Dynamic model catalog discovery & collapsing from Google
+│   │   ├── oauth.ts            # OAuth 2.0 PKCE flow, loopback server, and token refresh
+│   │   ├── stream.ts           # Cloud Code Assist SSE streaming client & schema transformation
+│   │   └── types.ts            # Cloud Code Assist protocol schemas
+│   ├── codex/
+│   │   ├── catalog.ts          # Live catalog fetching from OpenAI & disk caching
+│   │   ├── index.ts            # Provider wrapper with filterModels hook
+│   │   ├── plan.ts             # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
+│   │   └── types.ts            # Catalog & cache types
+│   └── hyper/
+│       ├── constants.ts        # Base URLs, API endpoints, User-Agent, timeouts
+│       ├── models.ts           # Dynamic model catalog discovery & fallback mapping from Hyper
+│       ├── oauth.ts            # OAuth 2.0 Device Flow login, loopback poll, and token exchange
+│       ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
+│       └── types.ts            # Hyper device auth, token, and model schemas
 ├── timer/
 │   └── index.ts                # Working status indicator elapsed duration timer
 ├── usage/

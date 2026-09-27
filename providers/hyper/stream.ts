@@ -6,8 +6,8 @@ import type {
   TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import { QuotaManager } from "../accounts/quota.js";
-import type { ResolvedAccountAuth } from "../accounts/types.js";
+import { QuotaManager } from "../../accounts/quota.js";
+import type { ResolvedAccountAuth } from "../../accounts/types.js";
 import { HYPER_USER_AGENT } from "./constants.js";
 
 /**

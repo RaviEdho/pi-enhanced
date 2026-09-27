@@ -1,8 +1,8 @@
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { discoverProject, refreshAntigravityToken } from "../antigravity/oauth.js";
-import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../codex/catalog.js";
-import { getCodexPlanType } from "../codex/plan.js";
-import { refreshHyperToken } from "../hyper/oauth.js";
+import { discoverProject, refreshAntigravityToken } from "../providers/antigravity/oauth.js";
+import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
+import { getCodexPlanType } from "../providers/codex/plan.js";
+import { refreshHyperToken } from "../providers/hyper/oauth.js";
 import type { ProviderUsageReport } from "../usage/types.js";
 import { QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";

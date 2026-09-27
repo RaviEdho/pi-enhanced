@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { AccountStore } from "../accounts/store.js";
+import { AccountStore } from "../../accounts/store.js";
 import {
   CALLBACK_PORT,
   CALLBACK_PATH,

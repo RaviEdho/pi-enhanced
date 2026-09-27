@@ -4,8 +4,8 @@ import { join } from "node:path";
 import type { Api, Credential, Model, Provider, SimpleStreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AccountStore } from "../accounts/store.js";
-import { executeWithMultiAccountFailover } from "../accounts/wrapper.js";
+import { AccountStore } from "../../accounts/store.js";
+import { executeWithMultiAccountFailover } from "../../accounts/wrapper.js";
 import {
   DEFAULT_FALLBACK_FREE_MODELS,
   fetchLiveCodexCatalog,

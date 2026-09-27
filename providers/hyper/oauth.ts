@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { AccountStore } from "../accounts/store.js";
+import { AccountStore } from "../../accounts/store.js";
 import {
   DEFAULT_DEVICE_POLL_INTERVAL_SECONDS,
   DEVICE_AUTH_URL,

@@ -7,33 +7,33 @@ import {
   ANTIGRAVITY_PRIMARY_ENDPOINT,
   PROVIDER_ID,
   PROVIDER_NAME,
-} from "./antigravity/constants.js";
+} from "./providers/antigravity/constants.js";
 import {
   DEFAULT_ANTIGRAVITY_MODELS,
   fetchAndCollapseAntigravityModels,
-} from "./antigravity/models.js";
+} from "./providers/antigravity/models.js";
 import {
   getAntigravityApiKey,
   loginAntigravity,
   refreshAntigravityToken,
-} from "./antigravity/oauth.js";
-import { streamAntigravity } from "./antigravity/stream.js";
-import { registerCodexFilter } from "./codex/index.js";
+} from "./providers/antigravity/oauth.js";
+import { streamAntigravity } from "./providers/antigravity/stream.js";
+import { registerCodexFilter } from "./providers/codex/index.js";
 import {
   HYPER_API_BASE_URL,
   PROVIDER_ID as HYPER_PROVIDER_ID,
   PROVIDER_NAME as HYPER_PROVIDER_NAME,
-} from "./hyper/constants.js";
+} from "./providers/hyper/constants.js";
 import {
   DEFAULT_HYPER_MODELS,
   fetchHyperModels,
-} from "./hyper/models.js";
+} from "./providers/hyper/models.js";
 import {
   getHyperApiKey,
   loginHyper,
   refreshHyperToken,
-} from "./hyper/oauth.js";
-import { streamHyper } from "./hyper/stream.js";
+} from "./providers/hyper/oauth.js";
+import { streamHyper } from "./providers/hyper/stream.js";
 import { registerCommitCommand } from "./commit/index.js";
 import { registerContinueShortcut } from "./continue/index.js";
 import { registerOutputFilter } from "./filter/index.js";

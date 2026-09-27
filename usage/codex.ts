@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getCodexAccountId, getCodexEmail, getCodexPlanType } from "../codex/plan.js";
+import { getCodexAccountId, getCodexEmail, getCodexPlanType } from "../providers/codex/plan.js";
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
