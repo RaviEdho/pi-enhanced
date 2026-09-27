@@ -36,9 +36,26 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
   pi.registerTool(createFindToolDefinition("smart_find"));
   pi.registerTool(createGrepToolDefinition("smart_grep"));
 
-  // Warm index in the background when session starts
+  const searchToolNames = ["find", "grep", "multi_grep", "smart_find", "smart_grep"];
+
+  function activateSearchTools(): void {
+    try {
+      const current = pi.getActiveTools();
+      const toAdd = searchToolNames.filter((name) => !current.includes(name));
+      if (toAdd.length > 0) {
+        pi.setActiveTools([...current, ...toAdd]);
+      }
+    } catch {
+      // Non-fatal if session runner not yet initialized
+    }
+  }
+
+  activateSearchTools();
+
+  // Warm index in the background when session starts and ensure tools are active
   pi.on("session_start", async () => {
     try {
+      activateSearchTools();
       const indexer = FileIndexer.getInstance();
       // Start background scan without blocking startup
       indexer.scan().catch(() => {});
@@ -49,6 +66,14 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
 
   // Inject system prompt rule nudging agent to use in-memory search tools over bash
   pi.on("before_agent_start", (event) => {
+    if (event.systemPromptOptions?.selectedTools) {
+      for (const name of searchToolNames) {
+        if (!event.systemPromptOptions.selectedTools.includes(name)) {
+          event.systemPromptOptions.selectedTools.push(name);
+        }
+      }
+    }
+
     if (event.systemPromptOptions) {
       if (!event.systemPromptOptions.promptGuidelines) {
         event.systemPromptOptions.promptGuidelines = [];
