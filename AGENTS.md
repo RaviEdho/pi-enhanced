@@ -14,6 +14,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
 - **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
 - **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
+- **Native Output Filter & Token Compressor (`filter/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
 
 ---
 
@@ -50,6 +51,19 @@ pi-for-raviedho/
 ├── continue/
 │   ├── index.ts                # Input handler registering "." continue shortcut
 │   └── prompt.ts               # System directive instructing model to resume unfinished work
+├── filter/
+│   ├── parsers/
+│   │   ├── git.ts              # Git status, push, commit, log, diff noise reduction
+│   │   ├── lint.ts             # tsc, eslint, biome, ruff, generic linter parsing
+│   │   ├── system.ts           # ls, tree, find, ps, curl/wget download filter
+│   │   └── test.ts             # vitest, jest, pytest, cargo test, go test compression
+│   ├── index.ts                # Output filter registration, /recall, /gain commands
+│   ├── pipeline.ts             # Central pipeline routing parsers, rules & dedup
+│   ├── recall.ts               # In-memory RecallStore for full uncompressed outputs
+│   ├── rules.ts                # Declarative rules table (docker, pkg managers, terraform)
+│   ├── sanitizer.ts            # ANSI stripping, carriage return resolution, line dedup
+│   ├── tracker.ts              # GainTracker analytics store for token/byte reduction
+│   └── types.ts                # Filter, recall, rule, and analytics data types
 ├── hyper/
 │   ├── constants.ts            # Base URLs, API endpoints, User-Agent, timeouts
 │   ├── models.ts               # Dynamic model catalog discovery & fallback mapping from Hyper

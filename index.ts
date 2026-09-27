@@ -36,6 +36,7 @@ import {
 import { streamHyper } from "./hyper/stream.js";
 import { registerCommitCommand } from "./commit/index.js";
 import { registerContinueShortcut } from "./continue/index.js";
+import { registerOutputFilter } from "./filter/index.js";
 import { registerWorkingTimer } from "./timer/index.js";
 import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
 
@@ -222,4 +223,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register "." (literal dot) continue shortcut
   registerContinueShortcut(pi);
+
+  // Register native output filter & token compressor (RTK port)
+  registerOutputFilter(pi);
 }
