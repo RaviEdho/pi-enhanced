@@ -8,11 +8,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   createCommit,
-  getChangedFiles,
   getStagedFiles,
+  getWorkingTreeStatus,
   isGitRepository,
   stageAllFiles,
 } from "./git.js";
+import { BlockingCommitEditor, CommitStatusBroadcaster } from "./editor.js";
 import { COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
 import type { CommitProposal } from "./types.js";
@@ -30,20 +31,21 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      // 2. Check changed files
-      const changed = await getChangedFiles(cwd);
-      if (changed.length === 0) {
+      // 2. Check working tree status (staged and unstaged)
+      let { staged, unstaged } = await getWorkingTreeStatus(cwd);
+      if (staged.length === 0 && unstaged.length === 0) {
         ctx.ui.notify("Working tree clean; no changes to commit.", "info");
         return;
       }
 
-      // 3. Check staged files, prompt to stage all if index is empty
-      let staged = await getStagedFiles(cwd);
+      // 3. Staging resolution:
       if (staged.length === 0) {
+        // Nothing is staged yet
         if (!ctx.hasUI) {
           try {
             await stageAllFiles(cwd);
-            staged = await getStagedFiles(cwd);
+            const refreshed = await getWorkingTreeStatus(cwd);
+            staged = refreshed.staged;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             process.stderr.write(`Failed to stage files: ${msg}\n`);
@@ -52,7 +54,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         } else {
           const shouldStage = await ctx.ui.confirm(
             "Stage Changes",
-            "No changes are currently staged. Stage all modified and untracked files (git add -A)?"
+            `No changes are currently staged (${unstaged.length} unstaged). Stage all files (git add -A)?`
           );
           if (!shouldStage) {
             ctx.ui.notify("Commit aborted (no staged changes).", "info");
@@ -61,20 +63,51 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
 
           try {
             await stageAllFiles(cwd);
-            staged = await getStagedFiles(cwd);
+            const refreshed = await getWorkingTreeStatus(cwd);
+            staged = refreshed.staged;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Failed to stage files: ${msg}`, "error");
             return;
           }
         }
+      } else if (unstaged.length > 0) {
+        // Both staged AND unstaged changes exist: ask user preference
+        if (ctx.hasUI) {
+          const optOnlyStaged = `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
+          const optStageAll = `Stage all and commit everything (${staged.length} staged + ${unstaged.length} unstaged)`;
+          const optCancel = "Cancel";
+
+          const choice = await ctx.ui.select(
+            "Staged and unstaged changes detected",
+            [optOnlyStaged, optStageAll, optCancel]
+          );
+
+          if (!choice || choice === optCancel) {
+            ctx.ui.notify("Commit cancelled.", "info");
+            return;
+          }
+
+          if (choice === optStageAll) {
+            try {
+              await stageAllFiles(cwd);
+              const refreshed = await getWorkingTreeStatus(cwd);
+              staged = refreshed.staged;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              ctx.ui.notify(`Failed to stage all files: ${msg}`, "error");
+              return;
+            }
+          }
+          // If optOnlyStaged was chosen, leave `staged` as-is
+        }
       }
 
       if (staged.length === 0) {
         if (ctx.hasUI) {
-          ctx.ui.notify("No changes detected after staging.", "warning");
+          ctx.ui.notify("No changes detected to commit.", "warning");
         } else {
-          process.stderr.write("No changes detected after staging.\n");
+          process.stderr.write("No changes detected to commit.\n");
         }
         return;
       }
@@ -90,7 +123,18 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.setWorkingMessage("Autonomous commit agent analyzing changes…");
+      const broadcaster = new CommitStatusBroadcaster("Fetching git overview…");
+      let activeEditor: BlockingCommitEditor | undefined;
+      const abortController = new AbortController();
+
+      if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
+        ctx.ui.setEditorComponent((tui, editorTheme) => {
+          activeEditor = new BlockingCommitEditor(tui, editorTheme, broadcaster, () => {
+            abortController.abort();
+          });
+          return activeEditor;
+        });
+      }
 
       let proposal: CommitProposal | null = null;
       const tools = createCommitTools({
@@ -100,6 +144,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         },
       });
 
+      let unsubscribe: (() => void) | undefined;
       try {
         const agentDir = getAgentDir();
         const settingsManager = SettingsManager.create(cwd, agentDir);
@@ -129,18 +174,40 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           customTools: tools,
         });
 
+        unsubscribe = session.subscribe((event) => {
+          if (event.type === "tool_execution_start") {
+            if (event.toolName === "git_overview") {
+              broadcaster.update("Fetching git overview…");
+            } else if (event.toolName === "git_file_diff") {
+              const file = (event.args as any)?.filePath || "file";
+              broadcaster.update(`Inspecting diff for ${file}…`);
+            } else if (event.toolName === "propose_commit") {
+              broadcaster.update("Formulating conventional commit…");
+            }
+          }
+        });
+
         const userPrompt = args.trim()
           ? `User hint/instructions: "${args.trim()}". Inspect staged changes and propose conventional commit.`
           : "Inspect staged changes and propose conventional commit.";
 
+        broadcaster.update("Inspecting git diffs…");
         await session.prompt(userPrompt);
         session.dispose();
       } catch (err) {
+        if (abortController.signal.aborted) {
+          ctx.ui.notify("Commit cancelled by user.", "info");
+          return;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Commit agent failed: ${msg}`, "error");
         return;
       } finally {
-        ctx.ui.setWorkingMessage(undefined);
+        unsubscribe?.();
+        activeEditor?.dispose();
+        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
+          ctx.ui.setEditorComponent(undefined);
+        }
       }
 
       // 5. Verify captured proposal

@@ -34,6 +34,35 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
   }
 }
 
+export interface WorkingTreeStatus {
+  staged: string[];
+  unstaged: string[];
+}
+
+export async function getWorkingTreeStatus(cwd: string): Promise<WorkingTreeStatus> {
+  const output = await execGit(["status", "--porcelain"], cwd);
+  if (!output.trim()) return { staged: [], unstaged: [] };
+
+  const staged: string[] = [];
+  const unstaged: string[] = [];
+
+  for (const line of output.split("\n")) {
+    if (!line.trim()) continue;
+    const x = line[0];
+    const y = line[1];
+    const path = line.slice(3).trim();
+
+    if (x !== " " && x !== "?") {
+      staged.push(path);
+    }
+    if (x === "?" || y !== " ") {
+      unstaged.push(path);
+    }
+  }
+
+  return { staged, unstaged };
+}
+
 export async function getChangedFiles(cwd: string): Promise<string[]> {
   const output = await execGit(["status", "--porcelain"], cwd);
   if (!output.trim()) return [];
