@@ -1,5 +1,5 @@
 import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatCost, formatTokens } from "./format.js";
 import type { CommitActionEntry } from "./types.js";
 
@@ -94,6 +94,7 @@ export class BlockingCommitEditor implements EditorComponent {
   private timer?: ReturnType<typeof setInterval>;
   private tui: TUI;
   private editorTheme: EditorTheme;
+  private theme?: any;
   private broadcaster: CommitStatusBroadcaster;
   private unsubscribeStatus: () => void;
   private onAbort?: () => void;
@@ -103,10 +104,12 @@ export class BlockingCommitEditor implements EditorComponent {
     tui: TUI,
     editorTheme: EditorTheme,
     broadcaster: CommitStatusBroadcaster,
-    onAbort?: () => void
+    onAbort?: () => void,
+    theme?: any
   ) {
     this.tui = tui;
     this.editorTheme = editorTheme;
+    this.theme = theme;
     this.broadcaster = broadcaster;
     this.onAbort = onAbort;
 
@@ -137,8 +140,14 @@ export class BlockingCommitEditor implements EditorComponent {
   setText(_text: string): void {}
 
   handleInput(data: string): void {
-    // Allow cancellation via Ctrl+C or Escape
-    if (data === "\x03" || data === "\x1b") {
+    // Allow cancellation via Ctrl+C, Escape, or 'q'
+    if (
+      matchesKey(data, "escape") ||
+      matchesKey(data, "esc") ||
+      data === "\x1b" ||
+      data === "\x03" ||
+      data.toLowerCase() === "q"
+    ) {
       this.onAbort?.();
     }
     // Block all other user keystrokes while commit agent runs
@@ -156,11 +165,16 @@ export class BlockingCommitEditor implements EditorComponent {
     const borderFn = this.editorTheme.borderColor ?? ((s: string) => s);
     const elapsedSec = ((Date.now() - this.broadcaster.startTimestamp) / 1000).toFixed(1);
 
+    const dimFn = (s: string) =>
+      this.theme?.fg ? this.theme.fg("dim", s) : `\x1b[2m\x1b[90m${s}\x1b[0m`;
+    const whiteFn = (s: string) =>
+      this.theme?.fg ? this.theme.fg("text", s) : `\x1b[97m${s}\x1b[0m`;
+
     // Compact single-line fallback for narrow terminals
     if (width < 50) {
       const content = ` ${spinner} ${this.broadcaster.status}`;
       const fillLength = Math.max(0, width - visibleWidth(content));
-      const middleLine = `${content}${" ".repeat(fillLength)}`;
+      const middleLine = `${whiteFn(content)}${" ".repeat(fillLength)}`;
       return [
         borderFn("─".repeat(Math.max(1, width))),
         middleLine,
@@ -177,25 +191,25 @@ export class BlockingCommitEditor implements EditorComponent {
     const topBorder = `┌─${title}${"─".repeat(availableDash)}${hint}┐`;
     lines.push(borderFn(topBorder));
 
-    // Active status line
+    // Active status line (colored white)
     const modelTag = this.broadcaster.model ? ` [${this.broadcaster.model}]` : "";
-    const activeText = `${spinner} ${this.broadcaster.status}${modelTag} • ${elapsedSec}s`;
+    const activeText = whiteFn(`${spinner} ${this.broadcaster.status}${modelTag} • ${elapsedSec}s`);
     lines.push(this.formatBoxLine(activeText, width, borderFn));
 
-    // Recent actions (last 2)
+    // Recent actions (last 2 - faded/dim)
     const recent = this.broadcaster.recentActions.slice(-2);
     if (recent.length > 0) {
       for (const action of recent) {
-        lines.push(this.formatBoxLine(`  ✓ ${action.description}`, width, borderFn));
+        lines.push(this.formatBoxLine(dimFn(`  ✓ ${action.description}`), width, borderFn));
       }
     }
 
-    // Usage & cost line if any usage reported
+    // Usage & cost line if any usage reported (colored white)
     if (this.broadcaster.tokens > 0) {
       const costBadge = this.broadcaster.cost > 0
         ? `$${formatCost(this.broadcaster.cost)}`
         : (this.broadcaster.isSubscription ? "included with subscription" : "$0.00");
-      const usageText = `  Tokens: ${formatTokens(this.broadcaster.tokens)} • Cost: ${costBadge}`;
+      const usageText = whiteFn(`  Tokens: ${formatTokens(this.broadcaster.tokens)} • Cost: ${costBadge}`);
       lines.push(this.formatBoxLine(usageText, width, borderFn));
     }
 

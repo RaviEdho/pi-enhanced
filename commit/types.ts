@@ -3,6 +3,12 @@ export interface CommitProposal {
   scope?: string;
   subject: string;
   body?: string;
+  files?: string[];
+}
+
+export interface CommitPlanProposal {
+  isMultiStage: boolean;
+  stages: CommitProposal[];
 }
 
 export interface GitFileStatus {
@@ -39,4 +45,5 @@ export interface CommitUsageCost {
 export interface CommitConfirmationResult {
   action: "commit" | "commit-and-push" | "edit" | "cancel";
   message?: string;
+  stages?: CommitProposal[];
 }

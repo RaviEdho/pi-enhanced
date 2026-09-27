@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { GitStagedOverview } from "./types.js";
+import type { CommitProposal, GitStagedOverview } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +119,134 @@ export async function getFileDiff(filePath: string, cwd: string): Promise<string
 
 export async function createCommit(message: string, cwd: string): Promise<void> {
   await execGit(["commit", "-m", message], cwd);
+}
+
+export async function unstageAllFiles(cwd: string): Promise<void> {
+  await execGit(["reset"], cwd);
+}
+
+export async function stageFiles(files: string[], cwd: string): Promise<void> {
+  if (files.length === 0) return;
+  await execGit(["add", "--", ...files], cwd);
+}
+
+export function matchStagedFiles(
+  patterns: string[] | undefined,
+  allStagedFiles: string[],
+  alreadyCommitted: Set<string>
+): string[] {
+  const available = allStagedFiles.filter((f) => !alreadyCommitted.has(f));
+  if (!patterns || patterns.length === 0) {
+    return available;
+  }
+
+  const matched = new Set<string>();
+
+  for (const rawPattern of patterns) {
+    const pattern = rawPattern.trim().replace(/^\.\//, "");
+    if (!pattern) continue;
+
+    // Check glob prefix e.g. "providers/*", "providers/**", "providers/"
+    if (pattern.endsWith("/*") || pattern.endsWith("/**") || pattern.endsWith("/")) {
+      const prefix = pattern.replace(/(\/\*+|\/)$/, "");
+      for (const file of available) {
+        if (file === prefix || file.startsWith(`${prefix}/`)) {
+          matched.add(file);
+        }
+      }
+      continue;
+    }
+
+    // Exact match
+    for (const file of available) {
+      if (file === pattern || file.toLowerCase() === pattern.toLowerCase()) {
+        matched.add(file);
+      } else if (file.endsWith(`/${pattern}`) || pattern.endsWith(`/${file}`)) {
+        matched.add(file);
+      }
+    }
+  }
+
+  return Array.from(matched);
+}
+
+export async function executeMultiCommit(
+  stages: CommitProposal[],
+  cwd: string,
+  onProgress?: (stageIndex: number, total: number, header: string) => void
+): Promise<{ committedCount: number; headers: string[] }> {
+  const allStaged = await getStagedFiles(cwd);
+  if (allStaged.length === 0) {
+    throw new Error("No files staged to commit.");
+  }
+
+  // Unstage everything first so we can stage per commit
+  await unstageAllFiles(cwd);
+
+  const alreadyCommitted = new Set<string>();
+  const headers: string[] = [];
+
+  try {
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i];
+      const isLastStage = i === stages.length - 1;
+
+      let targetFiles = matchStagedFiles(stage.files, allStaged, alreadyCommitted);
+
+      // If this is the last stage and some original files are still uncommitted,
+      // include them so nothing from the original staged set is omitted
+      if (isLastStage) {
+        const remaining = allStaged.filter((f) => !alreadyCommitted.has(f) && !targetFiles.includes(f));
+        if (remaining.length > 0) {
+          targetFiles = [...targetFiles, ...remaining];
+        }
+      }
+
+      if (targetFiles.length === 0) {
+        continue;
+      }
+
+      await stageFiles(targetFiles, cwd);
+
+      const type = stage.type.trim().toLowerCase();
+      const scope = stage.scope?.trim().toLowerCase();
+      const subject = stage.subject.trim().replace(/\.$/, "");
+      const headerLine = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+      const fullMessage = stage.body?.trim()
+        ? `${headerLine}\n\n${stage.body.trim()}`
+        : headerLine;
+
+      onProgress?.(i + 1, stages.length, headerLine);
+      await createCommit(fullMessage, cwd);
+
+      for (const file of targetFiles) {
+        alreadyCommitted.add(file);
+      }
+      headers.push(headerLine);
+    }
+
+    // Check if any files from the original staged set were somehow not committed
+    const uncommitted = allStaged.filter((f) => !alreadyCommitted.has(f));
+    if (uncommitted.length > 0) {
+      await stageFiles(uncommitted, cwd);
+      const fallbackHeader = "chore: commit remaining staged changes";
+      await createCommit(fallbackHeader, cwd);
+      headers.push(fallbackHeader);
+    }
+  } catch (err) {
+    // Re-stage any remaining uncommitted files so the working tree isn't left unindexed
+    const uncommitted = allStaged.filter((f) => !alreadyCommitted.has(f));
+    if (uncommitted.length > 0) {
+      try {
+        await stageFiles(uncommitted, cwd);
+      } catch {
+        // ignore
+      }
+    }
+    throw err;
+  }
+
+  return { committedCount: headers.length, headers };
 }
 
 export async function pushCommit(cwd: string): Promise<string> {

@@ -4,13 +4,14 @@ import { formatCost, formatDuration } from "./format.js";
 import type {
   CommitActionEntry,
   CommitConfirmationResult,
+  CommitPlanProposal,
   CommitProposal,
   CommitUsageCost,
   GitStagedOverview,
 } from "./types.js";
 
 export interface CommitConfirmationDialogOptions {
-  proposal: CommitProposal;
+  plan: CommitPlanProposal;
   actions: CommitActionEntry[];
   overview: GitStagedOverview;
   diffedFiles: string[];
@@ -21,38 +22,44 @@ export interface CommitConfirmationDialogOptions {
 export class CommitConfirmationDialog implements Component {
   private tui: TUI;
   private theme: any;
-  private proposal: CommitProposal;
+  private plan: CommitPlanProposal;
   private actions: CommitActionEntry[];
   private overview: GitStagedOverview;
   private diffedFiles: string[];
   private usage: CommitUsageCost;
   private onDone: (result: CommitConfirmationResult) => void;
+  private keybindings?: any;
   private selectedIndex: number = 0; // 0 = Commit, 1 = Commit & Push, 2 = Edit, 3 = Cancel
-  private fullMessage: string;
-  private headerLine: string;
+  private fullMessage: string = "";
+  private headerLine: string = "";
   private isTwoRowLayout: boolean = false;
 
   constructor(
     tui: TUI,
     theme: any,
-    options: CommitConfirmationDialogOptions
+    options: CommitConfirmationDialogOptions,
+    keybindings?: any
   ) {
     this.tui = tui;
     this.theme = theme;
-    this.proposal = options.proposal;
+    this.keybindings = keybindings;
+    this.plan = options.plan;
     this.actions = options.actions;
     this.overview = options.overview;
     this.diffedFiles = options.diffedFiles;
     this.usage = options.usage;
     this.onDone = options.onDone;
 
-    const type = this.proposal.type.trim().toLowerCase();
-    const scope = this.proposal.scope?.trim().toLowerCase();
-    const subject = this.proposal.subject.trim().replace(/\.$/, "");
-    this.headerLine = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
-    this.fullMessage = this.proposal.body?.trim()
-      ? `${this.headerLine}\n\n${this.proposal.body.trim()}`
-      : this.headerLine;
+    if (this.plan.stages.length > 0) {
+      const first = this.plan.stages[0];
+      const type = first.type.trim().toLowerCase();
+      const scope = first.scope?.trim().toLowerCase();
+      const subject = first.subject.trim().replace(/\.$/, "");
+      this.headerLine = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+      this.fullMessage = first.body?.trim()
+        ? `${this.headerLine}\n\n${first.body.trim()}`
+        : this.headerLine;
+    }
   }
 
   invalidate(): void {}
@@ -60,11 +67,11 @@ export class CommitConfirmationDialog implements Component {
   handleInput(data: string): boolean {
     if (matchesKey(data, "enter")) {
       if (this.selectedIndex === 0) {
-        this.onDone({ action: "commit", message: this.fullMessage });
+        this.onDone({ action: "commit", message: this.fullMessage, stages: this.plan.stages });
       } else if (this.selectedIndex === 1) {
-        this.onDone({ action: "commit-and-push", message: this.fullMessage });
+        this.onDone({ action: "commit-and-push", message: this.fullMessage, stages: this.plan.stages });
       } else if (this.selectedIndex === 2) {
-        this.onDone({ action: "edit", message: this.fullMessage });
+        this.onDone({ action: "edit", message: this.fullMessage, stages: this.plan.stages });
       } else {
         this.onDone({ action: "cancel" });
       }
@@ -72,21 +79,31 @@ export class CommitConfirmationDialog implements Component {
     }
 
     if (data.toLowerCase() === "c") {
-      this.onDone({ action: "commit", message: this.fullMessage });
+      this.onDone({ action: "commit", message: this.fullMessage, stages: this.plan.stages });
       return true;
     }
 
     if (data.toLowerCase() === "p") {
-      this.onDone({ action: "commit-and-push", message: this.fullMessage });
+      this.onDone({ action: "commit-and-push", message: this.fullMessage, stages: this.plan.stages });
       return true;
     }
 
     if (data.toLowerCase() === "e") {
-      this.onDone({ action: "edit", message: this.fullMessage });
+      this.onDone({ action: "edit", message: this.fullMessage, stages: this.plan.stages });
       return true;
     }
 
-    if (matchesKey(data, "escape") || data.toLowerCase() === "q" || data === "\x03") {
+    if (
+      matchesKey(data, "escape") ||
+      matchesKey(data, "esc") ||
+      data === "\x1b" ||
+      data === "\x03" ||
+      data.toLowerCase() === "q" ||
+      (this.keybindings && typeof this.keybindings.matches === "function" && (
+        this.keybindings.matches(data, "tui.select.cancel") ||
+        this.keybindings.matches(data, "cancel")
+      ))
+    ) {
       this.onDone({ action: "cancel" });
       return true;
     }
@@ -146,50 +163,95 @@ export class CommitConfirmationDialog implements Component {
     const successFn = (s: string) => this.theme?.fg("success", s) ?? s;
 
     // Outer box width and symmetric inner content width
-    const boxWidth = Math.min(Math.max(width - 2, 40), 88);
+    const boxWidth = Math.min(Math.max(width - 2, 40), 96);
     const contentWidth = Math.max(10, boxWidth - 6);
     const padLeft = " ".repeat(Math.max(0, Math.floor((width - boxWidth) / 2)));
 
     const rawLines: string[] = [];
 
     // 1. Top border
-    const title = " Commit Proposal ";
+    const title = this.plan.isMultiStage
+      ? ` Multi-Stage Commit Proposal (${this.plan.stages.length} commits) `
+      : " Commit Proposal ";
     const fillDash = Math.max(0, boxWidth - visibleWidth(title) - 4);
     rawLines.push(borderFn(`┌─${boldFn(accentFn(title))}${"─".repeat(fillDash)}─┐`));
 
-    // 2. Commit Message Header
+    // 2. Commit Message Header / Stages List
     rawLines.push(this.boxLine("", contentWidth, borderFn));
-    rawLines.push(this.boxLine(boldFn(accentFn("Commit Message:")), contentWidth, borderFn));
-    const headerWrapped = wrapTextWithAnsi(this.headerLine, Math.max(10, contentWidth - 2));
-    for (const hLine of headerWrapped) {
-      rawLines.push(this.boxLine(`  ${boldFn(hLine)}`, contentWidth, borderFn));
-    }
 
-    // 3. Commit Body (word-wrapped with clean hanging indents)
-    if (this.proposal.body?.trim()) {
-      rawLines.push(this.boxLine("", contentWidth, borderFn));
-      const rawBodyLines = this.proposal.body.trim().split("\n");
-      for (const rawLine of rawBodyLines) {
-        const trimmed = rawLine.trim();
-        if (!trimmed) {
-          rawLines.push(this.boxLine("", contentWidth, borderFn));
-          continue;
+    if (this.plan.isMultiStage) {
+      rawLines.push(
+        this.boxLine(
+          boldFn(accentFn(`Planned Commits (${this.plan.stages.length} atomic stages):`)),
+          contentWidth,
+          borderFn
+        )
+      );
+
+      for (let i = 0; i < this.plan.stages.length; i++) {
+        const stage = this.plan.stages[i];
+        const type = stage.type.trim().toLowerCase();
+        const scope = stage.scope?.trim().toLowerCase();
+        const subject = stage.subject.trim().replace(/\.$/, "");
+        const header = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+        const count = stage.files?.length;
+        const countStr = count ? ` (${count} file${count === 1 ? "" : "s"})` : "";
+
+        rawLines.push(
+          this.boxLine(
+            `  ${boldFn(`${i + 1}. ${header}`)}${countStr ? mutedFn(countStr) : ""}`,
+            contentWidth,
+            borderFn
+          )
+        );
+
+        if (stage.body?.trim()) {
+          const firstBodyLine = stage.body.trim().split("\n")[0].trim().replace(/^[-*•]\s*/, "");
+          if (firstBodyLine) {
+            rawLines.push(
+              this.boxLine(
+                `     ${dimFn("• " + truncateToWidth(firstBodyLine, contentWidth - 10, "…"))}`,
+                contentWidth,
+                borderFn
+              )
+            );
+          }
         }
+      }
+    } else {
+      const single = this.plan.stages[0];
+      rawLines.push(this.boxLine(boldFn(accentFn("Commit Message:")), contentWidth, borderFn));
+      const headerWrapped = wrapTextWithAnsi(this.headerLine, Math.max(10, contentWidth - 2));
+      for (const hLine of headerWrapped) {
+        rawLines.push(this.boxLine(`  ${boldFn(hLine)}`, contentWidth, borderFn));
+      }
 
-        const isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ");
-        const textAfterBullet = isBullet ? trimmed.slice(2).trim() : trimmed;
+      // Commit Body
+      if (single?.body?.trim()) {
+        rawLines.push(this.boxLine("", contentWidth, borderFn));
+        const rawBodyLines = single.body.trim().split("\n");
+        for (const rawLine of rawBodyLines) {
+          const trimmed = rawLine.trim();
+          if (!trimmed) {
+            rawLines.push(this.boxLine("", contentWidth, borderFn));
+            continue;
+          }
 
-        if (isBullet) {
-          const wrapped = wrapTextWithAnsi(textAfterBullet, Math.max(10, contentWidth - 4));
-          wrapped.forEach((line, idx) => {
-            const prefix = idx === 0 ? "  • " : "    ";
-            rawLines.push(this.boxLine(`${prefix}${mutedFn(line)}`, contentWidth, borderFn));
-          });
-        } else {
-          const wrapped = wrapTextWithAnsi(trimmed, Math.max(10, contentWidth - 2));
-          wrapped.forEach((line) => {
-            rawLines.push(this.boxLine(`  ${mutedFn(line)}`, contentWidth, borderFn));
-          });
+          const isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ");
+          const textAfterBullet = isBullet ? trimmed.slice(2).trim() : trimmed;
+
+          if (isBullet) {
+            const wrapped = wrapTextWithAnsi(textAfterBullet, Math.max(10, contentWidth - 4));
+            wrapped.forEach((line, idx) => {
+              const prefix = idx === 0 ? "  • " : "    ";
+              rawLines.push(this.boxLine(`${prefix}${mutedFn(line)}`, contentWidth, borderFn));
+            });
+          } else {
+            const wrapped = wrapTextWithAnsi(trimmed, Math.max(10, contentWidth - 2));
+            wrapped.forEach((line) => {
+              rawLines.push(this.boxLine(`  ${mutedFn(line)}`, contentWidth, borderFn));
+            });
+          }
         }
       }
     }
@@ -255,35 +317,48 @@ export class CommitConfirmationDialog implements Component {
     rawLines.push(this.boxLine("", contentWidth, borderFn));
 
     // 8. Buttons
+    const commitLabel = this.plan.isMultiStage
+      ? `Commit All (${this.plan.stages.length})`
+      : "Commit";
+    const editLabel = this.plan.isMultiStage ? "Edit Plan" : "Edit Message";
+
     const btnCommit = this.selectedIndex === 0
-      ? boldFn(accentFn("→ [ ✓ Commit ]"))
-      : dimFn("  [ ✓ Commit ]");
+      ? boldFn(accentFn(`→ [ ✓ ${commitLabel} ]`))
+      : dimFn(`  [ ✓ ${commitLabel} ]`);
     const btnPush = this.selectedIndex === 1
       ? boldFn(accentFn("→ [ ⇡ Commit & Push ]"))
       : dimFn("  [ ⇡ Commit & Push ]");
     const btnEdit = this.selectedIndex === 2
-      ? boldFn(accentFn("→ [ ✎ Edit Message ]"))
-      : dimFn("  [ ✎ Edit Message ]");
+      ? boldFn(accentFn(`→ [ ✎ ${editLabel} ]`))
+      : dimFn(`  [ ✎ ${editLabel} ]`);
     const btnCancel = this.selectedIndex === 3
       ? boldFn(accentFn("→ [ ✗ Cancel ]"))
       : dimFn("  [ ✗ Cancel ]");
 
-    if (contentWidth >= 78) {
+    const singleRowCandidate = `${btnCommit}   ${btnPush}   ${btnEdit}   ${btnCancel}`;
+    if (contentWidth >= visibleWidth(singleRowCandidate)) {
       this.isTwoRowLayout = false;
-      const buttonsLine = `${btnCommit}   ${btnPush}   ${btnEdit}   ${btnCancel}`;
-      rawLines.push(this.boxLine(buttonsLine, contentWidth, borderFn));
+      rawLines.push(this.boxLine(singleRowCandidate, contentWidth, borderFn));
     } else {
       this.isTwoRowLayout = true;
-      const col2Pad = contentWidth >= 43 ? 8 : 4;
-      const col1Pad = contentWidth >= 43 ? 2 : 2;
-      rawLines.push(this.boxLine(`${btnCommit}${" ".repeat(col2Pad)}${btnPush}`, contentWidth, borderFn));
-      rawLines.push(this.boxLine(`${btnEdit}${" ".repeat(col1Pad)}${btnCancel}`, contentWidth, borderFn));
+      const col1Width = Math.max(visibleWidth(btnCommit), visibleWidth(btnEdit));
+      const col2Width = Math.max(visibleWidth(btnPush), visibleWidth(btnCancel));
+      const gap = Math.max(3, Math.min(6, contentWidth - col1Width - col2Width));
+
+      const row1Pad = Math.max(2, col1Width - visibleWidth(btnCommit) + gap);
+      const row2Pad = Math.max(2, col1Width - visibleWidth(btnEdit) + gap);
+
+      const row1 = `${btnCommit}${" ".repeat(row1Pad)}${btnPush}`;
+      const row2 = `${btnEdit}${" ".repeat(row2Pad)}${btnCancel}`;
+
+      rawLines.push(this.boxLine(row1, contentWidth, borderFn));
+      rawLines.push(this.boxLine(row2, contentWidth, borderFn));
     }
 
     // 9. Navigation hint
     rawLines.push(this.boxLine("", contentWidth, borderFn));
-    if (contentWidth >= 72) {
-      const navHint = "Enter select • ←→/Tab navigate • c commit • p push • e edit • Esc cancel";
+    const navHint = "Enter select • ←→/Tab navigate • c commit • p push • e edit • Esc cancel";
+    if (contentWidth >= visibleWidth(navHint)) {
       rawLines.push(this.boxLine(dimFn(navHint), contentWidth, borderFn));
     } else {
       const navHint1 = "Enter select • Tab/Arrows navigate";
