@@ -119,7 +119,7 @@ function renderFooterLine1(
   const branchStr = branch ? ` (${branch})` : "";
   const sessionName = ctx.sessionManager?.getSessionName?.();
   const sessionStr = sessionName ? ` • ${sessionName}` : "";
-  const leftText = theme.fg("dim", `${cwd}${branchStr}${sessionStr}`);
+  const leftText = `${cwd}${branchStr}${sessionStr}`;
 
   // Right-side: Model and thinking effort
   const model = ctx.model;
@@ -129,39 +129,37 @@ function renderFooterLine1(
     const hasThinking = thinkingLevel && thinkingLevel !== "off";
 
     const modelDisplay = model.id;
-    const thinkingDisplay = hasThinking
-      ? `${theme.fg("dim", " • ")}${theme.fg("accent", `thinking: ${thinkingLevel}`)}`
-      : "";
+    const thinkingDisplay = hasThinking ? ` • ${thinkingLevel}` : "";
 
-    rightText = `${theme.fg("muted", modelDisplay)}${thinkingDisplay}`;
+    rightText = `${modelDisplay}${thinkingDisplay}`;
   }
 
   const leftW = visibleWidth(leftText);
   const rightW = visibleWidth(rightText);
   const totalW = leftW + rightW;
 
+  let line = "";
   if (totalW + 2 <= width) {
     const pad = " ".repeat(width - leftW - rightW);
-    return leftText + pad + rightText;
+    line = leftText + pad + rightText;
+  } else {
+    const availRight = width - leftW - 2;
+    if (availRight > 8) {
+      const truncatedRight = truncateToWidth(rightText, availRight, "");
+      const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
+      line = leftText + pad + truncatedRight;
+    } else {
+      line = truncateToWidth(leftText, width);
+    }
   }
 
-  const availRight = width - leftW - 2;
-  if (availRight > 8) {
-    const truncatedRight = truncateToWidth(rightText, availRight, "");
-    const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
-    return leftText + pad + truncatedRight;
-  }
-
-  return truncateToWidth(leftText, width);
+  return theme.fg("dim", line);
 }
 
 /**
  * Builds Line 2 Right Side: Active account usage bar.
  */
-function buildUsageBar(
-  ctx: ExtensionContext,
-  theme: ExtensionContext["ui"]["theme"]
-): string {
+function buildUsageBar(ctx: ExtensionContext): string {
   const model = ctx.model;
   if (!model) return "";
 
@@ -173,8 +171,7 @@ function buildUsageBar(
     return "";
   }
 
-  const accountName = account.email ? account.email : account.id;
-  const prefix = theme.fg("accent", accountName);
+  const prefix = account.email ? account.email : account.id;
 
   const now = Date.now();
   // Check 429 cooldown
@@ -183,17 +180,17 @@ function buildUsageBar(
     const mins = Math.floor(remainingSec / 60);
     const secs = remainingSec % 60;
     const cooldownStr = mins > 0 ? `${mins}m${secs}s` : `${secs}s`;
-    return `${prefix}  ${theme.fg("error", `[COOLDOWN ~${cooldownStr}]`)}`;
+    return `${prefix}  [COOLDOWN ~${cooldownStr}]`;
   }
 
   const report = QuotaManager.getInstance().getReport(account.id);
   if (!report || report.groups.length === 0) {
-    return `${prefix}  ${theme.fg("dim", "···")}`;
+    return `${prefix}  ···`;
   }
 
   const { primary, secondary } = extractKeyBuckets(report, model.id);
   if (!primary) {
-    return `${prefix}  ${theme.fg("dim", "No quota limits reported")}`;
+    return `${prefix}  No quota limits reported`;
   }
 
   const usedPct = Math.round(primary.usedFraction * 100);
@@ -205,25 +202,24 @@ function buildUsageBar(
   );
   const progressBar = makeProgressBar(primary.usedFraction, 12, timeElapsed);
 
-  const color = usedPct >= 90 ? "error" : usedPct >= 70 ? "warning" : "success";
-  const barSegment = theme.fg(color, `[${progressBar}] ${usedPct}%`);
+  const barSegment = `[${progressBar}] ${usedPct}%`;
 
   const resetSegment = primary.resetTime
     ? primary.usedFraction <= 0 && (timeElapsed === 0 || timeElapsed === undefined)
-      ? theme.fg("dim", " (ready)")
-      : theme.fg("dim", ` (${formatRelativeTime(primary.resetTime, now)})`)
+      ? " (ready)"
+      : ` (${formatRelativeTime(primary.resetTime, now)})`
     : "";
 
   let secondarySegment = "";
   if (secondary) {
     const secPct = Math.round(secondary.usedFraction * 100);
     const secLabel = secondary.window || "5h";
-    secondarySegment = theme.fg("dim", ` · ${secLabel}: ${secPct}%`);
+    secondarySegment = ` · ${secLabel}: ${secPct}%`;
   }
 
   let summarySegment = "";
   if (report.providerId === "hyper" && report.capacitySummary) {
-    summarySegment = theme.fg("dim", ` · ${report.capacitySummary}`);
+    summarySegment = ` · ${report.capacitySummary}`;
   }
 
   return `${prefix}  ${barSegment}${resetSegment}${secondarySegment}${summarySegment}`;
@@ -279,37 +275,32 @@ function renderFooterLine2(
   if (contextUsage && contextUsage.contextWindow > 0) {
     const tokensStr =
       contextUsage.tokens != null ? formatTokens(contextUsage.tokens) : "?";
-    const contextDisplay = `${tokensStr}/${formatTokens(contextUsage.contextWindow)}`;
-    const pctVal = contextUsage.percent ?? 0;
-    let coloredContext = contextDisplay;
-    if (pctVal > 90) {
-      coloredContext = theme.fg("error", contextDisplay);
-    } else if (pctVal > 70) {
-      coloredContext = theme.fg("warning", contextDisplay);
-    }
-    statParts.push(coloredContext);
+    statParts.push(`${tokensStr}/${formatTokens(contextUsage.contextWindow)}`);
   }
 
-  const leftText = theme.fg("dim", statParts.join(" "));
-  const rightText = buildUsageBar(ctx, theme);
+  const leftText = statParts.join(" ");
+  const rightText = buildUsageBar(ctx);
 
   const leftW = visibleWidth(leftText);
   const rightW = visibleWidth(rightText);
   const totalW = leftW + rightW;
 
+  let line = "";
   if (totalW + 2 <= width) {
     const pad = " ".repeat(width - leftW - rightW);
-    return leftText + pad + rightText;
+    line = leftText + pad + rightText;
+  } else {
+    const availRight = width - leftW - 2;
+    if (availRight > 10) {
+      const truncatedRight = truncateToWidth(rightText, availRight, "");
+      const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
+      line = leftText + pad + truncatedRight;
+    } else {
+      line = truncateToWidth(leftText, width);
+    }
   }
 
-  const availRight = width - leftW - 2;
-  if (availRight > 10) {
-    const truncatedRight = truncateToWidth(rightText, availRight, "");
-    const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
-    return leftText + pad + truncatedRight;
-  }
-
-  return truncateToWidth(leftText, width);
+  return theme.fg("dim", line);
 }
 
 const RUNNING_CACHE_TTL_MS = 30 * 1000; // 30 seconds cache TTL while model is active
@@ -430,7 +421,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
             const sorted = Array.from(extensionStatuses.entries())
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([, text]) => text);
-            lines.push(truncateToWidth(theme.fg("dim", sorted.join(" ")), width));
+            lines.push(theme.fg("dim", truncateToWidth(sorted.join(" "), width)));
           }
 
           return lines;
