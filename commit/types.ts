@@ -37,6 +37,6 @@ export interface CommitUsageCost {
 }
 
 export interface CommitConfirmationResult {
-  action: "commit" | "edit" | "cancel";
+  action: "commit" | "commit-and-push" | "edit" | "cancel";
   message?: string;
 }

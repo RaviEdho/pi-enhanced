@@ -27,9 +27,10 @@ export class CommitConfirmationDialog implements Component {
   private diffedFiles: string[];
   private usage: CommitUsageCost;
   private onDone: (result: CommitConfirmationResult) => void;
-  private selectedIndex: number = 0; // 0 = Commit, 1 = Edit, 2 = Cancel
+  private selectedIndex: number = 0; // 0 = Commit, 1 = Commit & Push, 2 = Edit, 3 = Cancel
   private fullMessage: string;
   private headerLine: string;
+  private isTwoRowLayout: boolean = false;
 
   constructor(
     tui: TUI,
@@ -61,6 +62,8 @@ export class CommitConfirmationDialog implements Component {
       if (this.selectedIndex === 0) {
         this.onDone({ action: "commit", message: this.fullMessage });
       } else if (this.selectedIndex === 1) {
+        this.onDone({ action: "commit-and-push", message: this.fullMessage });
+      } else if (this.selectedIndex === 2) {
         this.onDone({ action: "edit", message: this.fullMessage });
       } else {
         this.onDone({ action: "cancel" });
@@ -70,6 +73,11 @@ export class CommitConfirmationDialog implements Component {
 
     if (data.toLowerCase() === "c") {
       this.onDone({ action: "commit", message: this.fullMessage });
+      return true;
+    }
+
+    if (data.toLowerCase() === "p") {
+      this.onDone({ action: "commit-and-push", message: this.fullMessage });
       return true;
     }
 
@@ -84,14 +92,34 @@ export class CommitConfirmationDialog implements Component {
     }
 
     // Navigation
-    if (matchesKey(data, "left") || matchesKey(data, "up")) {
-      this.selectedIndex = (this.selectedIndex - 1 + 3) % 3;
+    if (matchesKey(data, "left")) {
+      this.selectedIndex = (this.selectedIndex - 1 + 4) % 4;
       this.tui.requestRender();
       return true;
     }
 
-    if (matchesKey(data, "right") || matchesKey(data, "down") || matchesKey(data, "tab")) {
-      this.selectedIndex = (this.selectedIndex + 1) % 3;
+    if (matchesKey(data, "right") || matchesKey(data, "tab")) {
+      this.selectedIndex = (this.selectedIndex + 1) % 4;
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "up")) {
+      if (this.isTwoRowLayout) {
+        this.selectedIndex = (this.selectedIndex + 2) % 4;
+      } else {
+        this.selectedIndex = (this.selectedIndex - 1 + 4) % 4;
+      }
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "down")) {
+      if (this.isTwoRowLayout) {
+        this.selectedIndex = (this.selectedIndex + 2) % 4;
+      } else {
+        this.selectedIndex = (this.selectedIndex + 1) % 4;
+      }
       this.tui.requestRender();
       return true;
     }
@@ -118,7 +146,7 @@ export class CommitConfirmationDialog implements Component {
     const successFn = (s: string) => this.theme?.fg("success", s) ?? s;
 
     // Outer box width and symmetric inner content width
-    const boxWidth = Math.min(Math.max(width - 2, 40), 86);
+    const boxWidth = Math.min(Math.max(width - 2, 40), 88);
     const contentWidth = Math.max(10, boxWidth - 6);
     const padLeft = " ".repeat(Math.max(0, Math.floor((width - boxWidth) / 2)));
 
@@ -230,20 +258,39 @@ export class CommitConfirmationDialog implements Component {
     const btnCommit = this.selectedIndex === 0
       ? boldFn(accentFn("→ [ ✓ Commit ]"))
       : dimFn("  [ ✓ Commit ]");
-    const btnEdit = this.selectedIndex === 1
+    const btnPush = this.selectedIndex === 1
+      ? boldFn(accentFn("→ [ ⇡ Commit & Push ]"))
+      : dimFn("  [ ⇡ Commit & Push ]");
+    const btnEdit = this.selectedIndex === 2
       ? boldFn(accentFn("→ [ ✎ Edit Message ]"))
       : dimFn("  [ ✎ Edit Message ]");
-    const btnCancel = this.selectedIndex === 2
+    const btnCancel = this.selectedIndex === 3
       ? boldFn(accentFn("→ [ ✗ Cancel ]"))
       : dimFn("  [ ✗ Cancel ]");
 
-    const buttonsLine = `${btnCommit}      ${btnEdit}      ${btnCancel}`;
-    rawLines.push(this.boxLine(buttonsLine, contentWidth, borderFn));
+    if (contentWidth >= 78) {
+      this.isTwoRowLayout = false;
+      const buttonsLine = `${btnCommit}   ${btnPush}   ${btnEdit}   ${btnCancel}`;
+      rawLines.push(this.boxLine(buttonsLine, contentWidth, borderFn));
+    } else {
+      this.isTwoRowLayout = true;
+      const col2Pad = contentWidth >= 43 ? 8 : 4;
+      const col1Pad = contentWidth >= 43 ? 2 : 2;
+      rawLines.push(this.boxLine(`${btnCommit}${" ".repeat(col2Pad)}${btnPush}`, contentWidth, borderFn));
+      rawLines.push(this.boxLine(`${btnEdit}${" ".repeat(col1Pad)}${btnCancel}`, contentWidth, borderFn));
+    }
 
     // 9. Navigation hint
     rawLines.push(this.boxLine("", contentWidth, borderFn));
-    const navHint = "Enter select • ←→/Tab navigate • c commit • e edit • Esc cancel";
-    rawLines.push(this.boxLine(dimFn(navHint), contentWidth, borderFn));
+    if (contentWidth >= 72) {
+      const navHint = "Enter select • ←→/Tab navigate • c commit • p push • e edit • Esc cancel";
+      rawLines.push(this.boxLine(dimFn(navHint), contentWidth, borderFn));
+    } else {
+      const navHint1 = "Enter select • Tab/Arrows navigate";
+      const navHint2 = "c commit • p push • e edit • Esc cancel";
+      rawLines.push(this.boxLine(dimFn(navHint1), contentWidth, borderFn));
+      rawLines.push(this.boxLine(dimFn(navHint2), contentWidth, borderFn));
+    }
 
     // 10. Bottom border
     rawLines.push(borderFn(`└${"─".repeat(boxWidth - 2)}┘`));

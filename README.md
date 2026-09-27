@@ -97,7 +97,7 @@ Run `/commit` to inspect staged changes and generate commit messages autonomousl
 - Transparent live progress and recent action logging in the status box.
 - Only pulls overview statistics and diffs for key changed files, omitting lockfiles and huge generated assets.
 - Full token usage and cost accounting displayed in the confirmation dialog, CLI output, and completion notification.
-- Interactive proposal review with full message preview (header & body), detailed file diff metrics, direct commit (`c`), edit (`e`), or cancel (`Esc`).
+- Interactive proposal review with full message preview (header & body), detailed file diff metrics, direct commit (`c`), commit & push (`p`), edit (`e`), or cancel (`Esc`).
 
 ## Development
 

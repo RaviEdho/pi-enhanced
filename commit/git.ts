@@ -120,3 +120,30 @@ export async function getFileDiff(filePath: string, cwd: string): Promise<string
 export async function createCommit(message: string, cwd: string): Promise<void> {
   await execGit(["commit", "-m", message], cwd);
 }
+
+export async function pushCommit(cwd: string): Promise<string> {
+  const runPush = async (args: string[]) => {
+    const { stdout, stderr } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return (stdout || stderr).trim();
+  };
+
+  try {
+    return await runPush(["push"]);
+  } catch (err: any) {
+    const errorMsg = `${err?.stderr || ""} ${err?.message || ""}`;
+    if (errorMsg.includes("no upstream branch") || errorMsg.includes("--set-upstream")) {
+      const remotes = (await execGit(["remote"], cwd)).trim().split("\n").filter(Boolean);
+      const remote = remotes.includes("origin") ? "origin" : remotes[0];
+      const branch = (await execGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
+      if (remote && branch && branch !== "HEAD") {
+        return await runPush(["push", "--set-upstream", remote, branch]);
+      }
+    }
+    const cleanErr = err?.stderr?.trim() || err?.message || String(err);
+    throw new Error(cleanErr);
+  }
+}
+

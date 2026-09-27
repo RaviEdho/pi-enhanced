@@ -11,6 +11,7 @@ import {
   getStagedOverview,
   getWorkingTreeStatus,
   isGitRepository,
+  pushCommit,
   stageAllFiles,
 } from "./git.js";
 import { BlockingCommitEditor, CommitStatusBroadcaster } from "./editor.js";
@@ -364,11 +365,13 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       // Fallback selector if custom UI is not available
       if (!userChoice) {
         const actionCommit = `Commit: "${headerLine}" (${costBadge})`;
+        const actionPush = `Commit & Push: "${headerLine}" (${costBadge})`;
         const actionEdit = "Edit commit message";
         const actionCancel = "Cancel";
 
         const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [
           actionCommit,
+          actionPush,
           actionEdit,
           actionCancel,
         ]);
@@ -380,6 +383,8 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
 
         if (choice === actionEdit) {
           userChoice = { action: "edit", message: fullMessage };
+        } else if (choice === actionPush) {
+          userChoice = { action: "commit-and-push", message: fullMessage };
         } else {
           userChoice = { action: "commit", message: fullMessage };
         }
@@ -403,13 +408,64 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           return;
         }
 
+        const trimmed = edited.trim();
+        const firstLine = trimmed.split("\n")[0];
+
+        const postEditChoice = await ctx.ui.select("Action for edited commit", [
+          `Commit: "${firstLine}"`,
+          `Commit & Push: "${firstLine}"`,
+          "Cancel",
+        ]);
+
+        if (!postEditChoice || postEditChoice === "Cancel") {
+          ctx.ui.notify("Commit cancelled.", "info");
+          return;
+        }
+
+        const shouldPush = postEditChoice.startsWith("Commit & Push");
+
         try {
-          await createCommit(edited.trim(), cwd);
-          const firstLine = edited.trim().split("\n")[0];
+          await createCommit(trimmed, cwd);
           ctx.ui.notify(`Committed: ${firstLine} • ${costBadge}`, "info");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           ctx.ui.notify(`Commit failed: ${msg}`, "error");
+          return;
+        }
+
+        if (shouldPush) {
+          try {
+            ctx.ui.setWorkingMessage?.("Pushing to remote…");
+            await pushCommit(cwd);
+            ctx.ui.notify("Pushed commit to remote.", "info");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Committed, but push failed: ${msg}`, "error");
+          } finally {
+            ctx.ui.setWorkingMessage?.();
+          }
+        }
+        return;
+      }
+
+      if (userChoice.action === "commit-and-push") {
+        try {
+          await createCommit(fullMessage, cwd);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Commit failed: ${msg}`, "error");
+          return;
+        }
+
+        try {
+          ctx.ui.setWorkingMessage?.("Pushing to remote…");
+          await pushCommit(cwd);
+          ctx.ui.notify(`Committed and pushed: ${headerLine} • ${costBadge}`, "info");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Committed, but push failed: ${msg}`, "error");
+        } finally {
+          ctx.ui.setWorkingMessage?.();
         }
         return;
       }
