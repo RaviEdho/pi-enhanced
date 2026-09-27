@@ -269,6 +269,17 @@ async function* parseSseStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  const onAbort = () => {
+    reader.cancel().catch(() => {});
+  };
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+
   try {
     while (true) {
       if (signal?.aborted) {
@@ -301,7 +312,14 @@ async function* parseSseStream(
       }
     }
   } finally {
-    reader.releaseLock();
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
   }
 }
 
