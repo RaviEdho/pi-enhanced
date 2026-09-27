@@ -8,19 +8,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   createCommit,
-  getStagedFiles,
+  getStagedOverview,
   getWorkingTreeStatus,
   isGitRepository,
   stageAllFiles,
 } from "./git.js";
 import { BlockingCommitEditor, CommitStatusBroadcaster } from "./editor.js";
+import { CommitConfirmationDialog } from "./dialog.js";
+import { formatCost, formatCostBadge, formatDuration } from "./format.js";
 import { COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
-import type { CommitProposal } from "./types.js";
+import type {
+  CommitConfirmationResult,
+  CommitProposal,
+  CommitUsageCost,
+} from "./types.js";
 
 export function registerCommitCommand(pi: ExtensionAPI): void {
   pi.registerCommand("commit", {
-    description: "Autonomously inspect git diff and generate a conventional commit",
+    description: "Autonomously inspect git diff and generate a commit",
     handler: async (args, ctx) => {
       const cwd = ctx.cwd;
 
@@ -99,7 +105,6 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
               return;
             }
           }
-          // If optOnlyStaged was chosen, leave `staged` as-is
         }
       }
 
@@ -123,7 +128,21 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      const broadcaster = new CommitStatusBroadcaster("Fetching git overview…");
+      const isSub =
+        model.provider === "openai-codex" ||
+        model.provider === "google-antigravity" ||
+        model.provider === "kimi-coding" ||
+        model.provider === "github-copilot" ||
+        (ctx.modelRegistry as any)?.isUsingSubscription?.(model.provider) === true;
+
+      const modelIdString = `${model.provider}/${model.id}`;
+      const broadcaster = new CommitStatusBroadcaster("Fetching git overview…", modelIdString);
+      broadcaster.setIsSubscription(isSub);
+      broadcaster.addAction({
+        type: "overview",
+        description: `Detected ${staged.length} staged file${staged.length === 1 ? "" : "s"}`,
+      });
+
       let activeEditor: BlockingCommitEditor | undefined;
       const abortController = new AbortController();
 
@@ -137,14 +156,31 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       }
 
       let proposal: CommitProposal | null = null;
+      const diffedFiles: string[] = [];
       const tools = createCommitTools({
         cwd,
         onPropose: (prop) => {
           proposal = prop;
         },
+        onAction: (action) => {
+          broadcaster.addAction(action);
+        },
+        diffedFiles,
       });
 
+      let turnCount = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let reasoningTokens = 0;
+      let cacheReadTokens = 0;
+      let cacheWriteTokens = 0;
+      let totalTokens = 0;
+      let totalCost = 0;
+      const startTime = Date.now();
+
       let unsubscribe: (() => void) | undefined;
+      let overview = await getStagedOverview(cwd);
+
       try {
         const agentDir = getAgentDir();
         const settingsManager = SettingsManager.create(cwd, agentDir);
@@ -175,21 +211,45 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         });
 
         unsubscribe = session.subscribe((event) => {
-          if (event.type === "tool_execution_start") {
+          if (event.type === "turn_start") {
+            turnCount++;
+          } else if (event.type === "tool_execution_start") {
             if (event.toolName === "git_overview") {
               broadcaster.update("Fetching git overview…");
             } else if (event.toolName === "git_file_diff") {
               const file = (event.args as any)?.filePath || "file";
               broadcaster.update(`Inspecting diff for ${file}…`);
             } else if (event.toolName === "propose_commit") {
-              broadcaster.update("Formulating conventional commit…");
+              broadcaster.update("Formulating commit proposal…");
+            }
+          } else if (event.type === "message_end") {
+            if (event.message.role === "assistant" && event.message.usage) {
+              const u = event.message.usage;
+              inputTokens += u.input || 0;
+              outputTokens += u.output || 0;
+              reasoningTokens += u.reasoning || 0;
+              cacheReadTokens += u.cacheRead || 0;
+              cacheWriteTokens += u.cacheWrite || 0;
+              totalTokens += u.totalTokens || ((u.input || 0) + (u.output || 0));
+
+              if (u.cost && typeof u.cost.total === "number" && u.cost.total > 0) {
+                totalCost += u.cost.total;
+              } else if (model.cost) {
+                const turnCost =
+                  ((u.input || 0) / 1_000_000) * (model.cost.input || 0) +
+                  ((u.output || 0) / 1_000_000) * (model.cost.output || 0) +
+                  ((u.cacheRead || 0) / 1_000_000) * (model.cost.cacheRead || 0) +
+                  ((u.cacheWrite || 0) / 1_000_000) * (model.cost.cacheWrite || 0);
+                totalCost += turnCost;
+              }
+              broadcaster.updateUsage(totalTokens, totalCost);
             }
           }
         });
 
         const userPrompt = args.trim()
-          ? `User hint/instructions: "${args.trim()}". Inspect staged changes and propose conventional commit.`
-          : "Inspect staged changes and propose conventional commit.";
+          ? `User hint/instructions: "${args.trim()}". Inspect staged changes and propose commit.`
+          : "Inspect staged changes and propose commit.";
 
         broadcaster.update("Inspecting git diffs…");
         await session.prompt(userPrompt);
@@ -216,6 +276,31 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
+      // Fallback calculation for totalCost if model has rates but was not populated
+      if (totalCost === 0 && model.cost && (model.cost.input > 0 || model.cost.output > 0)) {
+        totalCost =
+          (inputTokens / 1_000_000) * (model.cost.input || 0) +
+          (outputTokens / 1_000_000) * (model.cost.output || 0) +
+          (cacheReadTokens / 1_000_000) * (model.cost.cacheRead || 0) +
+          (cacheWriteTokens / 1_000_000) * (model.cost.cacheWrite || 0);
+      }
+
+      const durationMs = Date.now() - startTime;
+      const usage: CommitUsageCost = {
+        inputTokens,
+        outputTokens,
+        reasoningTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        totalTokens,
+        totalCost,
+        turns: Math.max(1, turnCount),
+        durationMs,
+        modelId: modelIdString,
+        provider: model.provider,
+        isSubscription: isSub,
+      };
+
       const prop = proposal as CommitProposal;
       const type = prop.type.trim().toLowerCase();
       const scope = prop.scope?.trim().toLowerCase();
@@ -226,8 +311,25 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         ? `${headerLine}\n\n${prop.body.trim()}`
         : headerLine;
 
-      // 6. Interactive confirmation and execution
+      // Refetch overview for updated details
+      overview = await getStagedOverview(cwd);
+
+      // 6. Non-interactive CLI mode
       if (!ctx.hasUI) {
+        process.stdout.write(`\n[commit] Actions Summary:\n`);
+        process.stdout.write(`  • Staged: ${overview.stagedFiles.length} file(s) (${overview.statSummary || "changes"})\n`);
+        if (diffedFiles.length > 0) {
+          process.stdout.write(`  • Diffed: ${diffedFiles.join(", ")}\n`);
+        }
+        process.stdout.write(`[commit] Cost & Usage:\n`);
+        process.stdout.write(`  • Model: ${usage.modelId} (${usage.turns} turn${usage.turns === 1 ? "" : "s"} in ${formatDuration(usage.durationMs)})\n`);
+        process.stdout.write(`  • Tokens: ${usage.totalTokens.toLocaleString()} total (in: ${usage.inputTokens.toLocaleString()}, out: ${usage.outputTokens.toLocaleString()})\n`);
+        const costStr = usage.totalCost > 0
+          ? `$${formatCost(usage.totalCost)}`
+          : (usage.isSubscription ? "Included with subscription" : "$0.00");
+        process.stdout.write(`  • Cost: ${costStr}\n`);
+        process.stdout.write(`[commit] Message:\n  ${fullMessage.split("\n").join("\n  ")}\n\n`);
+
         try {
           await createCommit(fullMessage, cwd);
           process.stdout.write(`Committed: ${headerLine}\n`);
@@ -238,23 +340,64 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      const actionCommit = `Commit: "${headerLine}"`;
-      const actionEdit = "Edit commit message";
-      const actionCancel = "Cancel";
+      // 7. Interactive UI Mode
+      const costBadge = formatCostBadge(usage);
 
-      const choice = await ctx.ui.select("Conventional Commit Proposal", [
-        actionCommit,
-        actionEdit,
-        actionCancel,
-      ]);
+      let userChoice: CommitConfirmationResult | undefined;
+      if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
+        try {
+          userChoice = await ctx.ui.custom<CommitConfirmationResult>((tui, theme, _keybindings, done) => {
+            return new CommitConfirmationDialog(tui, theme, {
+              proposal: prop,
+              actions: broadcaster.recentActions,
+              overview,
+              diffedFiles,
+              usage,
+              onDone: (res) => done(res),
+            });
+          });
+        } catch {
+          userChoice = undefined;
+        }
+      }
 
-      if (!choice || choice === actionCancel) {
-        ctx.ui.notify("Commit cancelled.", "info");
+      // Fallback selector if custom UI is not available
+      if (!userChoice) {
+        const actionCommit = `Commit: "${headerLine}" (${costBadge})`;
+        const actionEdit = "Edit commit message";
+        const actionCancel = "Cancel";
+
+        const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [
+          actionCommit,
+          actionEdit,
+          actionCancel,
+        ]);
+
+        if (!choice || choice === actionCancel) {
+          ctx.ui.notify(`Commit cancelled (${costBadge} used).`, "info");
+          return;
+        }
+
+        if (choice === actionEdit) {
+          userChoice = { action: "edit", message: fullMessage };
+        } else {
+          userChoice = { action: "commit", message: fullMessage };
+        }
+      }
+
+      if (userChoice.action === "cancel") {
+        ctx.ui.notify(`Commit cancelled (${costBadge} used).`, "info");
         return;
       }
 
-      if (choice === actionEdit) {
-        const edited = await ctx.ui.input("Edit commit message", fullMessage);
+      if (userChoice.action === "edit") {
+        let edited: string | undefined;
+        if (typeof ctx.ui.editor === "function") {
+          edited = await ctx.ui.editor("Edit commit message", fullMessage);
+        } else {
+          edited = await ctx.ui.input("Edit commit message", fullMessage);
+        }
+
         if (!edited || !edited.trim()) {
           ctx.ui.notify("Empty message; commit cancelled.", "info");
           return;
@@ -262,7 +405,8 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
 
         try {
           await createCommit(edited.trim(), cwd);
-          ctx.ui.notify(`Committed: ${edited.split("\n")[0]}`, "info");
+          const firstLine = edited.trim().split("\n")[0];
+          ctx.ui.notify(`Committed: ${firstLine} • ${costBadge}`, "info");
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           ctx.ui.notify(`Commit failed: ${msg}`, "error");
@@ -270,10 +414,10 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      // Default: actionCommit
+      // userChoice.action === "commit"
       try {
         await createCommit(fullMessage, cwd);
-        ctx.ui.notify(`Committed: ${headerLine}`, "info");
+        ctx.ui.notify(`Committed: ${headerLine} • ${costBadge}`, "info");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Commit failed: ${msg}`, "error");

@@ -198,6 +198,6 @@ export default async function (pi: ExtensionAPI) {
   // Register elapsed working timer for the status indicator
   registerWorkingTimer(pi);
 
-  // Register autonomous conventional commit command
+  // Register autonomous commit command
   registerCommitCommand(pi);
 }

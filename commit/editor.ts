@@ -1,28 +1,87 @@
 import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { formatCost, formatTokens } from "./format.js";
+import type { CommitActionEntry } from "./types.js";
 
 export const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export class CommitStatusBroadcaster {
   private currentStatus: string;
-  private listeners = new Set<(status: string) => void>();
+  private actions: CommitActionEntry[] = [];
+  private modelName: string;
+  private startTime: number;
+  private totalTokens: number = 0;
+  private totalCost: number = 0;
+  private subscription: boolean = false;
+  private listeners = new Set<() => void>();
 
-  constructor(initialStatus = "Initializing commit agent…") {
+  constructor(initialStatus = "Initializing commit agent…", modelName = "") {
     this.currentStatus = initialStatus;
+    this.modelName = modelName;
+    this.startTime = Date.now();
   }
 
   get status(): string {
     return this.currentStatus;
   }
 
+  get recentActions(): CommitActionEntry[] {
+    return this.actions;
+  }
+
+  get model(): string {
+    return this.modelName;
+  }
+
+  get startTimestamp(): number {
+    return this.startTime;
+  }
+
+  get tokens(): number {
+    return this.totalTokens;
+  }
+
+  get cost(): number {
+    return this.totalCost;
+  }
+
+  get isSubscription(): boolean {
+    return this.subscription;
+  }
+
+  setModel(name: string): void {
+    this.modelName = name;
+    this.notify();
+  }
+
+  setIsSubscription(val: boolean): void {
+    this.subscription = val;
+    this.notify();
+  }
+
   update(newStatus: string): void {
     this.currentStatus = newStatus;
+    this.notify();
+  }
+
+  addAction(action: Omit<CommitActionEntry, "timestamp">): void {
+    this.actions.push({ ...action, timestamp: Date.now() });
+    this.notify();
+  }
+
+  updateUsage(tokens: number, cost: number): void {
+    this.totalTokens = tokens;
+    this.totalCost = cost;
+    this.notify();
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) {
-      listener(newStatus);
+      listener();
     }
   }
 
-  subscribe(listener: (status: string) => void): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -31,7 +90,6 @@ export class CommitStatusBroadcaster {
 }
 
 export class BlockingCommitEditor implements EditorComponent {
-  private statusText: string;
   private frameIndex: number = 0;
   private timer?: ReturnType<typeof setInterval>;
   private tui: TUI;
@@ -50,11 +108,9 @@ export class BlockingCommitEditor implements EditorComponent {
     this.tui = tui;
     this.editorTheme = editorTheme;
     this.broadcaster = broadcaster;
-    this.statusText = broadcaster.status;
     this.onAbort = onAbort;
 
-    this.unsubscribeStatus = this.broadcaster.subscribe((status) => {
-      this.statusText = status;
+    this.unsubscribeStatus = this.broadcaster.subscribe(() => {
       this.tui.requestRender();
     });
 
@@ -85,19 +141,68 @@ export class BlockingCommitEditor implements EditorComponent {
     if (data === "\x03" || data === "\x1b") {
       this.onAbort?.();
     }
-    // Block all other user keystrokes / text submissions while commit is active
+    // Block all other user keystrokes while commit agent runs
+  }
+
+  private formatBoxLine(text: string, width: number, borderFn: (s: string) => string): string {
+    const innerWidth = Math.max(0, width - 4);
+    const truncated = truncateToWidth(text, innerWidth, "…");
+    const pad = Math.max(0, innerWidth - visibleWidth(truncated));
+    return `${borderFn("│")} ${truncated}${" ".repeat(pad)} ${borderFn("│")}`;
   }
 
   render(width: number): string[] {
     const spinner = BRAILLE_SPINNER_FRAMES[this.frameIndex];
     const borderFn = this.editorTheme.borderColor ?? ((s: string) => s);
-    const topBorder = borderFn("─".repeat(Math.max(1, width)));
-    const bottomBorder = borderFn("─".repeat(Math.max(1, width)));
+    const elapsedSec = ((Date.now() - this.broadcaster.startTimestamp) / 1000).toFixed(1);
 
-    const content = ` ${spinner} ${this.statusText}`;
-    const fillLength = Math.max(0, width - visibleWidth(content));
-    const middleLine = `${content}${" ".repeat(fillLength)}`;
+    // Compact single-line fallback for narrow terminals
+    if (width < 50) {
+      const content = ` ${spinner} ${this.broadcaster.status}`;
+      const fillLength = Math.max(0, width - visibleWidth(content));
+      const middleLine = `${content}${" ".repeat(fillLength)}`;
+      return [
+        borderFn("─".repeat(Math.max(1, width))),
+        middleLine,
+        borderFn("─".repeat(Math.max(1, width))),
+      ];
+    }
 
-    return [topBorder, middleLine, bottomBorder];
+    const lines: string[] = [];
+
+    // Top border with title and cancel hint
+    const title = " Commit Agent ";
+    const hint = " [Esc to cancel] ";
+    const availableDash = Math.max(0, width - visibleWidth(title) - visibleWidth(hint) - 3);
+    const topBorder = `┌─${title}${"─".repeat(availableDash)}${hint}┐`;
+    lines.push(borderFn(topBorder));
+
+    // Active status line
+    const modelTag = this.broadcaster.model ? ` [${this.broadcaster.model}]` : "";
+    const activeText = `${spinner} ${this.broadcaster.status}${modelTag} • ${elapsedSec}s`;
+    lines.push(this.formatBoxLine(activeText, width, borderFn));
+
+    // Recent actions (last 2)
+    const recent = this.broadcaster.recentActions.slice(-2);
+    if (recent.length > 0) {
+      for (const action of recent) {
+        lines.push(this.formatBoxLine(`  ✓ ${action.description}`, width, borderFn));
+      }
+    }
+
+    // Usage & cost line if any usage reported
+    if (this.broadcaster.tokens > 0) {
+      const costBadge = this.broadcaster.cost > 0
+        ? `$${formatCost(this.broadcaster.cost)}`
+        : (this.broadcaster.isSubscription ? "included with subscription" : "$0.00");
+      const usageText = `  Tokens: ${formatTokens(this.broadcaster.tokens)} • Cost: ${costBadge}`;
+      lines.push(this.formatBoxLine(usageText, width, borderFn));
+    }
+
+    // Bottom border
+    const bottomBorder = `└${"─".repeat(Math.max(0, width - 2))}┘`;
+    lines.push(borderFn(bottomBorder));
+
+    return lines;
   }
 }
