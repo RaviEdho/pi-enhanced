@@ -19,7 +19,7 @@
     "index.ts",
     "accounts",
     "antigravity",
-    "codex-filter",
+    "codex",
     "commit",
     "hyper",
     "timer",

@@ -18,7 +18,7 @@ import {
   refreshAntigravityToken,
 } from "./antigravity/oauth.js";
 import { streamAntigravity } from "./antigravity/stream.js";
-import { registerCodexFilter } from "./codex-filter/index.js";
+import { registerCodexFilter } from "./codex/index.js";
 import {
   HYPER_API_BASE_URL,
   PROVIDER_ID as HYPER_PROVIDER_ID,

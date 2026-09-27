@@ -10,7 +10,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Multi-Account Manager & Balancer (`accounts/`)**: Multi-account store (`accounts.json`), session affinity hashing, weekly reset pace optimization, automatic sync from Pi (`auth.json`), automatic token refresh, and transparent 429 rate limit failover across accounts during streaming turns.
 - **Google Antigravity Provider (`antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
 - **Charm Hyper Provider (`hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
-- **OpenAI Codex Plan Filter (`codex-filter/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
+- **OpenAI Codex Plan Filter (`codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
 - **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
 - **Autonomous Conventional Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`) and zero conversation context bloat.
 
@@ -32,7 +32,7 @@ pi-for-raviedho/
 │   ├── oauth.ts                # OAuth 2.0 PKCE flow, loopback server, and token refresh
 │   ├── stream.ts               # Cloud Code Assist SSE streaming client & schema transformation
 │   └── types.ts                # Cloud Code Assist protocol schemas
-├── codex-filter/
+├── codex/
 │   ├── catalog.ts              # Live catalog fetching from OpenAI & disk caching
 │   ├── index.ts                # Provider wrapper with filterModels hook
 │   ├── plan.ts                 # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
