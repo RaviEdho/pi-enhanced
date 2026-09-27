@@ -128,24 +128,18 @@ export class AccountStore {
    * if accounts.json or auth.json has been modified externally.
    */
   public reloadIfModified(force = false): boolean {
-    const now = Date.now();
-    if (!force && now - this.lastCheckTime < 1000) {
-      return false;
-    }
-    this.lastCheckTime = now;
-
     const accountsMtime = this.getFileMtime(this.filePath);
     const authMtime = this.getFileMtime(this.piAuthPath);
 
     let needsLoad = false;
     let needsImport = false;
 
-    if (accountsMtime > this.lastMtimes.accounts) {
+    if (force || accountsMtime > this.lastMtimes.accounts) {
       needsLoad = true;
       this.lastMtimes.accounts = accountsMtime;
     }
 
-    if (authMtime > this.lastMtimes.auth) {
+    if (force || authMtime > this.lastMtimes.auth) {
       needsImport = true;
       this.lastMtimes.auth = authMtime;
     }
