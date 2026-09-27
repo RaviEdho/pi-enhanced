@@ -12,7 +12,8 @@ Guidance and instructions for AI agents working in this repository.
 - **Charm Hyper Provider (`hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **OpenAI Codex Plan Filter (`codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
 - **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
-- **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`), transparent live action progress, zero conversation context bloat, and full token/cost accounting.
+- **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
+- **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
 
 ---
 
@@ -46,6 +47,9 @@ pi-for-raviedho/
 │   ├── prompt.ts               # Commit guidelines & sub-agent system instructions
 │   ├── tools.ts                # Minimal git inspection tools (git_overview, git_file_diff, propose_commit)
 │   └── types.ts                # CommitProposal, usage metrics, and git overview data types
+├── continue/
+│   ├── index.ts                # Input handler registering "." continue shortcut
+│   └── prompt.ts               # System directive instructing model to resume unfinished work
 ├── hyper/
 │   ├── constants.ts            # Base URLs, API endpoints, User-Agent, timeouts
 │   ├── models.ts               # Dynamic model catalog discovery & fallback mapping from Hyper
