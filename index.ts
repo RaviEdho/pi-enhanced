@@ -44,7 +44,7 @@ export default async function (pi: ExtensionAPI) {
   const balancer = AccountBalancer.getInstance();
 
   // Retrieve active token for initial model discovery
-  let token: string | undefined = process.env.ANTIGRAVITY_API_KEY;
+  let token: string | undefined;
   const activeAccount = store.getActive(PROVIDER_ID);
   if (activeAccount) {
     try {
@@ -71,7 +71,6 @@ export default async function (pi: ExtensionAPI) {
   pi.registerProvider(PROVIDER_ID, {
     name: PROVIDER_NAME,
     baseUrl: ANTIGRAVITY_PRIMARY_ENDPOINT,
-    apiKey: "$ANTIGRAVITY_API_KEY",
     api: "google-antigravity-api" as unknown as Api,
 
     models,
@@ -85,6 +84,9 @@ export default async function (pi: ExtensionAPI) {
         } catch {
           // Ignore
         }
+      }
+      if (!activeToken && context?.credential?.type === "oauth" && "access" in context.credential) {
+        activeToken = (context.credential as { access: string }).access;
       }
       if (activeToken) {
         const liveModels = await fetchAndCollapseAntigravityModels(activeToken, context?.signal);
@@ -151,7 +153,7 @@ export default async function (pi: ExtensionAPI) {
   pi.registerProvider(HYPER_PROVIDER_ID, {
     name: HYPER_PROVIDER_NAME,
     baseUrl: HYPER_API_BASE_URL,
-    apiKey: "$HYPER_API_KEY",
+    apiKey: process.env.HYPER_API_KEY ? "$HYPER_API_KEY" : undefined,
     api: "openai-completions",
 
     models: hyperModels,
@@ -164,6 +166,13 @@ export default async function (pi: ExtensionAPI) {
           activeToken = await balancer.ensureFreshToken(currentActive);
         } catch {
           // Ignore
+        }
+      }
+      if (!activeToken && context?.credential) {
+        if (context.credential.type === "api_key" && "key" in context.credential && context.credential.key) {
+          activeToken = context.credential.key;
+        } else if (context.credential.type === "oauth" && "access" in context.credential && context.credential.access) {
+          activeToken = (context.credential as { access: string }).access;
         }
       }
       const live = await fetchHyperModels(activeToken, context?.signal);
