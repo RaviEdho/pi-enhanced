@@ -328,6 +328,22 @@ async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
     let errorMsg: string | undefined;
     let reports: ProviderUsageReport[] = [];
     let sessionInfo: SessionUsageInfo | undefined;
+    let frameIndex = 0;
+
+    const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const spinnerTimer = setInterval(() => {
+      if (!loading) {
+        clearInterval(spinnerTimer);
+        return;
+      }
+      frameIndex = (frameIndex + 1) % SPINNER_FRAMES.length;
+      tui.requestRender();
+    }, 80);
+    spinnerTimer.unref?.();
+
+    const cleanup = () => {
+      clearInterval(spinnerTimer);
+    };
 
     collectUsageReports({
       signal: abortController.signal,
@@ -336,12 +352,14 @@ async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
       currentModelId,
     })
       .then((res) => {
+        cleanup();
         loading = false;
         reports = res.reports;
         sessionInfo = res.sessionInfo;
         tui.requestRender();
       })
       .catch((err) => {
+        cleanup();
         if (!abortController.signal.aborted) {
           loading = false;
           errorMsg = err instanceof Error ? err.message : String(err);
@@ -359,7 +377,8 @@ async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
         container.addChild(new Text("", 0, 0));
 
         if (loading) {
-          container.addChild(new Text(theme.fg("dim", "  ⏳ Fetching provider quotas..."), 1, 0));
+          const spinner = theme.fg("accent", SPINNER_FRAMES[frameIndex]);
+          container.addChild(new Text(`  ${spinner} ${theme.fg("dim", "Fetching provider quotas...")}`, 1, 0));
           container.addChild(new Text("", 0, 0));
           container.addChild(new Text(theme.fg("dim", "  Press Esc or q to cancel"), 1, 0));
         } else if (errorMsg) {
@@ -385,6 +404,7 @@ async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
       invalidate: () => {},
       handleInput: (data: string) => {
         if (matchesKey(data, "enter") || matchesKey(data, "escape") || data === "q") {
+          cleanup();
           abortController.abort();
           done(undefined);
           return true;

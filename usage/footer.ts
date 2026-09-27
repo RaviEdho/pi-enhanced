@@ -303,8 +303,8 @@ function renderFooterLine2(
   return theme.fg("dim", line);
 }
 
-const RUNNING_CACHE_TTL_MS = 30 * 1000; // 30 seconds cache TTL while model is active
-const TOOL_CALL_THROTTLE_MS = 30 * 1000; // Throttle tool call quota checks to once every 30s
+const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is active
+const TOOL_CALL_THROTTLE_MS = 15 * 1000; // Throttle tool call quota checks to once every 15s
 const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every 2 minutes
 
 /**
