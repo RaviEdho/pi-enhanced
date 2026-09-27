@@ -89,10 +89,15 @@ export function matchesConstraints(
   // Check include paths
   if (constraints.includePaths && constraints.includePaths.length > 0) {
     const matchesInclude = constraints.includePaths.some((inc) => {
-      if (inc.endsWith("/")) {
-        return normPath.startsWith(inc) || normPath.includes(`/${inc}`);
-      }
-      return normPath.includes(inc);
+      const cleanInc = inc.endsWith("/") ? inc.slice(0, -1) : inc;
+      if (!cleanInc || cleanInc === ".") return true;
+      return (
+        normPath === cleanInc ||
+        normPath.startsWith(`${cleanInc}/`) ||
+        normPath.includes(`/${cleanInc}/`) ||
+        normPath.endsWith(`/${cleanInc}`) ||
+        normPath.includes(inc)
+      );
     });
     if (!matchesInclude) return false;
   }

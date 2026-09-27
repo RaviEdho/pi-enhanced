@@ -15,7 +15,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
 - **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
 - **Native Output Filter & Token Compressor (`filter/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
-- **Smart In-Memory Search Engine (`search/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find` / `smart_find`), definition-first content grep (`grep` / `smart_grep`), multi-pattern OR search (`multi_grep`), in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
+- **Smart In-Memory Search Engine (`search/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find` / `smart_find`), definition-first content grep (`grep` / `smart_grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
 
 ---
 
@@ -75,10 +75,12 @@ pi-for-raviedho/
 ├── search/
 │   ├── classifier.ts           # Code definition & import scanner (TS, JS, Python, Rust, Go, C/C++)
 │   ├── cursor.ts               # In-memory pagination cursor store
+│   ├── external.ts             # External path & unindexed directory search runner
 │   ├── formatter.ts            # Match-centered line truncation & token budgeting
 │   ├── frecency.ts             # In-memory & persistent frecency tracker with git recency bonus
 │   ├── index.ts                # Smart search extension registration & commands (/search-health, etc.)
 │   ├── indexer.ts              # In-memory file indexer, git status tracker, and grep engine
+│   ├── interceptor.ts          # Transparent shell search command interceptor & agent steering
 │   ├── matcher.ts              # Typo-tolerant fuzzy matcher & query constraint parser
 │   ├── tools.ts                # Tool definitions (find/smart_find, grep/smart_grep, multi_grep)
 │   └── types.ts                # Search data structures and configuration types

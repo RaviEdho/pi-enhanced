@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { classifyLine } from "./classifier.js";
 import { FrecencyTracker } from "./frecency.js";
 import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
-import type { GitFileStatus, IndexedFile, SearchMatch } from "./types.js";
+import type { GitFileStatus, IndexedFile, SearchMatch, SearchQueryConstraints } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -234,6 +234,33 @@ export class FileIndexer {
   }
 
   /**
+   * Helper to build clean constraints from explicit path and glob options
+   */
+  public buildPathAndGlobConstraints(pathOpt?: string, globOpt?: string): SearchQueryConstraints {
+    const constraints: SearchQueryConstraints = { pattern: "" };
+
+    if (pathOpt && pathOpt !== ".") {
+      let p = pathOpt.trim().replace(/\\/g, "/");
+      if (path.isAbsolute(p)) {
+        p = path.relative(this.cwd, p).replace(/\\/g, "/");
+      }
+      p = p.replace(/^\.\//, "");
+      if (p && p !== ".") {
+        constraints.includePaths = [p];
+      }
+    }
+
+    if (globOpt) {
+      if (!constraints.extensions) constraints.extensions = [];
+      if (globOpt.startsWith("*.")) {
+        constraints.extensions.push(globOpt.slice(1).toLowerCase());
+      }
+    }
+
+    return constraints;
+  }
+
+  /**
    * Search files by path (fuzzy matching + constraints + frecency ranking)
    */
   public async findFiles(
@@ -298,13 +325,7 @@ export class FileIndexer {
     const limit = options?.limit ?? 40;
     const offset = options?.offset ?? 0;
     const contextLines = options?.context ?? 0;
-    const constraints = parseQueryConstraints(options?.path || "");
-    if (options?.glob) {
-      if (!constraints.extensions) constraints.extensions = [];
-      if (options.glob.startsWith("*.")) {
-        constraints.extensions.push(options.glob.slice(1).toLowerCase());
-      }
-    }
+    const constraints = this.buildPathAndGlobConstraints(options?.path, options?.glob);
 
     // Smart case: if pattern is all lower case, default to case-insensitive
     const isAllLower = pattern.toLowerCase() === pattern;
@@ -465,7 +486,7 @@ export class FileIndexer {
 
     const limit = options?.limit ?? 50;
     const contextLines = options?.context ?? 0;
-    const constraints = parseQueryConstraints(options?.path || "");
+    const constraints = this.buildPathAndGlobConstraints(options?.path, options?.glob);
 
     const candidateFiles: IndexedFile[] = [];
     for (const file of this.files.values()) {

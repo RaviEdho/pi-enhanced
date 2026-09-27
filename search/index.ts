@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FrecencyTracker } from "./frecency.js";
 import { FileIndexer } from "./indexer.js";
+import { registerSearchInterceptor } from "./interceptor.js";
 import {
   createFindToolDefinition,
   createGrepToolDefinition,
@@ -64,9 +65,11 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
     }
   });
 
-  // Inject system prompt rule nudging agent to use in-memory search tools over bash
+  // Inject system prompt rules and guidelines nudging agent to use in-memory search tools over bash
   pi.on("before_agent_start", (event) => {
-    if (event.systemPromptOptions?.selectedTools) {
+    if (!event.systemPromptOptions) return;
+
+    if (event.systemPromptOptions.selectedTools) {
       for (const name of searchToolNames) {
         if (!event.systemPromptOptions.selectedTools.includes(name)) {
           event.systemPromptOptions.selectedTools.push(name);
@@ -74,15 +77,40 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
       }
     }
 
-    if (event.systemPromptOptions) {
-      if (!event.systemPromptOptions.promptGuidelines) {
-        event.systemPromptOptions.promptGuidelines = [];
+    // Override shell tool snippets so Pi doesn't advertise (ls, grep, find) under <tools>
+    if (!event.systemPromptOptions.toolSnippets) {
+      event.systemPromptOptions.toolSnippets = {};
+    }
+    const shellSnippet =
+      "Execute shell commands (git, build tools, tests, package managers). Do NOT use for searching code or files; use grep, multi_grep, or find instead.";
+    event.systemPromptOptions.toolSnippets["bash"] = shellSnippet;
+    event.systemPromptOptions.toolSnippets["powershell"] = shellSnippet;
+
+    // Attach strict negative constraints to bash and powershell tool guidelines
+    if (!event.systemPromptOptions.toolGuidelines) {
+      event.systemPromptOptions.toolGuidelines = {};
+    }
+    for (const shellTool of ["bash", "powershell"]) {
+      if (!event.systemPromptOptions.toolGuidelines[shellTool]) {
+        event.systemPromptOptions.toolGuidelines[shellTool] = [];
       }
-      event.systemPromptOptions.promptGuidelines.push(
-        "Prefer the dedicated find, grep, and multi_grep tools over running find, ls, or grep in bash for file discovery and code search."
+      event.systemPromptOptions.toolGuidelines[shellTool].push(
+        "Never run file search or content search commands (rg, ripgrep, grep, find, ag, fd) via shell. Always use the dedicated grep, find, or multi_grep tools instead."
       );
     }
+
+    if (!event.systemPromptOptions.promptGuidelines) {
+      event.systemPromptOptions.promptGuidelines = [];
+    }
+    event.systemPromptOptions.promptGuidelines.push(
+      "CRITICAL: Do NOT execute `rg`, `ripgrep`, `grep`, `find`, `fd`, or `ag` via the bash or powershell tools. Always use the built-in search tools (`grep`, `multi_grep`, `find`) for both workspace and external paths.",
+      "The built-in search tools support workspace files (in-memory) and external paths/node_modules (auto-fallback), definition-first ranking, and token-compressed output."
+    );
   });
+
+  // Transparent interceptor: catch standalone search commands run via bash/powershell,
+  // execute them via the enhanced search engine, and nudge the agent towards specialized tools.
+  registerSearchInterceptor(pi);
 
   // Save frecency to disk cleanly on shutdown
   pi.on("session_shutdown", () => {
