@@ -155,9 +155,13 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       let activeEditor: BlockingCommitEditor | undefined;
       let activeSession: any = undefined;
       const abortController = new AbortController();
+      let isAborting = false;
 
       const handleAbort = async () => {
+        if (isAborting) return;
+        isAborting = true;
         abortController.abort();
+        broadcaster.update("Cancelling commit agent…");
         if (activeSession) {
           try {
             await activeSession.abort();
@@ -168,7 +172,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       };
 
       if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-        ctx.ui.setEditorComponent((tui, editorTheme) => {
+        ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
           activeEditor = new BlockingCommitEditor(
             tui,
             editorTheme,
@@ -176,10 +180,24 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             () => {
               void handleAbort();
             },
-            ctx.ui.theme
+            ctx.ui.theme,
+            keybindings
           );
           return activeEditor;
         });
+      }
+
+      if (abortController.signal.aborted) {
+        activeEditor?.dispose();
+        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
+          try {
+            ctx.ui.setEditorComponent(undefined);
+          } catch {
+            // ignore
+          }
+        }
+        ctx.ui.notify("Commit cancelled by user.", "info");
+        return;
       }
 
       let plan: CommitPlanProposal | null = null;
@@ -208,6 +226,19 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       let unsubscribe: (() => void) | undefined;
       let overview = await getStagedOverview(cwd);
 
+      if (abortController.signal.aborted) {
+        activeEditor?.dispose();
+        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
+          try {
+            ctx.ui.setEditorComponent(undefined);
+          } catch {
+            // ignore
+          }
+        }
+        ctx.ui.notify("Commit cancelled by user.", "info");
+        return;
+      }
+
       try {
         const agentDir = getAgentDir();
         const settingsManager = SettingsManager.create(cwd, agentDir);
@@ -223,6 +254,11 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         });
         await resourceLoader.reload();
 
+        if (abortController.signal.aborted) {
+          ctx.ui.notify("Commit cancelled by user.", "info");
+          return;
+        }
+
         const modelRuntime = (ctx.modelRegistry as any)?.runtime;
         const { session } = await createAgentSession({
           cwd,
@@ -237,6 +273,17 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           customTools: tools,
         });
         activeSession = session;
+
+        if (abortController.signal.aborted) {
+          try {
+            session.dispose();
+          } catch {
+            // ignore
+          }
+          activeSession = undefined;
+          ctx.ui.notify("Commit cancelled by user.", "info");
+          return;
+        }
 
         unsubscribe = session.subscribe((event) => {
           if (event.type === "turn_start") {
@@ -293,9 +340,36 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         }
 
         broadcaster.update("Inspecting git diffs…");
-        await session.prompt(userPrompt);
-        session.dispose();
-        activeSession = undefined;
+
+        const abortPromise = new Promise<void>((_, reject) => {
+          if (abortController.signal.aborted) {
+            reject(new Error("Commit cancelled by user."));
+          } else {
+            abortController.signal.addEventListener(
+              "abort",
+              () => reject(new Error("Commit cancelled by user.")),
+              { once: true }
+            );
+          }
+        });
+
+        try {
+          await Promise.race([session.prompt(userPrompt), abortPromise]);
+        } finally {
+          if (abortController.signal.aborted) {
+            void session.abort().catch(() => {}).finally(() => {
+              try {
+                session.dispose();
+              } catch {
+                // ignore
+              }
+            });
+            activeSession = undefined;
+          } else {
+            session.dispose();
+            activeSession = undefined;
+          }
+        }
       } catch (err) {
         if (abortController.signal.aborted) {
           ctx.ui.notify("Commit cancelled by user.", "info");
@@ -306,9 +380,17 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       } finally {
         unsubscribe?.();
-        activeEditor?.dispose();
+        try {
+          activeEditor?.dispose();
+        } catch {
+          // ignore
+        }
         if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-          ctx.ui.setEditorComponent(undefined);
+          try {
+            ctx.ui.setEditorComponent(undefined);
+          } catch {
+            // ignore
+          }
         }
       }
 
