@@ -35,6 +35,41 @@ export function executeWithMultiAccountFailover(
   const balancer = AccountBalancer.getInstance();
   const store = AccountStore.getInstance();
 
+  const pushAborted = () => {
+    const errorMsg: AssistantMessage = {
+      role: "assistant",
+      content: [],
+      api: model.api,
+      provider: providerId,
+      model: model.id,
+      stopReason: "aborted",
+      errorMessage: "Request cancelled by caller",
+      timestamp: Date.now(),
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    outerStream.push({ type: "error", reason: "aborted", error: errorMsg });
+    outerStream.end();
+  };
+
+  const abortListener = () => {
+    pushAborted();
+  };
+
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      pushAborted();
+      return outerStream;
+    }
+    options.signal.addEventListener("abort", abortListener, { once: true });
+  }
+
   (async () => {
     const totalAccounts = store.list(providerId);
     const hasConfiguredAccounts = totalAccounts.length > 0;
@@ -71,7 +106,8 @@ export function executeWithMultiAccountFailover(
 
     while (attempts < maxAttempts) {
       if (options?.signal?.aborted) {
-        break;
+        pushAborted();
+        return;
       }
 
       attempts++;
@@ -151,7 +187,8 @@ export function executeWithMultiAccountFailover(
       try {
         for await (const event of innerStream) {
           if (options?.signal?.aborted) {
-            break;
+            pushAborted();
+            return;
           }
 
           if (event.type === "text_delta" || event.type === "thinking_delta") {
@@ -183,6 +220,10 @@ export function executeWithMultiAccountFailover(
           outerStream.push(event);
         }
       } catch (streamErr) {
+        if (options?.signal?.aborted) {
+          pushAborted();
+          return;
+        }
         if (!emittedTokens && isRateLimitError(streamErr) && hasConfiguredAccounts) {
           bufferedEvents.length = 0;
           const cooldown = extractCooldownMs(streamErr);
@@ -276,7 +317,12 @@ export function executeWithMultiAccountFailover(
         error: errorMsg,
       });
     }
+    outerStream.end();
   })().catch((fatalErr) => {
+    if (options?.signal?.aborted) {
+      pushAborted();
+      return;
+    }
     const errorMsg: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -296,6 +342,12 @@ export function executeWithMultiAccountFailover(
       },
     };
     outerStream.push({ type: "error", reason: "error", error: errorMsg });
+    outerStream.end();
+  }).finally(() => {
+    if (options?.signal) {
+      options.signal.removeEventListener("abort", abortListener);
+    }
+    outerStream.end();
   });
 
   return outerStream;
