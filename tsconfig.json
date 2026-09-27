@@ -13,9 +13,10 @@
     "index.ts",
     "accounts/**/*",
     "commit/**/*",
+    "compressor/**/*",
     "continue/**/*",
-    "filter/**/*",
     "providers/**/*",
+    "scout/**/*",
     "timer/**/*",
     "usage/**/*"
   ],

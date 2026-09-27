@@ -3,14 +3,14 @@ import { runFilterPipeline } from "./pipeline.js";
 import { RecallStore } from "./recall.js";
 import { GainTracker } from "./tracker.js";
 
-export function registerOutputFilter(pi: ExtensionAPI): void {
+export function registerOutputCompressor(pi: ExtensionAPI): void {
   const recallStore = RecallStore.getInstance();
   const tracker = GainTracker.getInstance();
 
   // Intercept tool results from bash/powershell to filter noisy output before LLM context
   pi.on("tool_result", async (event: ToolResultEvent) => {
     try {
-      if (process.env.PI_FILTER_DISABLED === "1") {
+      if (process.env.PI_COMPRESSOR_DISABLED === "1" || process.env.PI_FILTER_DISABLED === "1") {
         return;
       }
 
@@ -55,7 +55,7 @@ export function registerOutputFilter(pi: ExtensionAPI): void {
       };
     } catch (err) {
       // Fail open: an error in filtering must never break command execution
-      console.warn("[filter] unexpected error in tool_result filter; passing raw output", err);
+      console.warn("[compressor] unexpected error in tool_result filter; passing raw output", err);
       return;
     }
   });
@@ -133,3 +133,7 @@ export function registerOutputFilter(pi: ExtensionAPI): void {
     },
   });
 }
+
+// Backward-compatible alias
+export const registerOutputFilter = registerOutputCompressor;
+

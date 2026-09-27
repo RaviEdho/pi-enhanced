@@ -11,7 +11,7 @@ import type { SearchMode } from "./types.js";
 
 let currentMode: SearchMode = "override";
 
-export function registerSmartSearch(pi: ExtensionAPI): void {
+export function registerScout(pi: ExtensionAPI): void {
   const frecency = FrecencyTracker.getInstance();
 
   // Determine tool names based on mode
@@ -117,72 +117,94 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
     frecency.saveSync();
   });
 
-  // /search-rescan command to force reindexing
-  pi.registerCommand("search-rescan", {
+  // Rescan command to force reindexing
+  const handleRescan = async (_args: string | undefined, ctx: any) => {
+    const indexer = FileIndexer.getInstance(ctx.cwd);
+    await indexer.scan(true);
+    const count = indexer.getIndexedFileCount();
+    const gitCount = indexer.getGitModifiedCount();
+    const msg = `Rescanned ${count} files (${gitCount} git modified/staged/untracked).`;
+    if (ctx.hasUI && ctx.mode === "tui") {
+      ctx.ui.notify(msg, "info");
+    } else {
+      console.log(msg);
+    }
+  };
+
+  pi.registerCommand("scout-rescan", {
     description: "Force rescan the repository index and refresh git status",
-    handler: async (_args, ctx) => {
-      const indexer = FileIndexer.getInstance(ctx.cwd);
-      await indexer.scan(true);
-      const count = indexer.getIndexedFileCount();
-      const gitCount = indexer.getGitModifiedCount();
-      const msg = `Rescanned ${count} files (${gitCount} git modified/staged/untracked).`;
+    handler: handleRescan,
+  });
+  pi.registerCommand("search-rescan", {
+    description: "Alias for /scout-rescan",
+    handler: handleRescan,
+  });
+
+  // Health command
+  const handleHealth = async (_args: string | undefined, ctx: any) => {
+    const indexer = FileIndexer.getInstance(ctx.cwd);
+    await indexer.scan();
+    const filesCount = indexer.getIndexedFileCount();
+    const gitCount = indexer.getGitModifiedCount();
+    const frecencyCount = frecency.getTrackedCount();
+    const memUsageMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+
+    const report = [
+      "Scout Search Engine Status:",
+      `  Mode:             ${currentMode}`,
+      `  Indexed files:    ${filesCount}`,
+      `  Git changes:      ${gitCount} active files`,
+      `  Frecency memory:  ${frecencyCount} tracked entries`,
+      `  Heap memory:      ~${memUsageMb} MB`,
+    ].join("\n");
+
+    if (ctx.hasUI && ctx.mode === "tui") {
+      ctx.ui.notify(report, "info");
+    } else {
+      console.log(report);
+    }
+  };
+
+  pi.registerCommand("scout-health", {
+    description: "Display scout search engine health, indexed file counts, and frecency memory",
+    handler: handleHealth,
+  });
+  pi.registerCommand("search-health", {
+    description: "Alias for /scout-health",
+    handler: handleHealth,
+  });
+
+  // Mode command to toggle mode
+  const handleMode = async (args: string | undefined, ctx: any) => {
+    const mode = args?.trim().toLowerCase();
+    if (mode === "override" || mode === "tools") {
+      currentMode = mode as SearchMode;
+      const msg = `Search mode switched to '${currentMode}'. (Note: Tool name rebindings take effect on reload / next session).`;
       if (ctx.hasUI && ctx.mode === "tui") {
         ctx.ui.notify(msg, "info");
       } else {
         console.log(msg);
       }
-    },
-  });
-
-  // /search-health command
-  pi.registerCommand("search-health", {
-    description: "Display smart search engine health, indexed file counts, and frecency memory",
-    handler: async (_args, ctx) => {
-      const indexer = FileIndexer.getInstance(ctx.cwd);
-      await indexer.scan();
-      const filesCount = indexer.getIndexedFileCount();
-      const gitCount = indexer.getGitModifiedCount();
-      const frecencyCount = frecency.getTrackedCount();
-      const memUsageMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-
-      const report = [
-        "Smart Search Engine Status:",
-        `  Mode:             ${currentMode}`,
-        `  Indexed files:    ${filesCount}`,
-        `  Git changes:      ${gitCount} active files`,
-        `  Frecency memory:  ${frecencyCount} tracked entries`,
-        `  Heap memory:      ~${memUsageMb} MB`,
-      ].join("\n");
-
+    } else {
+      const msg = `Current search mode: '${currentMode}'. Usage: /scout-mode [override|tools]`;
       if (ctx.hasUI && ctx.mode === "tui") {
-        ctx.ui.notify(report, "info");
+        ctx.ui.notify(msg, "info");
       } else {
-        console.log(report);
+        console.log(msg);
       }
-    },
-  });
+    }
+  };
 
-  // /search-mode command to toggle mode
+  pi.registerCommand("scout-mode", {
+    description: "Switch search tool registration mode: /scout-mode [override|tools]",
+    handler: handleMode,
+  });
   pi.registerCommand("search-mode", {
-    description: "Switch search tool registration mode: /search-mode [override|tools]",
-    handler: async (args, ctx) => {
-      const mode = args?.trim().toLowerCase();
-      if (mode === "override" || mode === "tools") {
-        currentMode = mode as SearchMode;
-        const msg = `Search mode switched to '${currentMode}'. (Note: Tool name rebindings take effect on reload / next session).`;
-        if (ctx.hasUI && ctx.mode === "tui") {
-          ctx.ui.notify(msg, "info");
-        } else {
-          console.log(msg);
-        }
-      } else {
-        const msg = `Current search mode: '${currentMode}'. Usage: /search-mode [override|tools]`;
-        if (ctx.hasUI && ctx.mode === "tui") {
-          ctx.ui.notify(msg, "info");
-        } else {
-          console.log(msg);
-        }
-      }
-    },
+    description: "Alias for /scout-mode",
+    handler: handleMode,
   });
 }
+
+// Backward-compatible alias
+export const registerSmartSearch = registerScout;
+
