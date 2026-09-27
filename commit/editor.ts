@@ -98,6 +98,7 @@ export class BlockingCommitEditor implements EditorComponent {
   private broadcaster: CommitStatusBroadcaster;
   private unsubscribeStatus: () => void;
   private onAbort?: () => void;
+  private keybindings?: any;
   public focused: boolean = true;
 
   constructor(
@@ -105,13 +106,15 @@ export class BlockingCommitEditor implements EditorComponent {
     editorTheme: EditorTheme,
     broadcaster: CommitStatusBroadcaster,
     onAbort?: () => void,
-    theme?: any
+    theme?: any,
+    keybindings?: any
   ) {
     this.tui = tui;
     this.editorTheme = editorTheme;
     this.theme = theme;
     this.broadcaster = broadcaster;
     this.onAbort = onAbort;
+    this.keybindings = keybindings;
 
     this.unsubscribeStatus = this.broadcaster.subscribe(() => {
       this.tui.requestRender();
@@ -140,14 +143,20 @@ export class BlockingCommitEditor implements EditorComponent {
   setText(_text: string): void {}
 
   handleInput(data: string): void {
-    // Allow cancellation via Ctrl+C, Escape, or 'q'
+    // Allow cancellation via Ctrl+C, Escape, 'q', or matching keybindings
     if (
       matchesKey(data, "escape") ||
       matchesKey(data, "esc") ||
       data === "\x1b" ||
       data === "\x03" ||
-      data.toLowerCase() === "q"
+      data.toLowerCase() === "q" ||
+      (this.keybindings && typeof this.keybindings.matches === "function" && (
+        this.keybindings.matches(data, "app.interrupt") ||
+        this.keybindings.matches(data, "app.clear") ||
+        this.keybindings.matches(data, "tui.select.cancel")
+      ))
     ) {
+      this.broadcaster.update("Cancelling commit agent…");
       this.onAbort?.();
     }
     // Block all other user keystrokes while commit agent runs

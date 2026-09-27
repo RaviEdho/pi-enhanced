@@ -100,6 +100,8 @@ export class CommitConfirmationDialog implements Component {
       data === "\x03" ||
       data.toLowerCase() === "q" ||
       (this.keybindings && typeof this.keybindings.matches === "function" && (
+        this.keybindings.matches(data, "app.interrupt") ||
+        this.keybindings.matches(data, "app.clear") ||
         this.keybindings.matches(data, "tui.select.cancel") ||
         this.keybindings.matches(data, "cancel")
       ))
