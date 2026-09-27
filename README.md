@@ -27,6 +27,7 @@ Personalized Pi extension package providing the **Google Antigravity** provider,
 - **Dynamic OpenAI Codex Plan Filtering**: Automatically detects your ChatGPT plan tier (`free`, `plus`, `pro`) from your OAuth token, queries OpenAI's live model endpoint, and filters out unavailable models from `/model` and `pi --list-models`.
 - **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI Codex, etc.) with deterministic session affinity for optimal prompt caching, automatic OAuth token refresh, weekly reset-pace balancing, and transparent failover on 429 / quota exhaustion.
 - **Provider Quotas with Reset Pace Markers**: Live multi-account quota monitoring via `/usage` showing usage percentage, plan tier, reset countdowns, and real-time reset progress markers (`┃`) on the usage bar.
+- **Autonomous Conventional Commit (`/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`), formats a conventional commit message, and prompts for interactive approval or edit before committing.
 - **Pi Auth Sync**: Automatically imports credentials from `~/.pi/agent/auth.json` into the accounts pool and syncs the active healthy account back to `auth.json`.
 
 ## Usage
@@ -82,6 +83,20 @@ Run `/usage` to view live quotas, progress bars, and reset times across all acco
 # Or from terminal:
 pi -p "/usage"
 ```
+
+### 5. Autonomous Conventional Commits
+
+Run `/commit` to inspect staged changes and generate conventional commit messages autonomously:
+
+```text
+/commit
+/commit focus on auth error handling improvements
+```
+
+- Spins up an isolated sub-agent with zero conversation context bloat.
+- Only pulls overview statistics and diffs for key changed files.
+- Automatically omits lockfiles and huge generated files.
+- Displays an interactive selector allowing you to commit immediately, edit the message in the terminal, or cancel.
 
 ## Development
 

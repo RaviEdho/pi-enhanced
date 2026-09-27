@@ -34,6 +34,7 @@ import {
   refreshHyperToken,
 } from "./hyper/oauth.js";
 import { streamHyper } from "./hyper/stream.js";
+import { registerCommitCommand } from "./commit/index.js";
 import { registerWorkingTimer } from "./timer/index.js";
 import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
 
@@ -196,4 +197,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register elapsed working timer for the status indicator
   registerWorkingTimer(pi);
+
+  // Register autonomous conventional commit command
+  registerCommitCommand(pi);
 }

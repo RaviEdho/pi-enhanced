@@ -12,6 +12,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Charm Hyper Provider (`hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **OpenAI Codex Plan Filter (`codex-filter/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
 - **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
+- **Autonomous Conventional Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`) and zero conversation context bloat.
 
 ---
 
@@ -36,6 +37,12 @@ pi-for-raviedho/
 │   ├── index.ts                # Provider wrapper with filterModels hook
 │   ├── plan.ts                 # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
 │   └── types.ts                # Catalog & cache types
+├── commit/
+│   ├── git.ts                  # Git helpers: diff extraction, staging, commit execution
+│   ├── index.ts                # /commit command registration & interactive approval loop
+│   ├── prompt.ts               # Conventional commit guidelines & sub-agent system instructions
+│   ├── tools.ts                # Minimal git inspection tools (git_overview, git_file_diff, propose_commit)
+│   └── types.ts                # CommitProposal and git overview data types
 ├── hyper/
 │   ├── constants.ts            # Base URLs, API endpoints, User-Agent, timeouts
 │   ├── models.ts               # Dynamic model catalog discovery & fallback mapping from Hyper
