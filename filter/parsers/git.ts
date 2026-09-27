@@ -1,4 +1,8 @@
 export function filterGitCommand(command: string, raw: string, isError: boolean): string | null {
+  if (!/\bgit\b/.test(command)) {
+    return null;
+  }
+
   // If error, don't over-filter so diagnostic information is preserved
   if (isError) {
     return filterGitError(raw);
@@ -77,8 +81,9 @@ function filterGitStatus(raw: string): string {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    // Drop git instructional guidance
-    if (trimmed.startsWith("(") && trimmed.endsWith(")")) continue;
+    // Drop git instructional guidance and hints
+    if (trimmed.startsWith("(") && (trimmed.endsWith(")") || trimmed.includes("use \"git") || trimmed.includes("commit -a"))) continue;
+    if (trimmed.startsWith("no changes added to commit")) continue;
     if (trimmed.startsWith("On branch")) {
       filtered.push(trimmed);
       continue;

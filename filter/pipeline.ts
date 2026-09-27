@@ -19,7 +19,7 @@ export function runFilterPipeline(
   isError: boolean
 ): FilterResult | null {
   const originalBytes = Buffer.byteLength(rawOutput, "utf8");
-  if (originalBytes < 120) {
+  if (originalBytes < 40) {
     return null;
   }
 
@@ -85,9 +85,9 @@ export function runFilterPipeline(
   const filteredBytes = Buffer.byteLength(filteredText, "utf8");
   const savedBytes = originalBytes - filteredBytes;
 
-  // Only commit filtering if at least 80 bytes or 15% was saved
+  // Only commit filtering if at least 30 bytes or 20% was saved
   const savingsRatio = savedBytes / originalBytes;
-  if (savedBytes < 80 && savingsRatio < 0.15) {
+  if (savedBytes < 30 && savingsRatio < 0.2) {
     return null;
   }
 
