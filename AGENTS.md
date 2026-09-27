@@ -92,6 +92,17 @@ pi-for-raviedho/
 5. **Type Safety**:
    - Always run `npm run typecheck` before committing.
 
+6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight)**:
+   - **Always audit provider documentation and API completeness before writing any integration code.**
+   - Inspect and evaluate the following facets:
+     - **Inference & Wire Protocols**: OpenAI / Anthropic compatibility, streaming (SSE), tool calling, reasoning effort translations, structured outputs, embeddings, etc.
+     - **Dynamic Model Catalog**: Endpoints for discovering active models/pricing dynamically to avoid hardcoding model lists.
+     - **Usage, Quotas & Cost Tracking**: Inline token/cost fields, balance endpoints (`/credits`), settled exports, and `/usage` monitor integration potential.
+     - **Limits, Quotas & Error Envelopes**: HTTP 429 semantics, rate limit headers, daily caps, retry-after policies, and failover behavior.
+     - **Authentication & Key Lifecycle**: API key formats, OAuth flows, provisioning vs. inference permissions, and multi-account balancing support.
+     - **Edge Cases & Gaps**: Missing endpoints (e.g. token counting, webhooks), parameter validation quirks, or platform-specific constraints.
+   - Present the audit report and obtain user confirmation before starting implementation.
+
 ---
 
 ## Testing Workflow
