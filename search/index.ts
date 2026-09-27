@@ -124,7 +124,6 @@ export function registerSmartSearch(pi: ExtensionAPI): void {
         `  Git changes:      ${gitCount} active files`,
         `  Frecency memory:  ${frecencyCount} tracked entries`,
         `  Heap memory:      ~${memUsageMb} MB`,
-        `  Zero binaries:    100% pure TypeScript`,
       ].join("\n");
 
       if (ctx.hasUI && ctx.mode === "tui") {
