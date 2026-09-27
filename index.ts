@@ -77,6 +77,9 @@ export default async function (pi: ExtensionAPI) {
     models,
 
     async refreshModels(context) {
+      if (context?.allowNetwork === false || context?.signal?.aborted) {
+        return models;
+      }
       const currentActive = store.getActive(PROVIDER_ID);
       let activeToken: string | undefined;
       if (currentActive) {
@@ -160,6 +163,9 @@ export default async function (pi: ExtensionAPI) {
     models: hyperModels,
 
     async refreshModels(context) {
+      if (context?.allowNetwork === false || context?.signal?.aborted) {
+        return hyperModels;
+      }
       const currentActive = store.getActive(HYPER_PROVIDER_ID);
       let activeToken = process.env.HYPER_API_KEY;
       if (currentActive) {
@@ -175,6 +181,9 @@ export default async function (pi: ExtensionAPI) {
         } else if (context.credential.type === "oauth" && "access" in context.credential && context.credential.access) {
           activeToken = (context.credential as { access: string }).access;
         }
+      }
+      if (!activeToken) {
+        return hyperModels;
       }
       const live = await fetchHyperModels(activeToken, context?.signal);
       return live && live.length > 0 ? live : hyperModels;

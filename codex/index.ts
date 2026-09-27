@@ -115,6 +115,9 @@ export function registerCodexFilter(pi: ExtensionAPI): void {
     },
 
     async refreshModels(context) {
+      if (context?.allowNetwork === false || context?.signal?.aborted) {
+        return;
+      }
       if (baseCodex.refreshModels) {
         await baseCodex.refreshModels(context);
       }
