@@ -63,6 +63,7 @@ export async function externalGrep(
     "--line-number",
     "--no-heading",
     "--color=never",
+    "--no-ignore",
     "--max-columns=500",
     "--max-columns-preview",
   ];
@@ -202,6 +203,7 @@ export async function externalMultiGrep(
     "--line-number",
     "--no-heading",
     "--color=never",
+    "--no-ignore",
     "--max-columns=500",
     "--max-columns-preview",
   ];
@@ -316,7 +318,7 @@ export async function externalFind(
 
   let rawOutput = "";
   try {
-    const { stdout } = await execFileAsync("rg", ["--files", "--max-depth=6", targetDir], {
+    const { stdout } = await execFileAsync("rg", ["--files", "--no-ignore", "--max-depth=6", targetDir], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 10000,
     });
