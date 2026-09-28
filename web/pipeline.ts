@@ -87,7 +87,8 @@ export class SearchPipeline {
    * Execute search with transparent provider failover.
    */
   public async execute(
-    params: SearchParams
+    params: SearchParams,
+    onProviderAttempt?: (provider: SearchProviderId) => void
   ): Promise<{ response: SearchResponse; notes: string[] }> {
     const candidates = await this.getCandidates(params.provider);
     if (candidates.length === 0) {
@@ -103,6 +104,8 @@ export class SearchPipeline {
       if (params.signal?.aborted) {
         throw new Error("Search aborted by user");
       }
+
+      onProviderAttempt?.(candidate.id);
 
       try {
         const response = await candidate.search(params);
