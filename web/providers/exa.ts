@@ -143,7 +143,7 @@ export class ExaSearchProvider extends SearchProvider {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
+          Accept: "application/json, text/event-stream",
           "User-Agent": "pi-coding-agent/1.0",
         },
         body: JSON.stringify(mcpPayload),
@@ -158,7 +158,19 @@ export class ExaSearchProvider extends SearchProvider {
       throw new Error(`Exa MCP search failed (${response.status}): ${errText}`);
     }
 
-    const data: any = await response.json();
+    const rawText = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      const dataLine = rawText.split("\n").find((l) => l.startsWith("data: "));
+      if (dataLine) {
+        data = JSON.parse(dataLine.slice(6));
+      } else {
+        throw new Error(`Failed to parse Exa MCP response: ${rawText.slice(0, 200)}`);
+      }
+    }
+
     if (data.error) {
       throw new Error(`Exa MCP error: ${data.error.message || JSON.stringify(data.error)}`);
     }
@@ -183,7 +195,33 @@ export class ExaSearchProvider extends SearchProvider {
               }
             }
           } catch {
-            // Unstructured text fallback
+            // Exa MCP returns markdown sections delimited by '---'
+            const sections = item.text.split(/\n---\n/);
+            for (const sec of sections) {
+              const titleMatch = sec.match(/^Title:\s*(.+)$/m);
+              const urlMatch = sec.match(/^URL:\s*(.+)$/m);
+              const pubMatch = sec.match(/^Published:\s*(.+)$/m);
+              const hlIdx = sec.indexOf("Highlights:");
+
+              if (urlMatch && titleMatch) {
+                const title = titleMatch[1].trim();
+                const url = urlMatch[1].trim();
+                let snippet = "";
+                if (hlIdx !== -1) {
+                  snippet = sec.slice(hlIdx + "Highlights:".length).trim();
+                }
+                const publishedDate =
+                  pubMatch && pubMatch[1].trim() !== "N/A"
+                    ? pubMatch[1].trim()
+                    : undefined;
+                sources.push({
+                  title,
+                  url,
+                  snippet,
+                  publishedDate,
+                });
+              }
+            }
           }
         }
       }
