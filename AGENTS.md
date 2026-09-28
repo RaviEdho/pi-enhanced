@@ -16,6 +16,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
 - **Terminal Output Compressor (`compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
 - **Codebase Scout Search Engine (`scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find` / `smart_find`), definition-first content grep (`grep` / `smart_grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
+- **Unified Web Search Tool (`web/`)**: Multi-provider search subsystem exposing the `web_search` tool. Features automatic priority routing and transparent failover across Google Antigravity Grounding, Brave Search, Tavily, Exa, and Parallel. Supports Google-style operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`).
 
 ---
 
@@ -93,6 +94,22 @@ pi-for-raviedho/
 │   ├── hyper.ts                # Charm Hyper /v1/credits quota scraper
 │   ├── index.ts                # /usage command registration (TUI overlay + CLI fallback)
 │   └── types.ts                # Quota report structures
+├── web/
+│   ├── providers/
+│   │   ├── antigravity.ts      # Google Gemini Grounding via Cloud Code Assist
+│   │   ├── base.ts             # Abstract SearchProvider base class
+│   │   ├── brave.ts            # Brave Search API integration
+│   │   ├── exa.ts              # Exa Search API + public MCP fallback
+│   │   ├── parallel.ts         # Parallel Search API + public MCP fallback
+│   │   └── tavily.ts           # Tavily Search API with direct answers
+│   ├── auth.ts                 # Multi-source API key resolver (env, auth.json, accounts.json)
+│   ├── formatter.ts            # Token-budgeted response & source citation formatter
+│   ├── index.ts                # Web search subsystem entry point
+│   ├── login.ts                # /login provider registrations for search engines
+│   ├── pipeline.ts             # Central failover search router
+│   ├── query.ts                # Google-style query parser & lenient constraint filter
+│   ├── tools.ts                # web_search tool definition & TypeBox schema
+│   └── types.ts                # Web search data types & schemas
 ├── index.ts                    # Root extension entry point
 ├── package.json                # Pi manifest, package metadata, peerDependencies
 ├── tsconfig.json               # NodeNext TypeScript configuration

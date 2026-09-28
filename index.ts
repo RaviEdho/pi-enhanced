@@ -40,6 +40,7 @@ import { registerOutputCompressor } from "./compressor/index.js";
 import { registerScout } from "./scout/index.js";
 import { registerWorkingTimer } from "./timer/index.js";
 import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
+import { registerWebSearch } from "./web/index.js";
 
 export default async function (pi: ExtensionAPI) {
   // Initialize multi-account store and sync credentials from Pi auth store
@@ -230,4 +231,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register native pure TypeScript scout code search engine (FFF port)
   registerScout(pi);
+
+  // Register unified multi-provider web search tool & login providers
+  registerWebSearch(pi);
 }
