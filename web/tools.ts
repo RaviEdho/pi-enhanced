@@ -41,6 +41,7 @@ const WebSearchParametersSchema = Type.Object({
         Type.Literal("tavily"),
         Type.Literal("exa"),
         Type.Literal("parallel"),
+        Type.Literal("tinyfish"),
       ],
       {
         description:
@@ -55,7 +56,7 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, Exa, Parallel).",
+      "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, Exa, Parallel, TinyFish).",
     parameters: WebSearchParametersSchema,
     execute: async (_toolCallId, params, signal) => {
       const pipeline = SearchPipeline.getInstance();

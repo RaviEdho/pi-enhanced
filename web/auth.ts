@@ -39,6 +39,7 @@ const ENV_VAR_MAPPINGS: Record<SearchProviderId, string[]> = {
   tavily: ["TAVILY_API_KEY"],
   exa: ["EXA_API_KEY"],
   parallel: ["PARALLEL_API_KEY"],
+  tinyfish: ["TINYFISH_API_KEY"],
   antigravity: [],
 };
 

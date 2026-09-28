@@ -32,6 +32,11 @@ const SEARCH_PROVIDERS: SearchLoginRegistration[] = [
     name: "Parallel Search",
     baseUrl: "https://search.parallel.ai",
   },
+  {
+    id: "tinyfish",
+    name: "TinyFish Search",
+    baseUrl: "https://api.search.tinyfish.ai",
+  },
 ];
 
 export function registerSearchLoginProviders(pi: ExtensionAPI): void {

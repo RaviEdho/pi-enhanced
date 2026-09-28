@@ -11,6 +11,7 @@ import { BraveSearchProvider } from "./providers/brave.js";
 import { ExaSearchProvider } from "./providers/exa.js";
 import { ParallelSearchProvider } from "./providers/parallel.js";
 import { TavilySearchProvider } from "./providers/tavily.js";
+import { TinyFishSearchProvider } from "./providers/tinyfish.js";
 import { applyQueryConstraints, parseSearchQuery } from "./query.js";
 import type { SearchParams, SearchProviderId, SearchResponse } from "./types.js";
 
@@ -24,6 +25,7 @@ export class SearchPipeline {
     this.register(new TavilySearchProvider());
     this.register(new ExaSearchProvider());
     this.register(new ParallelSearchProvider());
+    this.register(new TinyFishSearchProvider());
   }
 
   public static getInstance(): SearchPipeline {
@@ -74,6 +76,10 @@ export class SearchPipeline {
     const parallel = this.providers.get("parallel");
     if (parallel && (await parallel.isAvailable())) candidates.push(parallel);
 
+    // 6. TinyFish (agent web search, if API key present)
+    const tinyfish = this.providers.get("tinyfish");
+    if (tinyfish && (await tinyfish.isAvailable())) candidates.push(tinyfish);
+
     return candidates;
   }
 
@@ -86,7 +92,7 @@ export class SearchPipeline {
     const candidates = await this.getCandidates(params.provider);
     if (candidates.length === 0) {
       throw new Error(
-        "No web search provider is currently available. Configure an API key (/login brave, /login tavily, /login exa, /login parallel) or Google Antigravity account."
+        "No web search provider is currently available. Configure an API key (/login brave, /login tavily, /login exa, /login parallel, /login tinyfish) or Google Antigravity account."
       );
     }
 
