@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { CommitProposal, GitStagedOverview } from "./types.js";
 
@@ -133,6 +136,8 @@ export async function stageFiles(files: string[], cwd: string): Promise<void> {
 export interface StashedState {
   stashSha: string;
   purelyStaged: string[];
+  decoupledFiles: string[];
+  overlappingCollisions: string[];
 }
 
 export async function stashStagedChanges(
@@ -143,13 +148,19 @@ export async function stashStagedChanges(
   if (!statusOutput.trim()) return null;
 
   const purelyStaged: string[] = [];
+  const partiallyStaged: string[] = [];
+
   for (const line of statusOutput.split("\n")) {
     if (!line.trim()) continue;
     const x = line[0];
     const y = line[1];
-    const path = line.slice(3).trim();
-    if (x !== " " && x !== "?" && y === " ") {
-      purelyStaged.push(path);
+    const filePath = line.slice(3).trim();
+    if (x !== " " && x !== "?") {
+      if (y === " ") {
+        purelyStaged.push(filePath);
+      } else {
+        partiallyStaged.push(filePath);
+      }
     }
   }
 
@@ -171,13 +182,80 @@ export async function stashStagedChanges(
     );
   }
 
-  return { stashSha, purelyStaged };
+  // 4. For partially staged files (MM), perform zero-context forward decoupling
+  const decoupledFiles: string[] = [];
+  const overlappingCollisions: string[] = [];
+
+  if (partiallyStaged.length > 0) {
+    let tempDir = "";
+    try {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-decouple-"));
+    } catch {
+      tempDir = "";
+    }
+
+    for (const file of partiallyStaged) {
+      let unstagedDiff = "";
+      try {
+        unstagedDiff = await execGit(["diff", "-U0", "--", file], cwd);
+      } catch {
+        unstagedDiff = "";
+      }
+
+      if (!unstagedDiff.trim() || !tempDir) {
+        // No unstaged content, keep at HEAD
+        await execGit(["restore", "-s", "HEAD", "--staged", "--worktree", "--", file], cwd);
+        purelyStaged.push(file);
+        continue;
+      }
+
+      const patchFile = path.join(tempDir, `unstaged_${Date.now()}_${Math.random().toString(36).slice(2)}.patch`);
+      await fs.writeFile(patchFile, unstagedDiff, "utf8");
+
+      // Revert file to HEAD so we can project only the unstaged changes onto HEAD
+      await execGit(["restore", "-s", "HEAD", "--staged", "--worktree", "--", file], cwd);
+
+      let canApply = false;
+      try {
+        await execGit(["apply", "--unidiff-zero", "-C0", patchFile], cwd);
+        canApply = true;
+      } catch {
+        canApply = false;
+      }
+
+      if (canApply) {
+        // Successfully projected only the unstaged changes onto HEAD!
+        decoupledFiles.push(file);
+      } else {
+        // Exact same line collision. Restore original worktree from stash so all edits are preserved.
+        await execGit(["restore", "-s", stashSha, "--worktree", "--", file], cwd);
+        overlappingCollisions.push(file);
+      }
+
+      try {
+        await fs.unlink(patchFile);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (tempDir) {
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { stashSha, purelyStaged, decoupledFiles, overlappingCollisions };
 }
 
 export async function restoreStashedChanges(
   state: StashedState,
   cwd: string
 ): Promise<void> {
+  // 1. Restore purely staged files from stash index ($stashSha^2)
   if (state.purelyStaged.length > 0) {
     try {
       await execGit(
@@ -189,6 +267,21 @@ export async function restoreStashedChanges(
       throw new Error(cleanErr);
     }
   }
+
+  // 2. Restore decoupled files:
+  // The newly committed HEAD contains the bugfix.
+  // Restore the original worktree content from stashSha, and re-stage the remaining unfinalized feature work!
+  if (state.decoupledFiles.length > 0) {
+    try {
+      await execGit(["restore", "-s", state.stashSha, "--worktree", "--", ...state.decoupledFiles], cwd);
+      await execGit(["add", "--", ...state.decoupledFiles], cwd);
+    } catch (err: any) {
+      const cleanErr = err?.stderr?.trim() || err?.message || String(err);
+      throw new Error(cleanErr);
+    }
+  }
+
+  // 3. Drop stash entry
   try {
     await execGit(["stash", "drop", "-q", "stash@{0}"], cwd);
   } catch {
