@@ -30,8 +30,8 @@ Personalized Pi extension package providing the **Google Antigravity** provider,
 - **Autonomous Commit (`/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`). Automatically determines whether changes should be consolidated into a single commit or structured into an ordered sequence of atomic, multi-stage commits, with an interactive preview dialog, plan editor, and optional git push.
 - **Terminal Output Compressor (`compressor/`, `/gain`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, compressing 60–90% of raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Stores full uncompressed outputs in an LRU buffer accessible via `/recall <id>` and provides token reduction statistics via `/gain`.
 - **Continue Shortcut (`.` Continue)**: Pressing `.` (literal dot only) immediately resumes agent work on the most recent intent without summarizing, asking for confirmation, or leaving any user message bubble in the chat transcript.
-- **Codebase Scout Search Engine (`scout/`, `/scout-health`, `/scout-rescan`)**: 100% pure TypeScript port of FFF concepts. Replaces standard `find` and `grep` with memory-cached, typo-tolerant search tools (`find`/`smart_find`, `grep`/`smart_grep`, `multi_grep`). Features Smith-Waterman fuzzy matching, definition-first ranking, multi-pattern OR search in a single turn, git recency awareness, and strict output budgeting with match-centered line truncation (`…match…`) to prevent context blowup.
-- **Unified Multi-Provider Web Search & Fetch (`web/`)**: Native `web_search` and `web_fetch` tools. Supports Google Antigravity Grounding, Brave Search, Tavily, Exa, Parallel, TinyFish, and Jina Reader. Features transparent multi-engine failover, Google-style syntax parsing (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, strict token budgeting, and API key management directly via `/login` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
+- **Codebase Scout Search Engine (`scout/`, `/scout-health`, `/scout-rescan`)**: 100% pure TypeScript port of FFF concepts. Replaces standard `find` and `grep` with memory-cached, typo-tolerant search tools (`find`, `grep`, `multi_grep`). Features Smith-Waterman fuzzy matching, definition-first ranking, multi-pattern OR search in a single turn, git recency awareness, and strict output budgeting with match-centered line truncation (`…match…`) to prevent context blowup.
+- **Unified Multi-Provider Web Search & Fetch (`web/`)**: Native `web_search` and `web_fetch` tools. Supports Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Features transparent multi-engine failover, Google-style syntax parsing (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, strict token budgeting, and API key management directly via `/login` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
 - **Pi Auth Sync**: Automatically imports credentials from `~/.pi/agent/auth.json` into the accounts pool and syncs the active healthy account back to `auth.json`.
 
 ## Usage
@@ -90,13 +90,17 @@ pi -p "/usage"
 
 ### 5. Autonomous Commits
 
-Run `/commit` to inspect staged changes and generate commit messages autonomously:
+Run `/commit` to inspect changes and generate commit messages autonomously:
 
 ```text
 /commit
 /commit focus on auth error handling improvements
+/commit --unstaged        # Or -u: stash staged changes, commit only unstaged, then restore staged
+/commit --single          # Or -s: force a single consolidated commit
+/commit --multi           # Or -m: split changes into atomic commit stages
 ```
 
+- **Unstaged Commit Isolation**: When both staged and unstaged changes are detected, choose "Commit only unstaged changes (stash staged)" or pass `-u` / `--unstaged`. Your manual staged changes are safely preserved in git stash while the unstaged changes are committed, and restored to the index automatically upon completion or safely rolled back on cancel.
 - Spins up an isolated sub-agent with zero conversation context bloat.
 - Transparent live progress and recent action logging in the status box.
 - Only pulls overview statistics and diffs for key changed files, omitting lockfiles and huge generated assets.
@@ -118,8 +122,8 @@ You can manage provider API keys directly in interactive mode via `/login` and `
 ```
 Keys are securely prompted in the TUI, saved to `~/.pi/agent/auth.json`, or read from environment variables (`BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `PARALLEL_API_KEY`, `TINYFISH_API_KEY`).
 
-- **`web_search`**: Supports Google operators (`site:`, `before:`, `after:`, `"exact phrase"`, `-negation`) and automatically falls over if a provider hits rate limits or errors. Google Antigravity Grounding is automatically available if you have authenticated via `/login google-antigravity`.
-- **`web_fetch`**: Fetches any URL and extracts clean Markdown (handling JS-rendered SPAs, anti-bot challenges, and token budgeting) with automatic failover across Parallel, TinyFish, Exa, Tavily, and Jina Reader.
+- **`web_search`**: Supports Google operators (`site:`, `before:`, `after:`, `"exact phrase"`, `-negation`) and automatically falls over if a provider hits rate limits or errors across Brave, Tavily, Google Antigravity, TinyFish, Exa, and Parallel.
+- **`web_fetch`**: Fetches any URL and extracts clean Markdown (handling JS-rendered SPAs, anti-bot challenges, and token budgeting) with automatic failover across TinyFish, Parallel, Exa, Tavily, and Jina Reader.
 
 ## Development
 
