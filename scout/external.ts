@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { classifyLine } from "./classifier.js";
-import { fuzzyMatch } from "./matcher.js";
+import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
 import type { FindResultItem, SearchMatch } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -336,13 +336,18 @@ export async function externalFind(
   const rawFiles = rawOutput.split(/\r?\n/).filter(Boolean);
   const scored: Array<{ relativePath: string; score: number }> = [];
 
-  const cleanQuery = query.trim();
+  const constraints = parseQueryConstraints(query);
+  const pattern = constraints.pattern;
 
   for (const rawFile of rawFiles) {
     const displayPath = formatDisplayPath(rawFile, cwd);
 
-    if (cleanQuery) {
-      const match = fuzzyMatch(cleanQuery, displayPath);
+    if (!matchesConstraints(displayPath, constraints)) {
+      continue;
+    }
+
+    if (pattern) {
+      const match = fuzzyMatch(pattern, displayPath);
       if (!match) continue;
       scored.push({ relativePath: displayPath, score: match.score });
     } else {
