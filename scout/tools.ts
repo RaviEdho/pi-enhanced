@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { CursorStore } from "./cursor.js";
 import { externalFind, externalGrep, externalMultiGrep } from "./external.js";
@@ -265,6 +266,14 @@ export const multiGrepToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Maximum number of matches (default: 40)" })),
 });
 
+function shortenPath(p: string): string {
+  const home = os.homedir();
+  if (p.startsWith(home)) {
+    return `~${p.slice(home.length)}`;
+  }
+  return p;
+}
+
 export function createFindToolDefinition(name = "find"): ToolDefinition<typeof findToolSchema> {
   return {
     name,
@@ -282,6 +291,23 @@ export function createFindToolDefinition(name = "find"): ToolDefinition<typeof f
         content: [{ type: "text", text: res.output }],
         details: res.details,
       };
+    },
+    renderCall(args, theme, context) {
+      const rawPattern = args?.pattern?.trim();
+      const patternText = rawPattern ? `"${rawPattern}"` : "*";
+      const rawPath = args?.path?.trim();
+
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", patternText);
+      if (rawPath) {
+        text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
+      }
+      if (args?.limit !== undefined) {
+        text += theme.fg("toolOutput", ` (limit ${args.limit})`);
+      }
+      const textComponent =
+        (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
+      textComponent.setText(text);
+      return textComponent;
     },
   };
 }
@@ -304,6 +330,24 @@ export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof g
         details: res.details,
       };
     },
+    renderCall(args, theme, context) {
+      const pattern = args?.pattern || "";
+      const rawPath = args?.path?.trim();
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", `"${pattern}"`);
+      if (rawPath) {
+        text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
+      }
+      if (args?.glob) {
+        text += theme.fg("toolOutput", ` (${args.glob})`);
+      }
+      if (args?.limit !== undefined) {
+        text += theme.fg("toolOutput", ` limit ${args.limit}`);
+      }
+      const textComponent =
+        (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
+      textComponent.setText(text);
+      return textComponent;
+    },
   };
 }
 
@@ -317,6 +361,27 @@ export function createMultiGrepToolDefinition(name = "multi_grep"): ToolDefiniti
     promptGuidelines: [
       `Use ${name} when searching for multiple keywords or identifiers simultaneously instead of running multiple sequential bash search commands (e.g. rg, grep).`,
     ],
+    renderCall(args, theme, context) {
+      const patterns = Array.isArray(args?.patterns) ? args.patterns : [];
+      const summary =
+        patterns.slice(0, 3).map((p: string) => `"${p}"`).join(" | ") +
+        (patterns.length > 3 ? ` (+${patterns.length - 3} more)` : "");
+      const rawPath = args?.path?.trim();
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", summary || `""`);
+      if (rawPath) {
+        text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
+      }
+      if (args?.glob) {
+        text += theme.fg("toolOutput", ` (${args.glob})`);
+      }
+      if (args?.limit !== undefined) {
+        text += theme.fg("toolOutput", ` limit ${args.limit}`);
+      }
+      const textComponent =
+        (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
+      textComponent.setText(text);
+      return textComponent;
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx?.cwd || process.cwd();
       if (params.path && shouldDelegateToExternal(params.path, cwd)) {
