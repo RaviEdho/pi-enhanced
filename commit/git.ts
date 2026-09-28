@@ -130,6 +130,87 @@ export async function stageFiles(files: string[], cwd: string): Promise<void> {
   await execGit(["add", "--", ...files], cwd);
 }
 
+export interface StashedState {
+  stashSha: string;
+  purelyStaged: string[];
+}
+
+export async function stashStagedChanges(
+  cwd: string,
+  message: string = "pi-commit: manual staged changes"
+): Promise<StashedState | null> {
+  const statusOutput = await execGit(["status", "--porcelain"], cwd);
+  if (!statusOutput.trim()) return null;
+
+  const purelyStaged: string[] = [];
+  for (const line of statusOutput.split("\n")) {
+    if (!line.trim()) continue;
+    const x = line[0];
+    const y = line[1];
+    const path = line.slice(3).trim();
+    if (x !== " " && x !== "?" && y === " ") {
+      purelyStaged.push(path);
+    }
+  }
+
+  // 1. Create a stash commit representing full working tree & index without mutating worktree
+  const stashShaRaw = await execGit(["stash", "create", message], cwd);
+  const stashSha = stashShaRaw.trim();
+  if (!stashSha) {
+    return null;
+  }
+
+  // 2. Store stash commit in git stash list (stash@{0})
+  await execGit(["stash", "store", "-m", message, stashSha], cwd);
+
+  // 3. Revert purely staged files to HEAD in both index and worktree
+  if (purelyStaged.length > 0) {
+    await execGit(
+      ["restore", "-s", "HEAD", "--staged", "--worktree", "--", ...purelyStaged],
+      cwd
+    );
+  }
+
+  return { stashSha, purelyStaged };
+}
+
+export async function restoreStashedChanges(
+  state: StashedState,
+  cwd: string
+): Promise<void> {
+  if (state.purelyStaged.length > 0) {
+    try {
+      await execGit(
+        ["restore", "-s", `${state.stashSha}^2`, "--staged", "--worktree", "--", ...state.purelyStaged],
+        cwd
+      );
+    } catch (err: any) {
+      const cleanErr = err?.stderr?.trim() || err?.message || String(err);
+      throw new Error(cleanErr);
+    }
+  }
+  try {
+    await execGit(["stash", "drop", "-q", "stash@{0}"], cwd);
+  } catch {
+    // ignore
+  }
+}
+
+export async function rollbackStashedChanges(
+  state: StashedState,
+  cwd: string
+): Promise<void> {
+  try {
+    await execGit(["reset", "-q"], cwd);
+    await execGit(["checkout", state.stashSha, "--", "."], cwd);
+    await execGit(["read-tree", `${state.stashSha}^2`], cwd);
+    await execGit(["stash", "drop", "-q", "stash@{0}"], cwd);
+  } catch (err: any) {
+    const cleanErr = err?.stderr?.trim() || err?.message || String(err);
+    throw new Error(cleanErr);
+  }
+}
+
 export function matchStagedFiles(
   patterns: string[] | undefined,
   allStagedFiles: string[],

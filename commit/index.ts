@@ -8,12 +8,18 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   createCommit,
+  execGit,
   executeMultiCommit,
   getStagedOverview,
   getWorkingTreeStatus,
   isGitRepository,
   pushCommit,
+  restoreStashedChanges,
+  rollbackStashedChanges,
   stageAllFiles,
+  stashStagedChanges,
+  unstageAllFiles,
+  type StashedState,
 } from "./git.js";
 import { BlockingCommitEditor, CommitStatusBroadcaster } from "./editor.js";
 import { CommitConfirmationDialog } from "./dialog.js";
@@ -35,9 +41,16 @@ import type {
 
 export function registerCommitCommand(pi: ExtensionAPI): void {
   pi.registerCommand("commit", {
-    description: "Autonomously inspect git diff and generate a commit",
+    description: "Autonomously inspect git diff and generate a commit (-u/--unstaged, -s/--single, -m/--multi)",
     handler: async (args, ctx) => {
       const cwd = ctx.cwd;
+
+      const isSingle = /\b(--single|-s)\b/i.test(args);
+      const isMulti = /\b(--multi|-m)\b/i.test(args);
+      const isUnstaged = /\b(--unstaged|-u|--only-unstaged)\b/i.test(args);
+      const cleanArgs = args
+        .replace(/\b(--single|-s|--multi|-m|--unstaged|-u|--only-unstaged)\b/gi, "")
+        .trim();
 
       // 1. Verify git repository
       const isRepo = await isGitRepository(cwd);
@@ -46,19 +59,129 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       }
 
-      // 2. Check working tree status (staged and unstaged)
+      // 2. Ensure an active model is available
+      const model = ctx.model;
+      if (!model) {
+        if (ctx.hasUI) {
+          ctx.ui.notify("No active model selected in Pi session.", "error");
+        } else {
+          process.stderr.write("No active model selected in Pi session.\n");
+        }
+        return;
+      }
+
+      // 3. Check working tree status (staged and unstaged)
       let { staged, unstaged } = await getWorkingTreeStatus(cwd);
       if (staged.length === 0 && unstaged.length === 0) {
         ctx.ui.notify("Working tree clean; no changes to commit.", "info");
         return;
       }
 
-      // 3. Staging resolution:
-      if (staged.length === 0) {
+      type StagingAction =
+        | { type: "none" }
+        | { type: "stashed"; state: StashedState }
+        | { type: "staged-all-from-clean" }
+        | { type: "staged-all-with-existing"; initialIndexTree: string };
+
+      let stagingAction: StagingAction = { type: "none" };
+
+      const rollbackStagingIfNeeded = async () => {
+        const action = stagingAction;
+        stagingAction = { type: "none" };
+
+        if (action.type === "stashed") {
+          try {
+            await rollbackStashedChanges(action.state, cwd);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const warnMsg = `Warning: Failed to restore stashed changes on abort: ${msg}. Your changes are preserved in 'git stash'.`;
+            if (ctx.hasUI) ctx.ui.notify(warnMsg, "warning");
+            else process.stderr.write(`[commit] ${warnMsg}\n`);
+          }
+        } else if (action.type === "staged-all-from-clean") {
+          try {
+            await unstageAllFiles(cwd);
+            if (ctx.hasUI) ctx.ui.notify("Unstaged automatically staged changes.", "info");
+            else process.stdout.write("[commit] Unstaged automatically staged changes.\n");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            process.stderr.write(`[commit] Failed to unstage changes on cancel: ${msg}\n`);
+          }
+        } else if (action.type === "staged-all-with-existing") {
+          try {
+            await execGit(["reset", "-q"], cwd);
+            await execGit(["read-tree", action.initialIndexTree], cwd);
+            if (ctx.hasUI) ctx.ui.notify("Restored original staged and unstaged state.", "info");
+            else process.stdout.write("[commit] Restored original staged and unstaged state.\n");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            process.stderr.write(`[commit] Failed to restore original staging on cancel: ${msg}\n`);
+          }
+        }
+      };
+
+      const restoreStashOnSuccess = async () => {
+        const action = stagingAction;
+        stagingAction = { type: "none" };
+
+        if (action.type === "stashed") {
+          try {
+            await restoreStashedChanges(action.state, cwd);
+            if (ctx.hasUI) ctx.ui.notify("Restored previously staged changes.", "info");
+            else process.stdout.write("[commit] Restored previously staged changes.\n");
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const warnMsg = `Warning: Committed unstaged changes, but failed to restore stashed changes cleanly: ${msg}. Preserved in 'git stash'.`;
+            if (ctx.hasUI) ctx.ui.notify(warnMsg, "warning");
+            else process.stderr.write(`[commit] ${warnMsg}\n`);
+          }
+        }
+      };
+
+      // 4. Staging resolution:
+      if (isUnstaged) {
+        if (unstaged.length === 0) {
+          if (ctx.hasUI) {
+            ctx.ui.notify("No unstaged changes detected to commit.", "warning");
+          } else {
+            process.stderr.write("No unstaged changes detected to commit.\n");
+          }
+          return;
+        }
+
+        if (staged.length > 0) {
+          try {
+            const state = await stashStagedChanges(cwd);
+            if (state) stagingAction = { type: "stashed", state };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const errMsg = `Failed to stash staged changes: ${msg}`;
+            if (ctx.hasUI) ctx.ui.notify(errMsg, "error");
+            else process.stderr.write(`${errMsg}\n`);
+            return;
+          }
+        } else {
+          stagingAction = { type: "staged-all-from-clean" };
+        }
+
+        try {
+          await stageAllFiles(cwd);
+          const refreshed = await getWorkingTreeStatus(cwd);
+          staged = refreshed.staged;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const errMsg = `Failed to stage unstaged files: ${msg}`;
+          if (ctx.hasUI) ctx.ui.notify(errMsg, "error");
+          else process.stderr.write(`${errMsg}\n`);
+          await rollbackStagingIfNeeded();
+          return;
+        }
+      } else if (staged.length === 0) {
         // Nothing is staged yet
         if (!ctx.hasUI) {
           try {
             await stageAllFiles(cwd);
+            stagingAction = { type: "staged-all-from-clean" };
             const refreshed = await getWorkingTreeStatus(cwd);
             staged = refreshed.staged;
           } catch (err) {
@@ -78,6 +201,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
 
           try {
             await stageAllFiles(cwd);
+            stagingAction = { type: "staged-all-from-clean" };
             const refreshed = await getWorkingTreeStatus(cwd);
             staged = refreshed.staged;
           } catch (err) {
@@ -90,12 +214,13 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         // Both staged AND unstaged changes exist: ask user preference
         if (ctx.hasUI) {
           const optOnlyStaged = `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
+          const optOnlyUnstaged = `Commit only unstaged changes (${unstaged.length} file${unstaged.length === 1 ? "" : "s"}, stash staged)`;
           const optStageAll = `Stage all and commit everything (${staged.length} staged + ${unstaged.length} unstaged)`;
           const optCancel = "Cancel";
 
           const choice = await ctx.ui.select(
             "Staged and unstaged changes detected",
-            [optOnlyStaged, optStageAll, optCancel]
+            [optOnlyStaged, optOnlyUnstaged, optStageAll, optCancel]
           );
 
           if (!choice || choice === optCancel) {
@@ -103,9 +228,24 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             return;
           }
 
-          if (choice === optStageAll) {
+          if (choice === optOnlyUnstaged) {
             try {
+              const state = await stashStagedChanges(cwd);
+              if (state) stagingAction = { type: "stashed", state };
               await stageAllFiles(cwd);
+              const refreshed = await getWorkingTreeStatus(cwd);
+              staged = refreshed.staged;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              ctx.ui.notify(`Failed to isolate unstaged changes: ${msg}`, "error");
+              await rollbackStagingIfNeeded();
+              return;
+            }
+          } else if (choice === optStageAll) {
+            try {
+              const initialIndexTree = (await execGit(["write-tree"], cwd)).trim();
+              await stageAllFiles(cwd);
+              stagingAction = { type: "staged-all-with-existing", initialIndexTree };
               const refreshed = await getWorkingTreeStatus(cwd);
               staged = refreshed.staged;
             } catch (err) {
@@ -123,17 +263,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         } else {
           process.stderr.write("No changes detected to commit.\n");
         }
-        return;
-      }
-
-      // 4. Ensure an active model is available
-      const model = ctx.model;
-      if (!model) {
-        if (ctx.hasUI) {
-          ctx.ui.notify("No active model selected in Pi session.", "error");
-        } else {
-          process.stderr.write("No active model selected in Pi session.\n");
-        }
+        await rollbackStagingIfNeeded();
         return;
       }
 
@@ -147,6 +277,12 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       const modelIdString = `${model.provider}/${model.id}`;
       const broadcaster = new CommitStatusBroadcaster("Fetching git overview…", modelIdString);
       broadcaster.setIsSubscription(isSub);
+      if (stagingAction.type === "stashed") {
+        broadcaster.addAction({
+          type: "info",
+          description: "Stashed manual staged changes to commit unstaged changes first",
+        });
+      }
       broadcaster.addAction({
         type: "overview",
         description: `Detected ${staged.length} staged file${staged.length === 1 ? "" : "s"}`,
@@ -196,6 +332,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             // ignore
           }
         }
+        await rollbackStagingIfNeeded();
         ctx.ui.notify("Commit cancelled by user.", "info");
         return;
       }
@@ -235,6 +372,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             // ignore
           }
         }
+        await rollbackStagingIfNeeded();
         ctx.ui.notify("Commit cancelled by user.", "info");
         return;
       }
@@ -255,6 +393,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         await resourceLoader.reload();
 
         if (abortController.signal.aborted) {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify("Commit cancelled by user.", "info");
           return;
         }
@@ -281,6 +420,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             // ignore
           }
           activeSession = undefined;
+          await rollbackStagingIfNeeded();
           ctx.ui.notify("Commit cancelled by user.", "info");
           return;
         }
@@ -323,20 +463,13 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         });
 
         let userPrompt = "Inspect staged changes and propose conventional commit(s).";
-        if (args.trim()) {
-          const isSingle = /\b(--single|-s)\b/i.test(args);
-          const isMulti = /\b(--multi|-m)\b/i.test(args);
-          const cleanArgs = args.replace(/\b(--single|-s|--multi|-m)\b/gi, "").trim();
-
-          userPrompt = cleanArgs
-            ? `User hint/instructions: "${cleanArgs}". Inspect staged changes and propose conventional commit(s).`
-            : userPrompt;
-
-          if (isSingle) {
-            userPrompt += " Please consolidate all staged changes into a single conventional commit proposal (propose_commit).";
-          } else if (isMulti) {
-            userPrompt += " Please split staged changes into logical atomic commits (propose_commits).";
-          }
+        if (cleanArgs) {
+          userPrompt = `User hint/instructions: "${cleanArgs}". Inspect staged changes and propose conventional commit(s).`;
+        }
+        if (isSingle) {
+          userPrompt += " Please consolidate all staged changes into a single conventional commit proposal (propose_commit).";
+        } else if (isMulti) {
+          userPrompt += " Please split staged changes into logical atomic commits (propose_commits).";
         }
 
         broadcaster.update("Inspecting git diffs…");
@@ -371,6 +504,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           }
         }
       } catch (err) {
+        await rollbackStagingIfNeeded();
         if (abortController.signal.aborted) {
           ctx.ui.notify("Commit cancelled by user.", "info");
           return;
@@ -395,6 +529,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       }
 
       if (abortController.signal.aborted) {
+        await rollbackStagingIfNeeded();
         ctx.ui.notify("Commit cancelled by user.", "info");
         return;
       }
@@ -402,6 +537,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       // 5. Verify captured proposal
       const capturedPlan = plan as CommitPlanProposal | null;
       if (!capturedPlan || capturedPlan.stages.length === 0) {
+        await rollbackStagingIfNeeded();
         ctx.ui.notify("Commit agent completed without proposing a message.", "warning");
         return;
       }
@@ -445,7 +581,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       const firstHeaderLine = firstScope ? `${firstType}(${firstScope}): ${firstSubject}` : `${firstType}: ${firstSubject}`;
 
       // Helper function to execute the commits and optional push
-      const executeCommitSequence = async (stages: CommitProposal[], shouldPush: boolean) => {
+      const executeCommitSequence = async (stages: CommitProposal[], shouldPush: boolean): Promise<boolean> => {
         if (stages.length === 1) {
           const single = stages[0];
           const type = single.type.trim().toLowerCase();
@@ -459,7 +595,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Commit failed: ${msg}`, "error");
-            return;
+            return false;
           }
 
           if (shouldPush) {
@@ -476,6 +612,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           } else {
             ctx.ui.notify(`Committed: ${header} • ${costBadge}`, "info");
           }
+          return true;
         } else {
           try {
             ctx.ui.setWorkingMessage?.(`Committing 1/${stages.length} stages…`);
@@ -497,9 +634,11 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
             } else {
               ctx.ui.notify(`Committed ${res.committedCount} atomic commit(s) • ${costBadge}`, "info");
             }
+            return true;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Multi-stage commit failed: ${msg}`, "error");
+            return false;
           } finally {
             ctx.ui.setWorkingMessage?.();
           }
@@ -535,9 +674,11 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
               process.stdout.write(`[commit] (${idx}/${total}) Committed: ${h}\n`);
             });
             process.stdout.write(`Completed ${res.committedCount} atomic commit(s).\n`);
+            await restoreStashOnSuccess();
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             process.stderr.write(`Multi-stage commit failed: ${msg}\n`);
+            await rollbackStagingIfNeeded();
           }
         } else {
           const single = commitPlan.stages[0];
@@ -546,9 +687,11 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           try {
             await createCommit(fullMessage, cwd);
             process.stdout.write(`Committed: ${firstHeaderLine}\n`);
+            await restoreStashOnSuccess();
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             process.stderr.write(`Commit failed: ${msg}\n`);
+            await rollbackStagingIfNeeded();
           }
         }
         return;
@@ -587,6 +730,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       // If custom UI was used, cancel immediately on escape or cancel action
       if (customUIAttempted) {
         if (!userChoice || userChoice.action === "cancel") {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify(`Commit cancelled (${costBadge} used).`, "info");
           return;
         }
@@ -613,6 +757,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         ]);
 
         if (!choice || choice === actionCancel) {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify(`Commit cancelled (${costBadge} used).`, "info");
           return;
         }
@@ -627,6 +772,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       }
 
       if (userChoice.action === "cancel") {
+        await rollbackStagingIfNeeded();
         ctx.ui.notify(`Commit cancelled (${costBadge} used).`, "info");
         return;
       }
@@ -645,12 +791,14 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         }
 
         if (!edited || !edited.trim()) {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify("Empty message/plan; commit cancelled.", "info");
           return;
         }
 
         const newStages = parsePlanFromEditor(edited);
         if (newStages.length === 0) {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify("No valid commits found in edited text; commit cancelled.", "warning");
           return;
         }
@@ -669,16 +817,27 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         ]);
 
         if (!postEditChoice || postEditChoice === "Cancel") {
+          await rollbackStagingIfNeeded();
           ctx.ui.notify("Commit cancelled.", "info");
           return;
         }
 
-        await executeCommitSequence(newStages, postEditChoice === pushLabel);
+        const success = await executeCommitSequence(newStages, postEditChoice === pushLabel);
+        if (success) {
+          await restoreStashOnSuccess();
+        } else {
+          await rollbackStagingIfNeeded();
+        }
         return;
       }
 
       const stagesToRun = userChoice.stages || commitPlan.stages;
-      await executeCommitSequence(stagesToRun, userChoice.action === "commit-and-push");
+      const success = await executeCommitSequence(stagesToRun, userChoice.action === "commit-and-push");
+      if (success) {
+        await restoreStashOnSuccess();
+      } else {
+        await rollbackStagingIfNeeded();
+      }
     },
   });
 }
