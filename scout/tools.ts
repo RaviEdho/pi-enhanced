@@ -265,7 +265,7 @@ export const multiGrepToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Maximum number of matches (default: 40)" })),
 });
 
-export function createFindToolDefinition(name = "smart_find"): ToolDefinition<typeof findToolSchema> {
+export function createFindToolDefinition(name = "find"): ToolDefinition<typeof findToolSchema> {
   return {
     name,
     label: name,
@@ -286,7 +286,7 @@ export function createFindToolDefinition(name = "smart_find"): ToolDefinition<ty
   };
 }
 
-export function createGrepToolDefinition(name = "smart_grep"): ToolDefinition<typeof grepToolSchema> {
+export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof grepToolSchema> {
   return {
     name,
     label: name,

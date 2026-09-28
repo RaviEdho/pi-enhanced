@@ -1,5 +1,3 @@
-export type SearchMode = "tools" | "override";
-
 export type GitFileStatus = "modified" | "staged" | "untracked" | "deleted";
 
 export interface IndexedFile {

@@ -7,37 +7,16 @@ import {
   createGrepToolDefinition,
   createMultiGrepToolDefinition,
 } from "./tools.js";
-import type { SearchMode } from "./types.js";
-
-let currentMode: SearchMode = "override";
 
 export function registerScout(pi: ExtensionAPI): void {
   const frecency = FrecencyTracker.getInstance();
 
-  // Determine tool names based on mode
-  function getToolNames(mode: SearchMode) {
-    if (mode === "override") {
-      return {
-        find: "find",
-        grep: "grep",
-        multiGrep: "multi_grep",
-      };
-    }
-    return {
-      find: "smart_find",
-      grep: "smart_grep",
-      multiGrep: "multi_grep",
-    };
-  }
-
-  // Register core smart search tools
+  // Register core search tools
   pi.registerTool(createFindToolDefinition("find"));
   pi.registerTool(createGrepToolDefinition("grep"));
   pi.registerTool(createMultiGrepToolDefinition("multi_grep"));
-  pi.registerTool(createFindToolDefinition("smart_find"));
-  pi.registerTool(createGrepToolDefinition("smart_grep"));
 
-  const searchToolNames = ["find", "grep", "multi_grep", "smart_find", "smart_grep"];
+  const searchToolNames = ["find", "grep", "multi_grep"];
 
   function activateSearchTools(): void {
     try {
@@ -151,7 +130,6 @@ export function registerScout(pi: ExtensionAPI): void {
 
     const report = [
       "Scout Search Engine Status:",
-      `  Mode:             ${currentMode}`,
       `  Indexed files:    ${filesCount}`,
       `  Git changes:      ${gitCount} active files`,
       `  Frecency memory:  ${frecencyCount} tracked entries`,
@@ -172,36 +150,6 @@ export function registerScout(pi: ExtensionAPI): void {
   pi.registerCommand("search-health", {
     description: "Alias for /scout-health",
     handler: handleHealth,
-  });
-
-  // Mode command to toggle mode
-  const handleMode = async (args: string | undefined, ctx: any) => {
-    const mode = args?.trim().toLowerCase();
-    if (mode === "override" || mode === "tools") {
-      currentMode = mode as SearchMode;
-      const msg = `Search mode switched to '${currentMode}'. (Note: Tool name rebindings take effect on reload / next session).`;
-      if (ctx.hasUI && ctx.mode === "tui") {
-        ctx.ui.notify(msg, "info");
-      } else {
-        console.log(msg);
-      }
-    } else {
-      const msg = `Current search mode: '${currentMode}'. Usage: /scout-mode [override|tools]`;
-      if (ctx.hasUI && ctx.mode === "tui") {
-        ctx.ui.notify(msg, "info");
-      } else {
-        console.log(msg);
-      }
-    }
-  };
-
-  pi.registerCommand("scout-mode", {
-    description: "Switch search tool registration mode: /scout-mode [override|tools]",
-    handler: handleMode,
-  });
-  pi.registerCommand("search-mode", {
-    description: "Alias for /scout-mode",
-    handler: handleMode,
   });
 }
 
