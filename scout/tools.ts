@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -11,8 +12,14 @@ const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
 
 export function shouldDelegateToExternal(targetPath: string | undefined, cwd: string): boolean {
-  if (!targetPath || targetPath === ".") return false;
-  const trimmed = targetPath.trim();
+  if (!targetPath || targetPath === "." || targetPath === "./") return false;
+  let trimmed = targetPath.trim();
+
+  // Expand ~ and ~/
+  if (trimmed === "~" || trimmed.startsWith("~/")) {
+    trimmed = path.join(os.homedir(), trimmed.slice(1));
+  }
+
   if (path.isAbsolute(trimmed)) {
     const rel = path.relative(cwd, trimmed);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
@@ -21,8 +28,14 @@ export function shouldDelegateToExternal(targetPath: string | undefined, cwd: st
   } else if (trimmed.startsWith("../") || trimmed === "..") {
     return true;
   }
+
   const norm = trimmed.replace(/\\/g, "/");
-  if (/(?:^|\/)(?:node_modules|\.git)(?:\/|$)/.test(norm)) {
+  // Check unindexed dirs
+  if (
+    /(?:^|\/)(?:node_modules|\.git|dist|build|target|\.next|\.turbo|\.cache|\.venv|venv|__pycache__|coverage)(?:\/|$)/.test(
+      norm
+    )
+  ) {
     return true;
   }
   return false;
@@ -39,20 +52,40 @@ export async function executeFind(
 ): Promise<{ output: string; details: any }> {
   const cursorStore = CursorStore.getInstance();
   let offset = 0;
-  const limit = params.limit ?? PAGE_SIZE_FIND;
+  let limit = params.limit ?? PAGE_SIZE_FIND;
 
-  if (params.path && shouldDelegateToExternal(params.path, cwd)) {
+  let query = (params.pattern || "").trim();
+  let targetPath = params.path;
+
+  if (params.cursor) {
+    const stored = cursorStore.get(params.cursor);
+    if (stored && stored.type === "find") {
+      offset = stored.nextOffset;
+      query = stored.query;
+      targetPath = targetPath ?? stored.options?.path;
+      if (params.limit === undefined && typeof stored.options?.limit === "number") {
+        limit = stored.options.limit;
+      }
+    }
+  }
+
+  if (targetPath && shouldDelegateToExternal(targetPath, cwd)) {
     const { items, totalMatched } = await externalFind(
-      params.pattern || "",
+      query,
       {
-        path: params.path,
+        path: targetPath,
         limit,
         offset,
       },
       cwd
     );
 
-    const output = formatFindOutput(items, totalMatched);
+    let nextCursor: string | undefined;
+    if (offset + items.length < totalMatched) {
+      nextCursor = cursorStore.store("find", query, offset + items.length, { ...params, path: targetPath });
+    }
+
+    const output = formatFindOutput(items, totalMatched, nextCursor);
     return {
       output,
       details: { totalMatched, count: items.length, external: true },
@@ -62,22 +95,13 @@ export async function executeFind(
   const indexer = FileIndexer.getInstance(cwd);
   const frecency = FrecencyTracker.getInstance();
 
-  let relPath = params.path;
+  let relPath = targetPath;
   if (relPath && path.isAbsolute(relPath)) {
     relPath = path.relative(cwd, relPath);
   }
 
-  let query = (params.pattern || "").trim();
-  if (relPath && relPath !== ".") {
+  if (relPath && relPath !== "." && !params.cursor) {
     query = `${relPath} ${query}`.trim();
-  }
-
-  if (params.cursor) {
-    const stored = cursorStore.get(params.cursor);
-    if (stored && stored.type === "find") {
-      offset = stored.nextOffset;
-      query = stored.query;
-    }
   }
 
   const { files, totalMatched } = await indexer.findFiles(query, { limit, offset });
@@ -123,25 +147,38 @@ export async function executeGrep(
 
   let pattern = params.pattern;
   let offset = 0;
-  const limit = params.limit ?? PAGE_SIZE_GREP;
+  let limit = params.limit ?? PAGE_SIZE_GREP;
+  let targetPath = params.path;
+  let glob = params.glob;
+  let ignoreCase = params.ignoreCase;
+  let literal = params.literal;
+  let context = params.context;
 
   if (params.cursor) {
     const stored = cursorStore.get(params.cursor);
     if (stored && stored.type === "grep") {
       offset = stored.nextOffset;
       pattern = stored.query;
+      targetPath = targetPath ?? stored.options?.path;
+      glob = glob ?? stored.options?.glob;
+      ignoreCase = ignoreCase ?? stored.options?.ignoreCase;
+      literal = literal ?? stored.options?.literal;
+      context = context ?? stored.options?.context;
+      if (params.limit === undefined && typeof stored.options?.limit === "number") {
+        limit = stored.options.limit;
+      }
     }
   }
 
-  if (params.path && shouldDelegateToExternal(params.path, cwd)) {
+  if (targetPath && shouldDelegateToExternal(targetPath, cwd)) {
     const { matches, totalMatched } = await externalGrep(
       pattern,
       {
-        path: params.path,
-        glob: params.glob,
-        ignoreCase: params.ignoreCase,
-        literal: params.literal,
-        context: params.context,
+        path: targetPath,
+        glob,
+        ignoreCase,
+        literal,
+        context,
         limit,
         offset,
       },
@@ -150,7 +187,14 @@ export async function executeGrep(
 
     let nextCursor: string | undefined;
     if (offset + matches.length < totalMatched) {
-      nextCursor = cursorStore.store("grep", pattern, offset + matches.length, params);
+      nextCursor = cursorStore.store("grep", pattern, offset + matches.length, {
+        ...params,
+        path: targetPath,
+        glob,
+        ignoreCase,
+        literal,
+        context,
+      });
     }
 
     const output = formatGrepOutput(matches, totalMatched, nextCursor);

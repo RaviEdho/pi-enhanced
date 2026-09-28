@@ -64,6 +64,8 @@ export interface SearchQueryConstraints {
   includePaths?: string[];
   /** Subpaths or directories to exclude */
   excludePaths?: string[];
+  /** Glob patterns to match (e.g. ["*.{ts,tsx}", "!*.test.ts"]) */
+  globs?: string[];
   /** Git status filter (e.g. "modified") */
   gitFilter?: GitFileStatus;
 }

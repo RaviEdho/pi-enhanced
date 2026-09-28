@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { executeFind, executeGrep } from "./tools.js";
 
@@ -19,48 +20,99 @@ export type ParsedSearchCommand =
       limit?: number;
     };
 
+export interface SplitResult {
+  tokens: string[];
+  hasPipesOrRedirection: boolean;
+}
+
 /**
- * Split shell command string into tokens, preserving quoted arguments
+ * Split shell command string into tokens, preserving quoted arguments,
+ * backslashes in regex patterns, and detecting unquoted shell operators.
  */
-export function splitShellTokens(cmd: string): string[] {
+export function splitShellTokens(cmd: string): SplitResult {
   const tokens: string[] = [];
   let current = "";
   let inDoubleQuote = false;
   let inSingleQuote = false;
-  let escapeNext = false;
+  let hasPipesOrRedirection = false;
 
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i];
-    if (escapeNext) {
-      current += ch;
-      escapeNext = false;
+
+    // Inside single quotes: all characters are literal, NO escape processing
+    if (inSingleQuote) {
+      if (ch === "'") {
+        inSingleQuote = false;
+      } else {
+        current += ch;
+      }
       continue;
     }
+
+    // Inside double quotes: only \", \\, \$, \` are escaped; others keep backslash
+    if (inDoubleQuote) {
+      if (ch === '"') {
+        inDoubleQuote = false;
+      } else if (ch === "\\") {
+        const next = i + 1 < cmd.length ? cmd[i + 1] : "";
+        if (next === '"' || next === "\\" || next === "$" || next === "`") {
+          current += next;
+          i++;
+        } else {
+          current += "\\";
+        }
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    // Outside quotes: check quote openers
+    if (ch === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    // Outside quotes: check unquoted shell operators
+    if (ch === "|" || ch === "&" || ch === ";" || ch === ">" || ch === "<" || ch === "`" || ch === "\n") {
+      hasPipesOrRedirection = true;
+      continue;
+    }
+
+    // Outside quotes: backslash escape
     if (ch === "\\") {
-      escapeNext = true;
+      const next = i + 1 < cmd.length ? cmd[i + 1] : "";
+      if (/\s/.test(next) || next === '"' || next === "'" || next === "\\") {
+        current += next;
+        i++;
+      } else {
+        // Keep backslash for regex constructs like \s, \w, \d
+        current += "\\";
+      }
       continue;
     }
-    if (ch === '"' && !inSingleQuote) {
-      inDoubleQuote = !inDoubleQuote;
-      continue;
-    }
-    if (ch === "'" && !inDoubleQuote) {
-      inSingleQuote = !inSingleQuote;
-      continue;
-    }
-    if (/\s/.test(ch) && !inDoubleQuote && !inSingleQuote) {
+
+    // Outside quotes: whitespace splits tokens
+    if (/\s/.test(ch)) {
       if (current.length > 0) {
         tokens.push(current);
         current = "";
       }
       continue;
     }
+
     current += ch;
   }
+
   if (current.length > 0) {
     tokens.push(current);
   }
-  return tokens;
+
+  return { tokens, hasPipesOrRedirection };
 }
 
 /**
@@ -71,28 +123,36 @@ export function parseSearchCommand(rawCmd: string): ParsedSearchCommand | null {
   const trimmed = rawCmd.trim();
   if (!trimmed) return null;
 
-  // Never intercept pipelines, background jobs, redirections, or chained commands
-  if (/[|&><;`\n]/.test(trimmed)) return null;
+  const { tokens, hasPipesOrRedirection } = splitShellTokens(trimmed);
+  if (hasPipesOrRedirection || tokens.length === 0) {
+    return null;
+  }
 
-  const tokens = splitShellTokens(trimmed);
-  if (tokens.length === 0) return null;
+  // Skip leading environment variable assignments (e.g. CI=1 or LC_ALL=C)
+  let tokenIdx = 0;
+  while (tokenIdx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[tokenIdx])) {
+    tokenIdx++;
+  }
+  if (tokenIdx >= tokens.length) return null;
 
-  const bin = tokens[0].toLowerCase();
+  const rawBin = tokens[tokenIdx];
+  const bin = path.basename(rawBin).toLowerCase().replace(/\.exe$/, "");
+  const args = tokens.slice(tokenIdx + 1);
 
   if (bin === "rg" || bin === "ripgrep") {
-    return parseRgCommand(tokens.slice(1));
+    return parseRgCommand(args);
   }
   if (bin === "grep" || bin === "egrep") {
-    return parseGrepCommand(tokens.slice(1));
+    return parseGrepCommand(args);
   }
   if (bin === "ag") {
-    return parseAgCommand(tokens.slice(1));
+    return parseAgCommand(args);
   }
   if (bin === "find") {
-    return parseFindCommand(tokens.slice(1));
+    return parseFindCommand(args);
   }
   if (bin === "fd") {
-    return parseFdCommand(tokens.slice(1));
+    return parseFdCommand(args);
   }
 
   return null;
@@ -107,11 +167,23 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
   let literal: boolean | undefined;
   let context: number | undefined;
   let limit: number | undefined;
+  let wordRegexp = false;
 
   const positionals: string[] = [];
+  let endOfOptions = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+
+    if (endOfOptions) {
+      positionals.push(arg);
+      continue;
+    }
+
+    if (arg === "--") {
+      endOfOptions = true;
+      continue;
+    }
 
     if (arg === "--files") {
       isFilesMode = true;
@@ -133,6 +205,11 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
       literal = true;
       continue;
     }
+    if (arg === "-w" || arg === "--word-regexp") {
+      wordRegexp = true;
+      continue;
+    }
+
     if (arg === "-e" || arg === "--regexp") {
       if (i + 1 < args.length) {
         pattern = args[++i];
@@ -143,6 +220,11 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
       pattern = arg.slice(2);
       continue;
     }
+    if (arg.startsWith("--regexp=")) {
+      pattern = arg.slice(9);
+      continue;
+    }
+
     if (arg === "-g" || arg === "--glob") {
       if (i + 1 < args.length) {
         glob = args[++i];
@@ -157,6 +239,24 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
       glob = arg.slice(2);
       continue;
     }
+
+    // Type filter e.g. -t ts or --type ts
+    if (arg === "-t" || arg === "--type") {
+      if (i + 1 < args.length) {
+        const typeVal = args[++i];
+        glob = `*.${typeVal}`;
+      }
+      continue;
+    }
+    if (arg.startsWith("--type=")) {
+      glob = `*.${arg.slice(7)}`;
+      continue;
+    }
+    if (arg.startsWith("-t")) {
+      glob = `*.${arg.slice(2)}`;
+      continue;
+    }
+
     if (arg === "-C" || arg === "-A" || arg === "-B") {
       if (i + 1 < args.length) {
         const val = parseInt(args[++i], 10);
@@ -181,8 +281,40 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
       if (!isNaN(val)) limit = val;
       continue;
     }
+    if (/^-m\d+$/.test(arg)) {
+      const val = parseInt(arg.slice(2), 10);
+      if (!isNaN(val)) limit = val;
+      continue;
+    }
 
-    // Skip other known flags like -n, -l, -u, --no-heading, etc.
+    // Known flags with arguments that should be skipped without becoming positionals
+    if (
+      arg === "-d" ||
+      arg === "--max-depth" ||
+      arg === "-f" ||
+      arg === "--file" ||
+      arg === "-E" ||
+      arg === "--encoding" ||
+      arg === "--sort" ||
+      arg === "--path-separator" ||
+      arg === "-r" ||
+      arg === "--replace" ||
+      arg === "--ignore-file"
+    ) {
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+    if (
+      arg.startsWith("--max-depth=") ||
+      arg.startsWith("--file=") ||
+      arg.startsWith("--encoding=") ||
+      arg.startsWith("--sort=") ||
+      arg.startsWith("--replace=") ||
+      arg.startsWith("--ignore-file=")
+    ) {
+      continue;
+    }
+
     if (arg.startsWith("-")) {
       continue;
     }
@@ -208,6 +340,10 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
 
   if (!pattern) return null;
 
+  if (wordRegexp && !literal) {
+    pattern = `\\b${pattern}\\b`;
+  }
+
   return {
     type: "grep",
     pattern,
@@ -228,16 +364,42 @@ function parseGrepCommand(args: string[]): ParsedSearchCommand | null {
   let literal: boolean | undefined;
   let context: number | undefined;
   let limit: number | undefined;
+  let wordRegexp = false;
 
   const positionals: string[] = [];
+  let endOfOptions = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+
+    if (endOfOptions) {
+      positionals.push(arg);
+      continue;
+    }
+
+    if (arg === "--") {
+      endOfOptions = true;
+      continue;
+    }
 
     if (arg === "-e" || arg === "--regexp") {
       if (i + 1 < args.length) pattern = args[++i];
       continue;
     }
+    if (arg.startsWith("-e")) {
+      pattern = arg.slice(2);
+      continue;
+    }
+    if (arg.startsWith("--regexp=")) {
+      pattern = arg.slice(9);
+      continue;
+    }
+
+    if (arg === "-w" || arg === "--word-regexp") {
+      wordRegexp = true;
+      continue;
+    }
+
     if (arg.startsWith("--include=")) {
       glob = arg.slice(10);
       continue;
@@ -246,6 +408,15 @@ function parseGrepCommand(args: string[]): ParsedSearchCommand | null {
       glob = args[++i];
       continue;
     }
+    if (arg.startsWith("--exclude=")) {
+      glob = `!${arg.slice(10)}`;
+      continue;
+    }
+    if (arg === "--exclude" && i + 1 < args.length) {
+      glob = `!${args[++i]}`;
+      continue;
+    }
+
     if (arg === "-C" || arg === "-A" || arg === "-B") {
       if (i + 1 < args.length) {
         const val = parseInt(args[++i], 10);
@@ -253,16 +424,47 @@ function parseGrepCommand(args: string[]): ParsedSearchCommand | null {
       }
       continue;
     }
-    if (arg === "-m" && i + 1 < args.length) {
-      const val = parseInt(args[++i], 10);
+    if (/^-[CAB]\d+$/.test(arg)) {
+      const val = parseInt(arg.slice(2), 10);
+      if (!isNaN(val)) context = Math.max(context ?? 0, val);
+      continue;
+    }
+
+    if (arg === "-m" || arg === "--max-count") {
+      if (i + 1 < args.length) {
+        const val = parseInt(args[++i], 10);
+        if (!isNaN(val)) limit = val;
+      }
+      continue;
+    }
+    if (arg.startsWith("--max-count=")) {
+      const val = parseInt(arg.slice(12), 10);
+      if (!isNaN(val)) limit = val;
+      continue;
+    }
+    if (/^-m\d+$/.test(arg)) {
+      const val = parseInt(arg.slice(2), 10);
       if (!isNaN(val)) limit = val;
       continue;
     }
 
+    // Flags taking arguments to skip
+    if (
+      arg === "-d" ||
+      arg === "--directories" ||
+      arg === "-f" ||
+      arg === "--file" ||
+      arg === "--exclude-dir" ||
+      arg === "--exclude-from"
+    ) {
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+
     if (arg.startsWith("-") && !arg.startsWith("--")) {
-      // Check combined short flags e.g. -rni, -rn, -F
       if (arg.includes("i")) ignoreCase = true;
       if (arg.includes("F")) literal = true;
+      if (arg.includes("w")) wordRegexp = true;
       continue;
     }
 
@@ -283,6 +485,10 @@ function parseGrepCommand(args: string[]): ParsedSearchCommand | null {
   }
 
   if (!pattern) return null;
+
+  if (wordRegexp && !literal) {
+    pattern = `\\b${pattern}\\b`;
+  }
 
   return {
     type: "grep",
@@ -328,7 +534,11 @@ function parseAgCommand(args: string[]): ParsedSearchCommand | null {
       glob = args[++i];
       continue;
     }
-    if (arg === "-C" && i + 1 < args.length) {
+    if (arg.startsWith("-G")) {
+      glob = arg.slice(2);
+      continue;
+    }
+    if ((arg === "-C" || arg === "-A" || arg === "-B") && i + 1 < args.length) {
       const val = parseInt(args[++i], 10);
       if (!isNaN(val)) context = val;
       continue;
@@ -356,8 +566,8 @@ function parseAgCommand(args: string[]): ParsedSearchCommand | null {
 
 function normalizeFindGlobPattern(rawPattern: string): string {
   let p = rawPattern.trim().replace(/^["']|["']$/g, "");
-  // Exact extension filter e.g. *.ts
-  if (/^\*\.[a-zA-Z0-9_-]+$/.test(p)) {
+  // Exact extension filter e.g. *.ts or *.{ts,tsx}
+  if (/^\*\.[a-zA-Z0-9_-]+$/.test(p) || /^\*\.\{[a-zA-Z0-9_,-]+\}$/.test(p)) {
     return p;
   }
   // Strip leading/trailing wildcard asterisks for fuzzy matching
@@ -374,7 +584,7 @@ function normalizeFindGlobPattern(rawPattern: string): string {
 function parseFindCommand(args: string[]): ParsedSearchCommand | null {
   // If find contains dangerous/mutating flags, do not intercept
   for (const a of args) {
-    if (a === "-exec" || a === "-execdir" || a === "-delete" || a === "-ok") {
+    if (a === "-exec" || a === "-execdir" || a === "-delete" || a === "-ok" || a === "-okdir") {
       return null;
     }
   }
@@ -384,12 +594,41 @@ function parseFindCommand(args: string[]): ParsedSearchCommand | null {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg.startsWith("-") && !targetPath) {
-      targetPath = arg;
+
+    // Positionals before any flag are target paths
+    if (!arg.startsWith("-")) {
+      if (!targetPath) {
+        targetPath = arg;
+      }
       continue;
     }
+
     if ((arg === "-name" || arg === "-iname") && i + 1 < args.length) {
       pattern = normalizeFindGlobPattern(args[++i]);
+      continue;
+    }
+    if ((arg === "-path" || arg === "-ipath") && i + 1 < args.length) {
+      pattern = normalizeFindGlobPattern(args[++i]);
+      continue;
+    }
+
+    // Skip flags with arguments so their values are NOT consumed as targetPath
+    if (
+      arg === "-type" ||
+      arg === "-maxdepth" ||
+      arg === "-mindepth" ||
+      arg === "-mtime" ||
+      arg === "-atime" ||
+      arg === "-ctime" ||
+      arg === "-mmin" ||
+      arg === "-amin" ||
+      arg === "-cmin" ||
+      arg === "-size" ||
+      arg === "-perm" ||
+      arg === "-user" ||
+      arg === "-group"
+    ) {
+      if (i + 1 < args.length) i++;
       continue;
     }
   }
@@ -414,6 +653,28 @@ function parseFdCommand(args: string[]): ParsedSearchCommand | null {
       ext = args[++i];
       continue;
     }
+    if (arg.startsWith("--extension=")) {
+      ext = arg.slice(12);
+      continue;
+    }
+
+    // Skip flags with arguments so their values don't become positionals
+    if (
+      arg === "-t" ||
+      arg === "--type" ||
+      arg === "-d" ||
+      arg === "--max-depth" ||
+      arg === "-E" ||
+      arg === "--exclude" ||
+      arg === "-c" ||
+      arg === "--color" ||
+      arg === "-S" ||
+      arg === "--size"
+    ) {
+      if (i + 1 < args.length) i++;
+      continue;
+    }
+
     if (arg.startsWith("-")) continue;
     positionals.push(arg);
   }

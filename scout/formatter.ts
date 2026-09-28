@@ -18,13 +18,16 @@ export function truncateLineAroundMatch(
     return trimmed;
   }
 
-  const matchLen = Math.max(0, matchEnd - matchStart);
+  const safeStart = Math.min(Math.max(0, matchStart), trimmed.length);
+  const safeEnd = Math.min(Math.max(safeStart, matchEnd), trimmed.length);
+
+  const matchLen = Math.max(0, safeEnd - safeStart);
   const budget = Math.max(0, maxLen - matchLen);
   const beforeBudget = Math.floor(budget / 3);
   const afterBudget = budget - beforeBudget;
 
-  const winStart = Math.max(0, matchStart - beforeBudget);
-  const winEnd = Math.min(trimmed.length, matchEnd + afterBudget);
+  const winStart = Math.max(0, safeStart - beforeBudget);
+  const winEnd = Math.min(trimmed.length, safeEnd + afterBudget);
 
   let result = trimmed.slice(winStart, winEnd);
   if (winStart > 0) {
@@ -98,7 +101,6 @@ export function formatGrepOutput(
     return "No matches found.";
   }
 
-  const frecency = FrecencyTracker.getInstance();
   const lines: string[] = [];
 
   // Suggestion: if there is a primary definition found, suggest reading it

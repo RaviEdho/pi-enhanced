@@ -108,8 +108,14 @@ export class FileIndexer {
         const x = line[0];
         const y = line[1];
         let filePath = line.slice(3).trim();
+        if (filePath.startsWith('"') && filePath.endsWith('"')) {
+          filePath = filePath.slice(1, -1);
+        }
         if (filePath.includes(" -> ")) {
           filePath = filePath.split(" -> ")[1].trim();
+          if (filePath.startsWith('"') && filePath.endsWith('"')) {
+            filePath = filePath.slice(1, -1);
+          }
         }
         filePath = filePath.replace(/\\/g, "/");
 
@@ -190,10 +196,13 @@ export class FileIndexer {
 
     for (const entry of entries) {
       const name = entry.name;
-      if (name.startsWith(".") && name !== ".env" && name !== ".github") {
-        if (name === ".git") continue;
-      }
       if (DEFAULT_IGNORED_DIRS.has(name)) {
+        continue;
+      }
+      if (entry.isDirectory() && name.startsWith(".") && name !== ".github") {
+        continue;
+      }
+      if (entry.isFile() && name === ".DS_Store") {
         continue;
       }
 
@@ -251,9 +260,9 @@ export class FileIndexer {
     }
 
     if (globOpt) {
-      if (!constraints.extensions) constraints.extensions = [];
-      if (globOpt.startsWith("*.")) {
-        constraints.extensions.push(globOpt.slice(1).toLowerCase());
+      const trimmed = globOpt.trim();
+      if (trimmed) {
+        constraints.globs = [trimmed];
       }
     }
 
@@ -551,6 +560,8 @@ export class FileIndexer {
     matches.sort((a, b) => {
       if (a.isDefinition && !b.isDefinition) return -1;
       if (!a.isDefinition && b.isDefinition) return 1;
+      if (a.isImport && !b.isImport) return 1;
+      if (!a.isImport && b.isImport) return -1;
       return 0;
     });
 

@@ -26,13 +26,68 @@ export function resolveTargetPath(rawPath: string, cwd: string): string {
  */
 export function formatDisplayPath(absPath: string, cwd: string): string {
   const home = os.homedir();
-  if (absPath.startsWith(cwd + path.sep)) {
+  const normalizedAbs = absPath.replace(/\\/g, "/");
+  const normalizedCwd = cwd.replace(/\\/g, "/");
+  const normalizedHome = home.replace(/\\/g, "/");
+
+  if (normalizedAbs === normalizedCwd) {
+    return ".";
+  }
+  if (normalizedAbs.startsWith(normalizedCwd + "/")) {
     return path.relative(cwd, absPath).replace(/\\/g, "/");
   }
-  if (absPath.startsWith(home + path.sep)) {
+  if (normalizedAbs === normalizedHome) {
+    return "~";
+  }
+  if (normalizedAbs.startsWith(normalizedHome + "/")) {
     return "~/" + path.relative(home, absPath).replace(/\\/g, "/");
   }
-  return absPath.replace(/\\/g, "/");
+  return normalizedAbs;
+}
+
+interface RawLineItem {
+  type: "match" | "context";
+  filePath: string;
+  lineNumber: number;
+  content: string;
+}
+
+function parseRawGrepOutput(rawOutput: string, cwd: string): RawLineItem[] {
+  const lines = rawOutput.split(/\r?\n/);
+  const items: RawLineItem[] = [];
+
+  for (const line of lines) {
+    if (!line || line === "--") continue;
+
+    const match = line.match(/^(.*?):(\d+):(.*)$/);
+    if (match) {
+      const lineNum = parseInt(match[2], 10);
+      if (!isNaN(lineNum)) {
+        items.push({
+          type: "match",
+          filePath: formatDisplayPath(match[1], cwd),
+          lineNumber: lineNum,
+          content: match[3],
+        });
+        continue;
+      }
+    }
+
+    const ctxMatch = line.match(/^(.*?)-(\d+)-(.*)$/);
+    if (ctxMatch) {
+      const lineNum = parseInt(ctxMatch[2], 10);
+      if (!isNaN(lineNum)) {
+        items.push({
+          type: "context",
+          filePath: formatDisplayPath(ctxMatch[1], cwd),
+          lineNumber: lineNum,
+          content: ctxMatch[3],
+        });
+      }
+    }
+  }
+
+  return items;
 }
 
 export interface ExternalGrepOptions {
@@ -57,6 +112,7 @@ export async function externalGrep(
   const targetDir = resolveTargetPath(options.path || cwd, cwd);
   const limit = options.limit ?? 40;
   const offset = options.offset ?? 0;
+  const contextLines = options.context ?? 0;
 
   // Build ripgrep arguments
   const rgArgs = [
@@ -64,6 +120,9 @@ export async function externalGrep(
     "--no-heading",
     "--color=never",
     "--no-ignore",
+    "--hidden",
+    "-g", "!.git/*",
+    "-H",
     "--max-columns=500",
     "--max-columns-preview",
   ];
@@ -73,7 +132,6 @@ export async function externalGrep(
   } else if (options.ignoreCase === false) {
     rgArgs.push("-s");
   } else {
-    // Smart case by default
     rgArgs.push("-S");
   }
 
@@ -85,8 +143,8 @@ export async function externalGrep(
     rgArgs.push("-g", options.glob);
   }
 
-  if (options.context && options.context > 0) {
-    rgArgs.push("-C", String(Math.min(5, options.context)));
+  if (contextLines > 0) {
+    rgArgs.push("-C", String(Math.min(5, contextLines)));
   }
 
   rgArgs.push("-e", pattern, "--", targetDir);
@@ -99,69 +157,118 @@ export async function externalGrep(
     });
     rawOutput = stdout;
   } catch (err: any) {
-    if (err.code === 1) {
-      // Exit code 1 from ripgrep means 0 matches found
+    if (err && typeof err.stdout === "string" && err.stdout.length > 0) {
+      rawOutput = err.stdout;
+    } else if (err.code === 1) {
       return { matches: [], totalMatched: 0 };
-    }
-    // Fallback to standard grep if rg is missing or errored
-    try {
-      const grepArgs = ["-rn"];
-      if (options.ignoreCase) grepArgs.push("-i");
-      if (options.literal) grepArgs.push("-F");
-      if (options.glob) grepArgs.push(`--include=${options.glob}`);
-      grepArgs.push("-e", pattern, "--", targetDir);
+    } else {
+      // Fallback to standard grep if rg is missing or errored without stdout
+      try {
+        const grepArgs = ["-rn", "-H", "-I"];
+        if (options.ignoreCase) grepArgs.push("-i");
+        if (options.literal) grepArgs.push("-F");
+        if (options.glob) {
+          if (options.glob.startsWith("!")) {
+            grepArgs.push(`--exclude=${options.glob.slice(1)}`);
+          } else {
+            grepArgs.push(`--include=${options.glob}`);
+          }
+        }
+        if (contextLines > 0) {
+          grepArgs.push("-C", String(Math.min(5, contextLines)));
+        }
+        grepArgs.push("-e", pattern, "--", targetDir);
 
-      const { stdout } = await execFileAsync("grep", grepArgs, {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 10000,
-      });
-      rawOutput = stdout;
-    } catch (grepErr: any) {
-      if (grepErr.code === 1) {
-        return { matches: [], totalMatched: 0 };
+        const { stdout } = await execFileAsync("grep", grepArgs, {
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 10000,
+        });
+        rawOutput = stdout;
+      } catch (grepErr: any) {
+        if (grepErr && typeof grepErr.stdout === "string" && grepErr.stdout.length > 0) {
+          rawOutput = grepErr.stdout;
+        } else {
+          return { matches: [], totalMatched: 0 };
+        }
       }
-      return { matches: [], totalMatched: 0 };
     }
   }
 
-  const lines = rawOutput.split(/\r?\n/);
+  const rawItems = parseRawGrepOutput(rawOutput, cwd);
   const allMatches: SearchMatch[] = [];
 
-  for (const line of lines) {
-    if (!line) continue;
+  let regex: RegExp | null = null;
+  if (!options.literal) {
+    try {
+      regex = new RegExp(pattern, options.ignoreCase ? "i" : "");
+    } catch {}
+  }
 
-    // Parse <path>:<line>:<content>
-    const match = line.match(/^(.*?):(\d+):(.*)$/);
-    if (!match) continue;
+  for (let i = 0; i < rawItems.length; i++) {
+    const item = rawItems[i];
+    if (item.type !== "match") continue;
 
-    const rawFile = match[1];
-    const lineNum = parseInt(match[2], 10);
-    const lineContent = match[3];
-    if (isNaN(lineNum)) continue;
+    // Collect context lines
+    const contextBefore: string[] = [];
+    const contextAfter: string[] = [];
 
-    const displayFile = formatDisplayPath(rawFile, cwd);
+    if (contextLines > 0) {
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = rawItems[j];
+        if (prev.filePath !== item.filePath || prev.type !== "context") break;
+        if (item.lineNumber - prev.lineNumber <= contextLines && item.lineNumber > prev.lineNumber) {
+          contextBefore.unshift(prev.content);
+        } else {
+          break;
+        }
+      }
+      for (let j = i + 1; j < rawItems.length; j++) {
+        const next = rawItems[j];
+        if (next.filePath !== item.filePath || next.type !== "context") break;
+        if (next.lineNumber - item.lineNumber <= contextLines && next.lineNumber > item.lineNumber) {
+          contextAfter.push(next.content);
+        } else {
+          break;
+        }
+      }
+    }
 
     // Compute match start/end
-    const lowerContent = lineContent.toLowerCase();
-    const lowerPat = pattern.toLowerCase();
-    const matchIdx = lowerContent.indexOf(lowerPat);
-    const matchStart = matchIdx >= 0 ? matchIdx : 0;
-    const matchEnd = matchIdx >= 0 ? matchIdx + pattern.length : 0;
+    let matchStart = 0;
+    let matchEnd = 0;
 
-    const { isDefinition, isImport } = classifyLine(lineContent);
+    if (regex) {
+      const regMatch = regex.exec(item.content);
+      if (regMatch) {
+        matchStart = regMatch.index;
+        matchEnd = regMatch.index + regMatch[0].length;
+      }
+    } else {
+      const haystack = options.ignoreCase ? item.content.toLowerCase() : item.content;
+      const needle = options.ignoreCase ? pattern.toLowerCase() : pattern;
+      const idx = haystack.indexOf(needle);
+      if (idx >= 0) {
+        matchStart = idx;
+        matchEnd = idx + pattern.length;
+      }
+    }
+
+    const { isDefinition, isImport } = classifyLine(item.content);
 
     allMatches.push({
-      filePath: displayFile,
-      lineNumber: lineNum,
-      lineContent,
+      filePath: item.filePath,
+      lineNumber: item.lineNumber,
+      lineContent: item.content,
       isDefinition,
       isImport,
       matchStart,
       matchEnd,
+      contextBefore: contextBefore.length > 0 ? contextBefore : undefined,
+      contextAfter: contextAfter.length > 0 ? contextAfter : undefined,
     });
   }
 
-  // Sort definitions first, then usages, then imports (matching FFF ranking)
+  // Sort definitions first, then usages, then imports
   allMatches.sort((a, b) => {
     if (a.isDefinition && !b.isDefinition) return -1;
     if (!a.isDefinition && b.isDefinition) return 1;
@@ -182,6 +289,7 @@ export interface ExternalMultiGrepOptions {
   ignoreCase?: boolean;
   context?: number;
   limit?: number;
+  offset?: number;
 }
 
 /**
@@ -198,12 +306,18 @@ export async function externalMultiGrep(
 
   const targetDir = resolveTargetPath(options.path || cwd, cwd);
   const limit = options.limit ?? 40;
+  const offset = options.offset ?? 0;
+  const contextLines = options.context ?? 0;
 
   const rgArgs = [
     "--line-number",
     "--no-heading",
     "--color=never",
     "--no-ignore",
+    "--hidden",
+    "-g", "!.git/*",
+    "-H",
+    "-F",
     "--max-columns=500",
     "--max-columns-preview",
   ];
@@ -216,6 +330,10 @@ export async function externalMultiGrep(
 
   if (options.glob) {
     rgArgs.push("-g", options.glob);
+  }
+
+  if (contextLines > 0) {
+    rgArgs.push("-C", String(Math.min(5, contextLines)));
   }
 
   for (const pat of patterns) {
@@ -232,36 +350,85 @@ export async function externalMultiGrep(
     });
     rawOutput = stdout;
   } catch (err: any) {
-    if (err.code === 1) {
+    if (err && typeof err.stdout === "string" && err.stdout.length > 0) {
+      rawOutput = err.stdout;
+    } else if (err.code === 1) {
       return { matches: [], totalMatched: 0 };
+    } else {
+      // Fallback to grep
+      try {
+        const grepArgs = ["-rn", "-H", "-I", "-F"];
+        if (options.ignoreCase) grepArgs.push("-i");
+        if (options.glob) {
+          if (options.glob.startsWith("!")) {
+            grepArgs.push(`--exclude=${options.glob.slice(1)}`);
+          } else {
+            grepArgs.push(`--include=${options.glob}`);
+          }
+        }
+        if (contextLines > 0) {
+          grepArgs.push("-C", String(Math.min(5, contextLines)));
+        }
+        for (const pat of patterns) {
+          grepArgs.push("-e", pat);
+        }
+        grepArgs.push("--", targetDir);
+
+        const { stdout } = await execFileAsync("grep", grepArgs, {
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 10000,
+        });
+        rawOutput = stdout;
+      } catch (grepErr: any) {
+        if (grepErr && typeof grepErr.stdout === "string" && grepErr.stdout.length > 0) {
+          rawOutput = grepErr.stdout;
+        } else {
+          return { matches: [], totalMatched: 0 };
+        }
+      }
     }
-    return { matches: [], totalMatched: 0 };
   }
 
-  const lines = rawOutput.split(/\r?\n/);
+  const rawItems = parseRawGrepOutput(rawOutput, cwd);
   const allMatches: SearchMatch[] = [];
 
-  for (const line of lines) {
-    if (!line) continue;
+  for (let i = 0; i < rawItems.length; i++) {
+    const item = rawItems[i];
+    if (item.type !== "match") continue;
 
-    const match = line.match(/^(.*?):(\d+):(.*)$/);
-    if (!match) continue;
+    const contextBefore: string[] = [];
+    const contextAfter: string[] = [];
 
-    const rawFile = match[1];
-    const lineNum = parseInt(match[2], 10);
-    const lineContent = match[3];
-    if (isNaN(lineNum)) continue;
-
-    const displayFile = formatDisplayPath(rawFile, cwd);
+    if (contextLines > 0) {
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = rawItems[j];
+        if (prev.filePath !== item.filePath || prev.type !== "context") break;
+        if (item.lineNumber - prev.lineNumber <= contextLines && item.lineNumber > prev.lineNumber) {
+          contextBefore.unshift(prev.content);
+        } else {
+          break;
+        }
+      }
+      for (let j = i + 1; j < rawItems.length; j++) {
+        const next = rawItems[j];
+        if (next.filePath !== item.filePath || next.type !== "context") break;
+        if (next.lineNumber - item.lineNumber <= contextLines && next.lineNumber > item.lineNumber) {
+          contextAfter.push(next.content);
+        } else {
+          break;
+        }
+      }
+    }
 
     // Identify which pattern matched
-    const lowerContent = lineContent.toLowerCase();
+    const haystack = options.ignoreCase ? item.content.toLowerCase() : item.content;
     let matchedPattern: string | undefined;
     let matchStart = 0;
     let matchEnd = 0;
 
     for (const pat of patterns) {
-      const idx = lowerContent.indexOf(pat.toLowerCase());
+      const needle = options.ignoreCase ? pat.toLowerCase() : pat;
+      const idx = haystack.indexOf(needle);
       if (idx >= 0) {
         matchedPattern = pat;
         matchStart = idx;
@@ -270,17 +437,19 @@ export async function externalMultiGrep(
       }
     }
 
-    const { isDefinition, isImport } = classifyLine(lineContent);
+    const { isDefinition, isImport } = classifyLine(item.content);
 
     allMatches.push({
-      filePath: displayFile,
-      lineNumber: lineNum,
-      lineContent,
+      filePath: item.filePath,
+      lineNumber: item.lineNumber,
+      lineContent: item.content,
       isDefinition,
       isImport,
       matchStart,
       matchEnd,
       pattern: matchedPattern,
+      contextBefore: contextBefore.length > 0 ? contextBefore : undefined,
+      contextAfter: contextAfter.length > 0 ? contextAfter : undefined,
     });
   }
 
@@ -293,7 +462,7 @@ export async function externalMultiGrep(
   });
 
   const totalMatched = allMatches.length;
-  const paginated = allMatches.slice(0, limit);
+  const paginated = allMatches.slice(offset, offset + limit);
 
   return { matches: paginated, totalMatched };
 }
@@ -318,17 +487,25 @@ export async function externalFind(
 
   let rawOutput = "";
   try {
-    const { stdout } = await execFileAsync("rg", ["--files", "--no-ignore", "--max-depth=6", targetDir], {
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 10000,
-    });
+    const { stdout } = await execFileAsync(
+      "rg",
+      ["--files", "--no-ignore", "--hidden", "-g", "!.git/*", "--max-depth=15", targetDir],
+      {
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 10000,
+      }
+    );
     rawOutput = stdout;
   } catch {
     try {
-      const { stdout } = await execFileAsync("find", [targetDir, "-maxdepth", "6", "-type", "f"], {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 10000,
-      });
+      const { stdout } = await execFileAsync(
+        "find",
+        [targetDir, "-maxdepth", "15", "-not", "(", "-path", "*/.git/*", "-prune", ")", "-type", "f"],
+        {
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 10000,
+        }
+      );
       rawOutput = stdout;
     } catch {
       return { items: [], totalMatched: 0 };

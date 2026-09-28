@@ -16,6 +16,7 @@ export function parseQueryConstraints(query: string): SearchQueryConstraints {
   const extensions: string[] = [];
   const includePaths: string[] = [];
   const excludePaths: string[] = [];
+  const globs: string[] = [];
   let gitFilter: GitFileStatus | undefined;
 
   for (const token of tokens) {
@@ -28,7 +29,17 @@ export function parseQueryConstraints(query: string): SearchQueryConstraints {
     }
 
     if (token.startsWith("!") && token.length > 1) {
-      excludePaths.push(token.slice(1).replace(/\\/g, "/"));
+      if (token.includes("*")) {
+        globs.push(token);
+      } else {
+        excludePaths.push(token.slice(1).replace(/\\/g, "/"));
+      }
+      continue;
+    }
+
+    // Brace expansion or wildcard glob e.g. *.{ts,tsx} or **/*.json
+    if (token.startsWith("*.") && token.includes("{")) {
+      globs.push(token);
       continue;
     }
 
@@ -37,7 +48,13 @@ export function parseQueryConstraints(query: string): SearchQueryConstraints {
       continue;
     }
 
-    if (token.includes("/") && (token.endsWith("/") || token.includes("*"))) {
+    if (token.includes("*")) {
+      globs.push(token);
+      continue;
+    }
+
+    // Path constraints: any token with a slash
+    if (token.includes("/")) {
       includePaths.push(token.replace(/\\/g, "/"));
       continue;
     }
@@ -50,8 +67,71 @@ export function parseQueryConstraints(query: string): SearchQueryConstraints {
     extensions: extensions.length > 0 ? extensions : undefined,
     includePaths: includePaths.length > 0 ? includePaths : undefined,
     excludePaths: excludePaths.length > 0 ? excludePaths : undefined,
+    globs: globs.length > 0 ? globs : undefined,
     gitFilter,
   };
+}
+
+/**
+ * Checks if a relative file path matches a glob pattern (e.g. *.ts, *.{ts,tsx}, src/** /*.ts, !*.test.ts)
+ */
+export function globMatches(filePath: string, glob: string): boolean {
+  if (!glob) return true;
+  const isNegative = glob.startsWith("!");
+  const pattern = isNegative ? glob.slice(1) : glob;
+  const normPath = filePath.replace(/\\/g, "/");
+
+  // Simple extension check: *.ext
+  if (/^\*\.[a-zA-Z0-9_-]+$/.test(pattern)) {
+    const ext = pattern.slice(1).toLowerCase();
+    const matches = normPath.toLowerCase().endsWith(ext);
+    return isNegative ? !matches : matches;
+  }
+
+  // Brace expansion: *.{ts,tsx,js}
+  const braceMatch = pattern.match(/^\*\.\{([a-zA-Z0-9_,-]+)\}$/);
+  if (braceMatch) {
+    const exts = braceMatch[1].split(",").map((e) => `.${e.trim().toLowerCase()}`);
+    const matches = exts.some((ext) => normPath.toLowerCase().endsWith(ext));
+    return isNegative ? !matches : matches;
+  }
+
+  // Convert glob to RegExp
+  let regexStr = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === "*" && pattern[i + 1] === "*") {
+      regexStr += ".*";
+      i += 2;
+      if (pattern[i] === "/") i++;
+    } else if (c === "*") {
+      regexStr += "[^/]*";
+      i++;
+    } else if (c === "?") {
+      regexStr += "[^/]";
+      i++;
+    } else if (c === "{" && pattern.includes("}", i)) {
+      const closeIdx = pattern.indexOf("}", i);
+      const parts = pattern.slice(i + 1, closeIdx).split(",");
+      regexStr += "(" + parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")";
+      i = closeIdx + 1;
+    } else if (/[.+^$()[\]|\\]/.test(c)) {
+      regexStr += "\\" + c;
+      i++;
+    } else {
+      regexStr += c;
+      i++;
+    }
+  }
+
+  try {
+    const regex = new RegExp(`(^|/)${regexStr}$`, "i");
+    const matches = regex.test(normPath);
+    return isNegative ? !matches : matches;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -62,11 +142,14 @@ export function matchesConstraints(
   constraints: SearchQueryConstraints,
   gitStatus?: GitFileStatus
 ): boolean {
-  const normPath = filePath.replace(/\\/g, "/");
+  let normPath = filePath.replace(/\\/g, "/");
+  if (normPath.startsWith("./")) {
+    normPath = normPath.slice(2);
+  }
 
   // Check git status constraint
   if (constraints.gitFilter) {
-    if (gitStatus !== constraints.gitFilter) {
+    if (!gitStatus || gitStatus !== constraints.gitFilter) {
       return false;
     }
   }
@@ -80,7 +163,17 @@ export function matchesConstraints(
   // Check exclusion paths
   if (constraints.excludePaths && constraints.excludePaths.length > 0) {
     for (const excl of constraints.excludePaths) {
-      if (normPath.includes(excl) || normPath.startsWith(excl)) {
+      const cleanExcl = excl.startsWith("./") ? excl.slice(2) : excl;
+      if (normPath.includes(cleanExcl) || normPath.startsWith(cleanExcl)) {
+        return false;
+      }
+    }
+  }
+
+  // Check glob constraints
+  if (constraints.globs && constraints.globs.length > 0) {
+    for (const g of constraints.globs) {
+      if (!globMatches(normPath, g)) {
         return false;
       }
     }
@@ -89,14 +182,15 @@ export function matchesConstraints(
   // Check include paths
   if (constraints.includePaths && constraints.includePaths.length > 0) {
     const matchesInclude = constraints.includePaths.some((inc) => {
-      const cleanInc = inc.endsWith("/") ? inc.slice(0, -1) : inc;
+      let cleanInc = inc.endsWith("/") ? inc.slice(0, -1) : inc;
+      if (cleanInc.startsWith("./")) cleanInc = cleanInc.slice(2);
       if (!cleanInc || cleanInc === ".") return true;
       return (
         normPath === cleanInc ||
         normPath.startsWith(`${cleanInc}/`) ||
         normPath.includes(`/${cleanInc}/`) ||
         normPath.endsWith(`/${cleanInc}`) ||
-        normPath.includes(inc)
+        normPath.includes(cleanInc)
       );
     });
     if (!matchesInclude) return false;
