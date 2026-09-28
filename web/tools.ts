@@ -6,6 +6,8 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { formatSearchResponseForLLM } from "./formatter.js";
+import { FetchPipeline } from "./fetch/pipeline.js";
+import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
 import { SearchPipeline } from "./pipeline.js";
 import type { SearchProviderId } from "./types.js";
 
@@ -143,6 +145,151 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       const providerId = activeSearchProviders.get(context.toolCallId) || args?.provider;
       if (providerId && providerId !== "none") {
         const name = PROVIDER_DISPLAY_NAMES[providerId] || providerId;
+        text += theme.fg("dim", " with ") + theme.fg("toolTitle", name);
+      }
+      return new Text(text, 0, 0);
+    },
+  };
+}
+
+const WebFetchParametersSchema = Type.Object({
+  url: Type.String({
+    description: "Target webpage URL to fetch and extract content from.",
+  }),
+  purpose: Type.Optional(
+    Type.String({
+      description:
+        "Optional statement of why you need this page or what specific info to look for (helps extraction focus).",
+    })
+  ),
+  maxCharacters: Type.Optional(
+    Type.Integer({
+      minimum: 500,
+      maximum: 50000,
+      description: "Maximum content characters to return (default: 15000, ~3750 tokens).",
+    })
+  ),
+  provider: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("parallel"),
+        Type.Literal("tinyfish"),
+        Type.Literal("exa"),
+        Type.Literal("tavily"),
+        Type.Literal("jina"),
+      ],
+      {
+        description:
+          "Explicitly select fetch provider. If omitted, uses automatic priority with fallback.",
+      }
+    )
+  ),
+});
+
+const FETCH_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  parallel: "Parallel",
+  tinyfish: "TinyFish",
+  exa: "Exa",
+  tavily: "Tavily",
+  jina: "Jina Reader",
+};
+
+const activeFetchProviders = new Map<string, string>();
+
+function trackActiveFetchProvider(toolCallId: string, provider: string): void {
+  if (activeFetchProviders.size > 200) {
+    const firstKey = activeFetchProviders.keys().next().value;
+    if (firstKey) activeFetchProviders.delete(firstKey);
+  }
+  activeFetchProviders.set(toolCallId, provider);
+}
+
+function formatFetchResponseForLLM(res: FetchResponse): string {
+  const parts: string[] = [];
+  if (res.title) {
+    parts.push(`# ${res.title}`);
+  }
+  parts.push(`URL: ${res.url}`);
+  if (res.publishedDate) {
+    parts.push(`Date: ${res.publishedDate}`);
+  }
+  parts.push("");
+  parts.push(res.content);
+  return parts.join("\n");
+}
+
+export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchParametersSchema> {
+  return {
+    name: "web_fetch",
+    label: "Web Fetch",
+    description:
+      "Fetch and extract clean Markdown content from any web page, documentation article, or blog post. Automatically handles JavaScript-rendered SPAs and anti-bot challenges with multi-provider failover (Parallel, TinyFish, Exa, Tavily, Jina Reader).",
+    parameters: WebFetchParametersSchema,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const pipeline = FetchPipeline.getInstance();
+
+      if (params.provider) {
+        trackActiveFetchProvider(toolCallId, params.provider);
+      }
+
+      try {
+        const response = await pipeline.execute(
+          {
+            url: params.url,
+            purpose: params.purpose,
+            maxCharacters: params.maxCharacters,
+            provider: params.provider as FetchProviderId | undefined,
+            signal,
+          },
+          (attemptedProvider) => {
+            trackActiveFetchProvider(toolCallId, attemptedProvider);
+            onUpdate?.({
+              content: [{ type: "text", text: `Fetching with ${attemptedProvider}...` }],
+              details: {
+                response: {
+                  provider: attemptedProvider,
+                  url: params.url,
+                  content: "",
+                },
+              },
+            });
+          }
+        );
+
+        if (response.provider && response.provider !== "none") {
+          trackActiveFetchProvider(toolCallId, response.provider);
+        }
+
+        const formatted = formatFetchResponseForLLM(response);
+
+        return {
+          content: [{ type: "text", text: formatted }],
+          details: { response },
+        };
+      } catch (err: any) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Web fetch error: ${message}` }],
+          details: {
+            response: {
+              provider: "none",
+              url: params.url,
+              content: "",
+            },
+            error: message,
+          },
+        };
+      }
+    },
+    renderCall(args, theme, context) {
+      let text = theme.fg("toolTitle", theme.bold("web_fetch "));
+      if (args?.url) {
+        const urlStr = args.url.length > 70 ? `${args.url.slice(0, 67)}...` : args.url;
+        text += theme.fg("accent", `"${urlStr}"`);
+      }
+      const providerId = activeFetchProviders.get(context.toolCallId) || args?.provider;
+      if (providerId && providerId !== "none") {
+        const name = FETCH_PROVIDER_DISPLAY_NAMES[providerId] || providerId;
         text += theme.fg("dim", " with ") + theme.fg("toolTitle", name);
       }
       return new Text(text, 0, 0);
