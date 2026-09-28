@@ -39,12 +39,12 @@ const WebSearchParametersSchema = Type.Object({
   provider: Type.Optional(
     Type.Union(
       [
-        Type.Literal("antigravity"),
         Type.Literal("brave"),
         Type.Literal("tavily"),
+        Type.Literal("antigravity"),
+        Type.Literal("tinyfish"),
         Type.Literal("exa"),
         Type.Literal("parallel"),
-        Type.Literal("tinyfish"),
       ],
       {
         description:
@@ -78,7 +78,7 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, Exa, Parallel, TinyFish).",
+      "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, TinyFish, Exa, Parallel).",
     parameters: WebSearchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const pipeline = SearchPipeline.getInstance();
@@ -172,8 +172,8 @@ const WebFetchParametersSchema = Type.Object({
   provider: Type.Optional(
     Type.Union(
       [
-        Type.Literal("parallel"),
         Type.Literal("tinyfish"),
+        Type.Literal("parallel"),
         Type.Literal("exa"),
         Type.Literal("tavily"),
         Type.Literal("jina"),
@@ -223,7 +223,7 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch and extract clean Markdown content from any web page, documentation article, or blog post. Automatically handles JavaScript-rendered SPAs and anti-bot challenges with multi-provider failover (Parallel, TinyFish, Exa, Tavily, Jina Reader).",
+      "Fetch and extract clean Markdown content from any web page, documentation article, or blog post. Automatically handles JavaScript-rendered SPAs and anti-bot challenges with multi-provider failover (TinyFish, Parallel, Exa, Tavily, Jina Reader).",
     parameters: WebFetchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const pipeline = FetchPipeline.getInstance();

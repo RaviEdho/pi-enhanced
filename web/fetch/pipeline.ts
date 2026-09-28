@@ -20,8 +20,8 @@ export class FetchPipeline {
   private providers: Map<FetchProviderId, FetchProvider> = new Map();
 
   private constructor() {
-    this.register(new ParallelFetchProvider());
     this.register(new TinyFishFetchProvider());
+    this.register(new ParallelFetchProvider());
     this.register(new ExaFetchProvider());
     this.register(new TavilyFetchProvider());
     this.register(new JinaFetchProvider());
@@ -54,13 +54,13 @@ export class FetchPipeline {
 
     const candidates: FetchProvider[] = [];
 
-    // 1. Parallel (ultra-fast semantic extract)
-    const parallel = this.providers.get("parallel");
-    if (parallel && (await parallel.isAvailable())) candidates.push(parallel);
-
-    // 2. TinyFish (headless browser with anti-bot / full JS support)
+    // 1. TinyFish (headless browser with anti-bot / full JS support and high code fidelity)
     const tinyfish = this.providers.get("tinyfish");
     if (tinyfish && (await tinyfish.isAvailable())) candidates.push(tinyfish);
+
+    // 2. Parallel (ultra-fast semantic extract)
+    const parallel = this.providers.get("parallel");
+    if (parallel && (await parallel.isAvailable())) candidates.push(parallel);
 
     // 3. Exa (fast neural content retriever)
     const exa = this.providers.get("exa");
@@ -87,7 +87,7 @@ export class FetchPipeline {
     const candidates = await this.getCandidates(params.provider);
     if (candidates.length === 0) {
       throw new Error(
-        "No web fetch provider is currently available. Configure an API key (/login parallel, /login tinyfish, /login exa, /login tavily)."
+        "No web fetch provider is currently available. Configure an API key (/login tinyfish, /login parallel, /login exa, /login tavily)."
       );
     }
 

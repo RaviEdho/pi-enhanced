@@ -2,7 +2,7 @@
  * Type definitions for web fetch subsystem.
  */
 
-export type FetchProviderId = "parallel" | "tinyfish" | "exa" | "tavily" | "jina";
+export type FetchProviderId = "tinyfish" | "parallel" | "exa" | "tavily" | "jina";
 
 export interface FetchParams {
   url: string;

@@ -2,7 +2,7 @@
  * Core type definitions for web search subsystem.
  */
 
-export type SearchProviderId = "antigravity" | "brave" | "tavily" | "exa" | "parallel" | "tinyfish";
+export type SearchProviderId = "brave" | "tavily" | "antigravity" | "tinyfish" | "exa" | "parallel";
 
 export interface SearchSource {
   title: string;

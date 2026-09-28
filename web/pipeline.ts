@@ -20,12 +20,12 @@ export class SearchPipeline {
   private providers: Map<SearchProviderId, SearchProvider> = new Map();
 
   private constructor() {
-    this.register(new AntigravitySearchProvider());
     this.register(new BraveSearchProvider());
     this.register(new TavilySearchProvider());
+    this.register(new AntigravitySearchProvider());
+    this.register(new TinyFishSearchProvider());
     this.register(new ExaSearchProvider());
     this.register(new ParallelSearchProvider());
-    this.register(new TinyFishSearchProvider());
   }
 
   public static getInstance(): SearchPipeline {
@@ -68,17 +68,17 @@ export class SearchPipeline {
     const antigravity = this.providers.get("antigravity");
     if (antigravity && (await antigravity.isAvailable())) candidates.push(antigravity);
 
-    // 4. Exa (neural search with API key or MCP)
+    // 4. TinyFish (agent web search, if API key present)
+    const tinyfish = this.providers.get("tinyfish");
+    if (tinyfish && (await tinyfish.isAvailable())) candidates.push(tinyfish);
+
+    // 5. Exa (neural search with API key or MCP)
     const exa = this.providers.get("exa");
     if (exa && (await exa.isAvailable())) candidates.push(exa);
 
-    // 5. Parallel (search with API key or MCP)
+    // 6. Parallel (search with API key or MCP)
     const parallel = this.providers.get("parallel");
     if (parallel && (await parallel.isAvailable())) candidates.push(parallel);
-
-    // 6. TinyFish (agent web search, if API key present)
-    const tinyfish = this.providers.get("tinyfish");
-    if (tinyfish && (await tinyfish.isAvailable())) candidates.push(tinyfish);
 
     return candidates;
   }
@@ -93,7 +93,7 @@ export class SearchPipeline {
     const candidates = await this.getCandidates(params.provider);
     if (candidates.length === 0) {
       throw new Error(
-        "No web search provider is currently available. Configure an API key (/login brave, /login tavily, /login exa, /login parallel, /login tinyfish) or Google Antigravity account."
+        "No web search provider is currently available. Configure an API key (/login brave, /login tavily, /login tinyfish, /login exa, /login parallel) or Google Antigravity account."
       );
     }
 
