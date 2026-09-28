@@ -10,7 +10,7 @@ import { parseSearchQuery } from "../query.js";
 import type { SearchParams, SearchResponse, SearchSource } from "../types.js";
 import { SearchProvider } from "./base.js";
 
-const PARALLEL_SEARCH_URL = "https://search.parallel.ai/v1beta/search";
+const PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1beta/search";
 const PARALLEL_MCP_URL = "https://search.parallel.ai/mcp";
 const PARALLEL_BETA_HEADER = "search-extract-2025-02-10";
 
@@ -88,7 +88,7 @@ export class ParallelSearchProvider extends SearchProvider {
     }
 
     const data: any = await response.json();
-    const rawResults = data?.results || [];
+    const rawResults = (data?.results || []).slice(0, limit);
 
     const sources: SearchSource[] = [];
     for (const item of rawResults) {
@@ -97,7 +97,7 @@ export class ParallelSearchProvider extends SearchProvider {
           title: item.title,
           url: item.url,
           snippet: item.excerpts?.[0] || item.snippet || item.text,
-          publishedDate: item.published_date,
+          publishedDate: item.publish_date || item.published_date,
         });
       }
     }
