@@ -75,16 +75,19 @@ export async function collectUsageReports(
   const hyperAccounts = store.list("hyper");
 
   // 1. Google Antigravity multi-account fetch in parallel
+  const isAntigravityActive = options?.currentProvider === "google-antigravity";
   const antigravityPromises: Promise<ProviderUsageReport>[] = [];
   if (antigravityAccounts.length > 0) {
-    const sessionAccount = balancer.getSessionAccount(
-      "google-antigravity",
-      options?.sessionId,
-      options?.currentModelId
-    );
+    const sessionAccount = isAntigravityActive
+      ? balancer.getSessionAccount(
+          "google-antigravity",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
     for (const acc of antigravityAccounts) {
       if (signal?.aborted) break;
-      const isSession = sessionAccount?.id === acc.id;
+      const isSession = isAntigravityActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const cooldownTag = isCooldown ? ` [COOLDOWN ~${mins}m]` : "";
@@ -139,7 +142,7 @@ export async function collectUsageReports(
             antigravity.email,
             signal
           );
-          report.isSessionAccount = true;
+          report.isSessionAccount = isAntigravityActive;
           return report;
         })()
       );
@@ -147,16 +150,19 @@ export async function collectUsageReports(
   }
 
   // 2. OpenAI Codex multi-account fetch in parallel
+  const isCodexActive = options?.currentProvider === "openai-codex";
   const codexPromises: Promise<ProviderUsageReport>[] = [];
   if (codexAccounts.length > 0) {
-    const sessionAccount = balancer.getSessionAccount(
-      "openai-codex",
-      options?.sessionId,
-      options?.currentModelId
-    );
+    const sessionAccount = isCodexActive
+      ? balancer.getSessionAccount(
+          "openai-codex",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
     for (const acc of codexAccounts) {
       if (signal?.aborted) break;
-      const isSession = sessionAccount?.id === acc.id;
+      const isSession = isCodexActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const cooldownTag = isCooldown ? ` [COOLDOWN ~${mins}m]` : "";
@@ -207,7 +213,7 @@ export async function collectUsageReports(
             refreshToken: codex.refresh,
             signal,
           });
-          report.isSessionAccount = true;
+          report.isSessionAccount = isCodexActive;
           return report;
         })()
       );
@@ -215,16 +221,19 @@ export async function collectUsageReports(
   }
 
   // 3. Charm Hyper multi-account fetch in parallel
+  const isHyperActive = options?.currentProvider === "hyper";
   const hyperPromises: Promise<ProviderUsageReport>[] = [];
   if (hyperAccounts.length > 0) {
-    const sessionAccount = balancer.getSessionAccount(
-      "hyper",
-      options?.sessionId,
-      options?.currentModelId
-    );
+    const sessionAccount = isHyperActive
+      ? balancer.getSessionAccount(
+          "hyper",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
     for (const acc of hyperAccounts) {
       if (signal?.aborted) break;
-      const isSession = sessionAccount?.id === acc.id;
+      const isSession = isHyperActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const cooldownTag = isCooldown ? ` [COOLDOWN ~${mins}m]` : "";
@@ -273,7 +282,7 @@ export async function collectUsageReports(
             hyperAuth?.email || "default",
             signal
           );
-          report.isSessionAccount = true;
+          report.isSessionAccount = isHyperActive;
           return report;
         })()
       );

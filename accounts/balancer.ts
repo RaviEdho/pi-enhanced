@@ -15,7 +15,20 @@ const EXPIRY_BUFFER_MS = 5 * 60 * 1000; // Refresh if within 5 minutes of expiri
  * Checks if an account is eligible to serve a requested model.
  */
 export function isAccountEligibleForModel(account: AccountCredential, modelId?: string): boolean {
-  if (account.provider !== "openai-codex" || !modelId) {
+  if (!modelId) {
+    return true;
+  }
+
+  // If modelId contains a provider prefix (e.g. "google-antigravity/gemini-2.5-flash")
+  // ensure it matches this account's provider.
+  if (modelId.includes("/")) {
+    const [modelProvider] = modelId.split("/");
+    if (modelProvider && modelProvider !== account.provider) {
+      return false;
+    }
+  }
+
+  if (account.provider !== "openai-codex") {
     return true;
   }
 
