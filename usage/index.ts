@@ -399,7 +399,10 @@ async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
           container.addChild(new Text("", 0, 0));
           container.addChild(new Text(theme.fg("dim", "  Press Enter, Esc, or q to close"), 1, 0));
         } else {
-          const formatted = formatUsageText(reports, { sessionInfo });
+          const formatted = formatUsageText(reports, {
+            sessionInfo,
+            availableWidth: Math.max(40, width - 4),
+          });
           for (const line of formatted.split("\n")) {
             container.addChild(new Text(`  ${line}`, 0, 0));
           }
@@ -451,7 +454,10 @@ export function registerUsageCommand(pi: ExtensionAPI): void {
             console.log("No active provider accounts found to report usage for.");
             return;
           }
-          const text = formatUsageText(result.reports, { sessionInfo: result.sessionInfo });
+          const text = formatUsageText(result.reports, {
+            sessionInfo: result.sessionInfo,
+            availableWidth: process.stdout.columns || 100,
+          });
           console.log(text);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
