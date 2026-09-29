@@ -120,6 +120,7 @@ export class AccountBalancer {
 
   /**
    * Records that a session is using a specific account for a provider.
+   * Persists to disk via AccountStore so affinity survives /reload and restarts.
    */
   public recordSessionBinding(sessionId: string, provider: string, accountId: string): void {
     if (!sessionId) return;
@@ -129,6 +130,27 @@ export class AccountBalancer {
       this.sessionBindings.set(sessionId, providerMap);
     }
     providerMap.set(provider, accountId);
+    this.store.setSessionBinding(sessionId, provider, accountId);
+  }
+
+  /**
+   * Resolves the bound account ID for a session and provider (in-memory or persisted).
+   */
+  public getBoundAccountId(sessionId?: string, provider?: string): string | undefined {
+    if (!sessionId || !provider) return undefined;
+    const inMemory = this.sessionBindings.get(sessionId)?.get(provider);
+    if (inMemory) return inMemory;
+    const persisted = this.store.getSessionBinding(sessionId, provider);
+    if (persisted) {
+      let providerMap = this.sessionBindings.get(sessionId);
+      if (!providerMap) {
+        providerMap = new Map();
+        this.sessionBindings.set(sessionId, providerMap);
+      }
+      providerMap.set(provider, persisted);
+      return persisted;
+    }
+    return undefined;
   }
 
   /**
@@ -154,7 +176,7 @@ export class AccountBalancer {
     const available = evaluated.filter((e) => !e.health.isExhausted);
 
     if (sessionId) {
-      const boundId = this.sessionBindings.get(sessionId)?.get(provider);
+      const boundId = this.getBoundAccountId(sessionId, provider);
       if (boundId) {
         const match = (available.length > 0 ? available : evaluated).find(
           (e) => e.account.id === boundId
@@ -163,6 +185,7 @@ export class AccountBalancer {
       }
     }
 
+    let chosen: AccountCredential;
     if (available.length > 0) {
       available.sort((a, b) => {
         // Prioritize unstarted accounts (0 usage, 0 timer elapsed) so their reset cycle begins
@@ -170,11 +193,16 @@ export class AccountBalancer {
         if (!a.health.isUnstarted && b.health.isUnstarted) return 1;
         return a.health.weight - b.health.weight;
       });
-      return available[0].account;
+      chosen = available[0].account;
+    } else {
+      evaluated.sort((a, b) => (a.health.resetTimeMs || 0) - (b.health.resetTimeMs || 0));
+      chosen = evaluated[0].account;
     }
 
-    evaluated.sort((a, b) => (a.health.resetTimeMs || 0) - (b.health.resetTimeMs || 0));
-    return evaluated[0].account;
+    if (sessionId && chosen) {
+      this.recordSessionBinding(sessionId, provider, chosen.id);
+    }
+    return chosen;
   }
 
   /**
@@ -373,7 +401,7 @@ export class AccountBalancer {
     // Check if session already has a bound account that remains healthy and eligible
     let sessionBoundAccount: AccountCredential | undefined;
     if (sessionId) {
-      const boundId = this.sessionBindings.get(sessionId)?.get(provider);
+      const boundId = this.getBoundAccountId(sessionId, provider);
       if (boundId) {
         const match = available.find((e) => e.account.id === boundId);
         if (match) {

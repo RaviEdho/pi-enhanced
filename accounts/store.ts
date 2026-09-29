@@ -24,6 +24,7 @@ export class AccountStore {
       version: STORE_VERSION,
       activeAccounts: {},
       accounts: [],
+      sessionBindings: {},
     };
     this.load();
     this.autoImportFromSources();
@@ -94,10 +95,16 @@ export class AccountStore {
           (a) => a && typeof a === "object" && SUPPORTED_PROVIDERS.has(a.provider)
         );
 
+        const loadedBindings =
+          parsed.sessionBindings && typeof parsed.sessionBindings === "object"
+            ? (parsed.sessionBindings as Record<string, Record<string, string>>)
+            : {};
+
         this.data = {
           version: parsed.version || STORE_VERSION,
           activeAccounts: parsed.activeAccounts || {},
           accounts: loadedAccounts,
+          sessionBindings: loadedBindings,
         };
 
         for (const acc of this.data.accounts) {
@@ -589,8 +596,73 @@ export class AccountStore {
         delete this.data.activeAccounts[removed.provider];
       }
     }
+    // Clean up any session bindings pointing to the removed account
+    if (this.data.sessionBindings) {
+      for (const [sessionId, provMap] of Object.entries(this.data.sessionBindings)) {
+        if (provMap[removed.provider] === id) {
+          delete provMap[removed.provider];
+          if (Object.keys(provMap).length === 0) {
+            delete this.data.sessionBindings[sessionId];
+          }
+        }
+      }
+    }
     this.save();
     return true;
+  }
+
+  /**
+   * Retrieves the bound account ID for a given session and provider from disk.
+   */
+  public getSessionBinding(sessionId: string, provider: string): string | undefined {
+    if (!sessionId || !provider) return undefined;
+    return this.data.sessionBindings?.[sessionId]?.[provider];
+  }
+
+  /**
+   * Persists a session-to-account binding to disk.
+   * Keeps the session store bounded (capped to the 50 most recent sessions).
+   */
+  public setSessionBinding(sessionId: string, provider: string, accountId: string): void {
+    if (!sessionId || !provider || !accountId) return;
+    if (!this.data.sessionBindings) {
+      this.data.sessionBindings = {};
+    }
+    let sessionMap = this.data.sessionBindings[sessionId];
+    if (!sessionMap) {
+      sessionMap = {};
+      this.data.sessionBindings[sessionId] = sessionMap;
+    }
+    if (sessionMap[provider] !== accountId) {
+      sessionMap[provider] = accountId;
+
+      // Cap stored sessions to 50 most recent to prevent indefinite growth
+      const sessionKeys = Object.keys(this.data.sessionBindings);
+      if (sessionKeys.length > 50) {
+        const excess = sessionKeys.slice(0, sessionKeys.length - 50);
+        for (const k of excess) {
+          delete this.data.sessionBindings[k];
+        }
+      }
+
+      this.save();
+    }
+  }
+
+  /**
+   * Clears a session binding when explicitly needed.
+   */
+  public removeSessionBinding(sessionId: string, provider?: string): void {
+    if (!sessionId || !this.data.sessionBindings?.[sessionId]) return;
+    if (provider) {
+      delete this.data.sessionBindings[sessionId][provider];
+      if (Object.keys(this.data.sessionBindings[sessionId]).length === 0) {
+        delete this.data.sessionBindings[sessionId];
+      }
+    } else {
+      delete this.data.sessionBindings[sessionId];
+    }
+    this.save();
   }
 
   /**

@@ -24,6 +24,7 @@ export interface AccountStoreData {
   version: number;
   activeAccounts: Record<string, string>; // provider -> accountId
   accounts: AccountCredential[];
+  sessionBindings?: Record<string, Record<string, string>>; // sessionId -> (provider -> accountId)
 }
 
 export interface ResolvedAccountAuth {
