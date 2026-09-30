@@ -19,7 +19,8 @@ export function formatRelativeTime(isoString?: string, now = Date.now()): string
 
 /**
  * Computes the fraction of time elapsed in the current rate limit window (0.0 to 1.0).
- * For unused buckets (usedFraction === 0), the timer has not started ticking, so 0.0 is returned.
+ * Returns undefined for unused buckets (usedFraction <= 0) since their timer has not
+ * started ticking yet — this suppresses the reset-cycle marker (┃) in progress bars.
  */
 export function computeTimeElapsedFraction(
   resetTimeIso?: string,
@@ -28,7 +29,7 @@ export function computeTimeElapsedFraction(
   usedFraction?: number
 ): number | undefined {
   if (!resetTimeIso || !windowSeconds || windowSeconds <= 0) return undefined;
-  if (usedFraction !== undefined && usedFraction <= 0) return 0.0;
+  if (usedFraction !== undefined && usedFraction <= 0) return undefined;
 
   const resetMs = new Date(resetTimeIso).getTime();
   if (Number.isNaN(resetMs)) return undefined;
@@ -233,11 +234,13 @@ export function formatUsageText(
       for (const group of bucketMap.values()) {
         const entry = group.entries[col];
         if (entry) {
-          const reset = entry.bucket.resetTime
-            ? formatRelativeTime(entry.bucket.resetTime, now)
-            : entry.bucket.usedFraction <= 0
+          // Unused buckets have not started their window yet, so show "ready" instead of a countdown
+          const reset =
+            entry.bucket.usedFraction <= 0
               ? "ready"
-              : "";
+              : entry.bucket.resetTime
+                ? formatRelativeTime(entry.bucket.resetTime, now)
+                : "";
           const suffix = reset ? `(${reset})` : "";
           maxW = Math.max(maxW, suffix.length);
         }
@@ -275,11 +278,13 @@ export function formatUsageText(
         const bar = makeProgressBar(bucket.usedFraction, singleBarWidth, timeElapsed, colorize);
         const freePct = Math.max(0, 100 - bucket.usedFraction * 100);
         const usedPct = (bucket.usedFraction * 100).toFixed(1);
-        const resetStr = bucket.resetTime
-          ? ` · resets in ${formatRelativeTime(bucket.resetTime, now)}`
-          : bucket.usedFraction <= 0
+        // Unused buckets have not started their window yet, so omit the countdown
+        const resetStr =
+          bucket.usedFraction <= 0
             ? " · ready"
-            : "";
+            : bucket.resetTime
+              ? ` · resets in ${formatRelativeTime(bucket.resetTime, now)}`
+              : "";
         const label = report.accountEmail || report.accountId || "account";
         const styledLabel = active
           ? (colorize ? `\x1b[1m● ${label}\x1b[22m` : `● ${label}`)
@@ -295,11 +300,13 @@ export function formatUsageText(
 
         // Row 1: Account headers side by side
         const headerCols = group.entries.map(({ report, bucket }, colIdx) => {
-          const reset = bucket.resetTime
-            ? formatRelativeTime(bucket.resetTime, now)
-            : bucket.usedFraction <= 0
+          // Unused buckets have not started their window yet, so show "ready" instead of a countdown
+          const reset =
+            bucket.usedFraction <= 0
               ? "ready"
-              : "";
+              : bucket.resetTime
+                ? formatRelativeTime(bucket.resetTime, now)
+                : "";
           const suffix = reset ? `(${reset})` : "";
           const active = report.isSessionAccount;
           const label = (active ? "● " : "") + (report.accountEmail || report.accountId || "account");
