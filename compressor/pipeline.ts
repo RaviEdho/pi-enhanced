@@ -30,9 +30,6 @@ export function runFilterPipeline(
   isError: boolean
 ): FilterResult | null {
   const originalBytes = Buffer.byteLength(rawOutput, "utf8");
-  if (originalBytes < 40) {
-    return null;
-  }
 
   // Phase 1: Pre-clean ANSI codes and carriage returns
   const cleaned = preCleanOutput(rawOutput);
@@ -89,19 +86,14 @@ export function runFilterPipeline(
     }
   }
 
-  if (parsed === null) {
+  // If no parser matched or the output was unchanged, pass through
+  if (parsed === null || parsed.text === rawOutput) {
     return null;
   }
 
   const filteredText = parsed.text;
   const filteredBytes = Buffer.byteLength(filteredText, "utf8");
   const savedBytes = originalBytes - filteredBytes;
-
-  // Only commit filtering if at least 30 bytes or 20% was saved
-  const savingsRatio = savedBytes / originalBytes;
-  if (savedBytes < 30 && savingsRatio < 0.2) {
-    return null;
-  }
 
   return {
     text: filteredText,
