@@ -1,4 +1,6 @@
-export function filterLintCommand(command: string, raw: string, isError: boolean): string | null {
+import type { ParsedOutput, ParserResult } from "../types.js";
+
+export function filterLintCommand(command: string, raw: string, isError: boolean): ParserResult {
   const isLint =
     /\b(tsc|eslint|biome|ruff|oxlint|rubocop|golangci-lint|markdownlint|yamllint|hadolint|sqlfluff)\b/.test(
       command
@@ -25,9 +27,9 @@ export function filterLintCommand(command: string, raw: string, isError: boolean
   return filterGenericLinter(raw, isError);
 }
 
-function filterTsc(raw: string, isError: boolean): string {
+function filterTsc(raw: string, isError: boolean): ParsedOutput {
   if (!isError && raw.trim().length === 0) {
-    return "ok tsc: no errors";
+    return { text: "ok tsc: no errors", lossy: false };
   }
 
   const lines = raw.split("\n");
@@ -45,22 +47,23 @@ function filterTsc(raw: string, isError: boolean): string {
   }
 
   if (errors.length > 0) {
+    const isLossy = errors.length > 35;
     const out = errors.slice(0, 35);
-    if (errors.length > 35) {
+    if (isLossy) {
       out.push(`... and ${errors.length - 35} more TypeScript errors`);
     }
     if (summaryLine) {
       out.push(`\n${summaryLine}`);
     }
-    return out.join("\n");
+    return { text: out.join("\n"), lossy: isLossy };
   }
 
-  return raw;
+  return { text: raw, lossy: false };
 }
 
-function filterJsLinters(raw: string, isError: boolean): string {
+function filterJsLinters(raw: string, isError: boolean): ParsedOutput {
   if (!isError && (raw.trim().length === 0 || raw.includes("0 errors"))) {
-    return "ok lint: no errors";
+    return { text: "ok lint: no errors", lossy: false };
   }
 
   const lines = raw.split("\n");
@@ -82,56 +85,58 @@ function filterJsLinters(raw: string, isError: boolean): string {
   }
 
   if (findings.length > 0) {
+    const isLossy = findings.length > 30;
     const out = findings.slice(0, 30);
+    if (isLossy) {
+      out.push(`... and ${findings.length - 30} more lint findings`);
+    }
     if (summary) {
       out.push(`\n${summary}`);
     }
-    return out.join("\n");
+    return { text: out.join("\n"), lossy: isLossy };
   }
 
-  return raw;
+  return { text: raw, lossy: false };
 }
 
-function filterRuff(raw: string, isError: boolean): string {
+function filterRuff(raw: string, isError: boolean): ParsedOutput {
   if (!isError && (raw.trim().length === 0 || raw.includes("All checks passed"))) {
-    return "ok ruff: all checks passed";
+    return { text: "ok ruff: all checks passed", lossy: false };
   }
 
   const lines = raw.split("\n");
-  const issues: string[] = [];
-  let summary = "";
-
-  for (const line of lines) {
+  const findings = lines.filter((line) => {
     const trimmed = line.trim();
-    if (trimmed.startsWith("Found ") && trimmed.includes("error")) {
-      summary = trimmed;
-    } else if (/:[0-9]+:[0-9]+:\s+[A-Z0-9]+/.test(trimmed)) {
-      issues.push(trimmed);
-    }
-  }
-
-  if (issues.length > 0) {
-    const out = issues.slice(0, 30);
-    if (summary) out.push(`\n${summary}`);
-    return out.join("\n");
-  }
-
-  return raw;
-}
-
-function filterGenericLinter(raw: string, isError: boolean): string {
-  if (!isError && raw.trim().length === 0) {
-    return "ok: no lint errors";
-  }
-
-  const lines = raw.split("\n");
-  // Keep lines that have file references (containing `:` or `error`)
-  const kept = lines.filter((line) => {
-    const t = line.trim();
-    if (t.length === 0) return false;
-    if (/^[│^~\\/|\-_=]+$/.test(t)) return false;
-    return true;
+    return /^[^\s]+:\d+:\d+:\s+[A-Z0-9]+/.test(trimmed);
   });
 
-  return kept.length > 0 ? kept.slice(0, 40).join("\n") : raw;
+  if (findings.length > 0) {
+    const isLossy = findings.length > 30;
+    const out = findings.slice(0, 30);
+    if (isLossy) {
+      out.push(`... and ${findings.length - 30} more ruff findings`);
+    }
+    return { text: out.join("\n"), lossy: isLossy };
+  }
+
+  return { text: raw, lossy: false };
+}
+
+function filterGenericLinter(raw: string, isError: boolean): ParsedOutput {
+  const lines = raw.split("\n");
+  const findings = lines.filter((l) => {
+    const trimmed = l.trim();
+    return /\b(error|warning|err|warn)\b/i.test(trimmed) && !trimmed.startsWith("hint:");
+  });
+
+  if (findings.length > 0) {
+    const isLossy = findings.length > 30;
+    const out = findings.slice(0, 30);
+    if (isLossy) {
+      out.push(`... and ${findings.length - 30} more errors/warnings`);
+    }
+    return { text: out.join("\n"), lossy: isLossy };
+  }
+
+  return { text: raw, lossy: false };
 }

@@ -1,4 +1,6 @@
-export function filterTestCommand(command: string, raw: string, isError: boolean): string | null {
+import type { ParsedOutput, ParserResult } from "../types.js";
+
+export function filterTestCommand(command: string, raw: string, isError: boolean): ParserResult {
   const isTestRunner =
     /\b(vitest|jest|pytest|cargo\s+test|go\s+test|npm\s+test|bun\s+test|pnpm\s+test|yarn\s+test|deno\s+test|rake\s+test|rspec)\b/.test(
       command
@@ -27,7 +29,7 @@ export function filterTestCommand(command: string, raw: string, isError: boolean
   return filterJsTest(lines, isError);
 }
 
-function filterCargoTest(lines: string[], isError: boolean): string {
+function filterCargoTest(lines: string[], isError: boolean): ParsedOutput {
   const failedTests: string[] = [];
   let summaryLine = "";
   let inFailuresSection = false;
@@ -50,7 +52,10 @@ function filterCargoTest(lines: string[], isError: boolean): string {
   }
 
   if (!isError && !summaryLine.includes("FAILED") && failedTests.length === 0) {
-    return summaryLine ? `✓ cargo test: ${summaryLine}` : "✓ cargo test: all passed";
+    return {
+      text: summaryLine ? `✓ cargo test: ${summaryLine}` : "✓ cargo test: all passed",
+      lossy: false,
+    };
   }
 
   const out: string[] = [];
@@ -58,18 +63,28 @@ function filterCargoTest(lines: string[], isError: boolean): string {
     out.push("FAILED TESTS:");
     out.push(...failedTests);
   }
+  let isLossy = false;
   if (failureDetails.length > 0) {
     out.push("\nDETAILS:");
-    out.push(...failureDetails.slice(0, 40));
+    if (failureDetails.length > 40) {
+      isLossy = true;
+      out.push(...failureDetails.slice(0, 40));
+      out.push(`... [${failureDetails.length - 40} failure lines omitted]`);
+    } else {
+      out.push(...failureDetails);
+    }
   }
   if (summaryLine) {
     out.push(`\n${summaryLine}`);
   }
 
-  return out.length > 0 ? out.join("\n") : lines.slice(-20).join("\n");
+  return {
+    text: out.length > 0 ? out.join("\n") : lines.slice(-20).join("\n"),
+    lossy: isLossy,
+  };
 }
 
-function filterGoTest(lines: string[], isError: boolean): string {
+function filterGoTest(lines: string[], isError: boolean): ParsedOutput {
   const failedRuns: string[] = [];
   let finalStatus = "";
 
@@ -83,20 +98,35 @@ function filterGoTest(lines: string[], isError: boolean): string {
   }
 
   if (!isError && failedRuns.length === 0) {
-    return "✓ go test: PASS (all packages passed)";
+    return {
+      text: "✓ go test: PASS (all packages passed)",
+      lossy: false,
+    };
   }
 
-  return [...failedRuns.slice(0, 30), finalStatus ? `\nStatus: ${finalStatus}` : ""].join("\n");
+  const isLossy = failedRuns.length > 30;
+  const kept = failedRuns.slice(0, 30);
+  if (isLossy) {
+    kept.push(`... [${failedRuns.length - 30} failed package lines omitted]`);
+  }
+  if (finalStatus) {
+    kept.push(`\nStatus: ${finalStatus}`);
+  }
+
+  return {
+    text: kept.join("\n"),
+    lossy: isLossy,
+  };
 }
 
-function filterPytest(lines: string[], isError: boolean): string {
+function filterPytest(lines: string[], isError: boolean): ParsedOutput {
   const failureBlocks: string[] = [];
   let summaryLine = "";
   let inFailure = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith("=" ) && (trimmed.includes("passed") || trimmed.includes("failed"))) {
+    if (trimmed.startsWith("=") && (trimmed.includes("passed") || trimmed.includes("failed"))) {
       summaryLine = trimmed;
     } else if (trimmed.startsWith("FAILED ") || trimmed.startsWith("ERROR ")) {
       failureBlocks.push(line);
@@ -104,7 +134,7 @@ function filterPytest(lines: string[], isError: boolean): string {
       inFailure = true;
       failureBlocks.push(line);
     } else if (inFailure) {
-      if (trimmed.startsWith("=" ) && trimmed.endsWith("=" )) {
+      if (trimmed.startsWith("=") && trimmed.endsWith("=")) {
         inFailure = false;
       } else {
         failureBlocks.push(line);
@@ -113,21 +143,31 @@ function filterPytest(lines: string[], isError: boolean): string {
   }
 
   if (!isError && failureBlocks.length === 0 && summaryLine && !summaryLine.includes("failed")) {
-    return `✓ pytest: ${summaryLine}`;
+    return {
+      text: `✓ pytest: ${summaryLine}`,
+      lossy: false,
+    };
   }
 
+  const isLossy = failureBlocks.length > 60;
   const result: string[] = [];
   if (failureBlocks.length > 0) {
     result.push(...failureBlocks.slice(0, 60));
+    if (isLossy) {
+      result.push(`... [${failureBlocks.length - 60} failure lines omitted]`);
+    }
   }
   if (summaryLine) {
     result.push(`\n${summaryLine}`);
   }
 
-  return result.length > 0 ? result.join("\n") : lines.slice(-25).join("\n");
+  return {
+    text: result.length > 0 ? result.join("\n") : lines.slice(-25).join("\n"),
+    lossy: isLossy,
+  };
 }
 
-function filterJsTest(lines: string[], isError: boolean): string {
+function filterJsTest(lines: string[], isError: boolean): ParsedOutput {
   const failedBlocks: string[] = [];
   let summaryLine = "";
   let inFailure = false;
@@ -139,7 +179,7 @@ function filterJsTest(lines: string[], isError: boolean): string {
     if (
       trimmed.startsWith("Tests:") ||
       trimmed.startsWith("Test Suites:") ||
-      trimmed.includes("passed") && trimmed.includes("tests")
+      (trimmed.includes("passed") && trimmed.includes("tests"))
     ) {
       summaryLine = trimmed;
     }
@@ -173,19 +213,32 @@ function filterJsTest(lines: string[], isError: boolean): string {
     }
   }
 
-  // All tests passed
+  // All tests passed (lossless summarization)
   if (!isError && failedBlocks.length === 0 && summaryLine && !summaryLine.includes("failed")) {
-    return `✓ All tests passed: ${summaryLine}`;
+    return {
+      text: `✓ All tests passed: ${summaryLine}`,
+      lossy: false,
+    };
   }
 
   // Failures occurred
   if (failedBlocks.length > 0) {
+    const isLossy = failedBlocks.length > 50;
     const output = [...failedBlocks.slice(0, 50)];
+    if (isLossy) {
+      output.push(`... [${failedBlocks.length - 50} failure lines omitted]`);
+    }
     if (summaryLine) {
       output.push(`\n${summaryLine}`);
     }
-    return output.join("\n");
+    return {
+      text: output.join("\n"),
+      lossy: isLossy,
+    };
   }
 
-  return lines.slice(-25).join("\n");
+  return {
+    text: lines.slice(-25).join("\n"),
+    lossy: lines.length > 25,
+  };
 }

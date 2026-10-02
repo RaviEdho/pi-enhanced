@@ -1,4 +1,6 @@
-export function filterSystemCommand(command: string, raw: string, isError: boolean): string | null {
+import type { ParsedOutput, ParserResult } from "../types.js";
+
+export function filterSystemCommand(command: string, raw: string, isError: boolean): ParserResult {
   if (isError) return null;
 
   // curl / wget
@@ -19,7 +21,7 @@ export function filterSystemCommand(command: string, raw: string, isError: boole
   return null;
 }
 
-function filterDownloadCommand(raw: string): string {
+function filterDownloadCommand(raw: string): ParsedOutput {
   const lines = raw.split("\n");
   // Filter out download progress meters and percentages
   const filtered = lines.filter((line) => {
@@ -29,23 +31,26 @@ function filterDownloadCommand(raw: string): string {
     return true;
   });
 
-  return filtered.join("\n").trim();
+  return { text: filtered.join("\n").trim(), lossy: false };
 }
 
-function filterFileListing(command: string, raw: string): string {
+function filterFileListing(command: string, raw: string): ParsedOutput {
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-  if (lines.length <= 40) return raw;
+  if (lines.length <= 40) return { text: raw, lossy: false };
 
   // If huge output (> 40 items), show first 30 and summarize the rest
   const head = lines.slice(0, 30);
   const remaining = lines.length - 30;
-  return [...head, `... and ${remaining} more items (total ${lines.length})`].join("\n");
+  return {
+    text: [...head, `... and ${remaining} more items (total ${lines.length})`].join("\n"),
+    lossy: true,
+  };
 }
 
-function filterDockerPs(raw: string): string {
+function filterDockerPs(raw: string): ParsedOutput {
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
   if (lines.length <= 1) {
-    return "No running containers";
+    return { text: "No running containers", lossy: false };
   }
 
   // Keep first line (header) and up to 15 containers
@@ -58,9 +63,10 @@ function filterDockerPs(raw: string): string {
     summary.push(normalized);
   }
 
-  if (lines.length > 16) {
+  const isLossy = lines.length > 16;
+  if (isLossy) {
     summary.push(`... and ${lines.length - 16} more containers`);
   }
 
-  return summary.join("\n");
+  return { text: summary.join("\n"), lossy: isLossy };
 }

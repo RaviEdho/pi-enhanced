@@ -41,11 +41,16 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
       // Record savings in tracker
       tracker.record(command, result.filterName, result.originalBytes, result.filteredBytes);
 
-      // Save raw output in recall store if significant reduction occurred
+      // Save raw output in recall store.
+      // ONLY attach /recall hint to LLM context when the compression is LOSSY (content truncated/omitted).
+      // For lossless operations, quietly cache in memory (if > 150B) so user can still manually inspect,
+      // but never pollute the model prompt with recall noise.
       let recallHint = "";
-      if (result.savedBytes > 150) {
+      if (result.lossy) {
         const recallId = recallStore.save(command, rawText, result.text, result.savedBytes);
         recallHint = `\n[full output: /recall ${recallId}]`;
+      } else if (result.savedBytes > 150) {
+        recallStore.save(command, rawText, result.text, result.savedBytes);
       }
 
       // Return compressed content back to Pi

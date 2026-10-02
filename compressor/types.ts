@@ -4,7 +4,16 @@ export interface FilterResult {
   filteredBytes: number;
   savedBytes: number;
   filterName: string;
+  lossy: boolean;
 }
+
+export interface ParsedOutput {
+  text: string;
+  lossy?: boolean;
+}
+
+export type ParserResult = string | ParsedOutput | null;
+
 
 export interface RecallEntry {
   id: string;

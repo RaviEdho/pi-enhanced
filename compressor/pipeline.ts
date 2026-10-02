@@ -8,7 +8,18 @@ import {
   collapseEmptyLines,
   preCleanOutput,
 } from "./sanitizer.js";
-import type { DeclarativeRule, FilterResult } from "./types.js";
+import type { DeclarativeRule, FilterResult, ParserResult } from "./types.js";
+
+/**
+ * Normalizes parser output into a uniform text and lossy flag.
+ */
+function normalizeParserResult(res: ParserResult): { text: string; lossy: boolean } | null {
+  if (res === null) return null;
+  if (typeof res === "string") {
+    return { text: res, lossy: false };
+  }
+  return { text: res.text, lossy: res.lossy ?? false };
+}
 
 /**
  * Runs the complete output-reduction pipeline on a command's raw output.
@@ -26,41 +37,41 @@ export function runFilterPipeline(
   // Phase 1: Pre-clean ANSI codes and carriage returns
   const cleaned = preCleanOutput(rawOutput);
 
-  let filteredText: string | null = null;
+  let parsed: { text: string; lossy: boolean } | null = null;
   let filterName = "generic";
 
   // Phase 2: Specialized ecosystem parsers
-  filteredText = filterGitCommand(command, cleaned, isError);
-  if (filteredText !== null) {
+  parsed = normalizeParserResult(filterGitCommand(command, cleaned, isError));
+  if (parsed !== null) {
     filterName = "git";
   }
 
-  if (filteredText === null) {
-    filteredText = filterTestCommand(command, cleaned, isError);
-    if (filteredText !== null) {
+  if (parsed === null) {
+    parsed = normalizeParserResult(filterTestCommand(command, cleaned, isError));
+    if (parsed !== null) {
       filterName = "test";
     }
   }
 
-  if (filteredText === null) {
-    filteredText = filterLintCommand(command, cleaned, isError);
-    if (filteredText !== null) {
+  if (parsed === null) {
+    parsed = normalizeParserResult(filterLintCommand(command, cleaned, isError));
+    if (parsed !== null) {
       filterName = "lint";
     }
   }
 
-  if (filteredText === null) {
-    filteredText = filterSystemCommand(command, cleaned, isError);
-    if (filteredText !== null) {
+  if (parsed === null) {
+    parsed = normalizeParserResult(filterSystemCommand(command, cleaned, isError));
+    if (parsed !== null) {
       filterName = "system";
     }
   }
 
   // Phase 3: Declarative rules table
-  if (filteredText === null) {
+  if (parsed === null) {
     for (const rule of DECLARATIVE_RULES) {
       if (rule.matchCommand.test(command)) {
-        filteredText = applyDeclarativeRule(rule, cleaned);
+        parsed = applyDeclarativeRule(rule, cleaned);
         filterName = rule.name;
         break;
       }
@@ -68,20 +79,21 @@ export function runFilterPipeline(
   }
 
   // Phase 4: Fallback generic deduplication
-  if (filteredText === null) {
+  if (parsed === null) {
     const lines = cleaned.split("\n");
     const deduped = collapseConsecutiveDuplicates(lines);
     const compacted = collapseEmptyLines(deduped);
     if (compacted.length < lines.length) {
-      filteredText = compacted.join("\n");
+      parsed = { text: compacted.join("\n"), lossy: false };
       filterName = "dedup";
     }
   }
 
-  if (filteredText === null) {
+  if (parsed === null) {
     return null;
   }
 
+  const filteredText = parsed.text;
   const filteredBytes = Buffer.byteLength(filteredText, "utf8");
   const savedBytes = originalBytes - filteredBytes;
 
@@ -97,11 +109,13 @@ export function runFilterPipeline(
     filteredBytes,
     savedBytes,
     filterName,
+    lossy: parsed.lossy,
   };
 }
 
-function applyDeclarativeRule(rule: DeclarativeRule, text: string): string {
+function applyDeclarativeRule(rule: DeclarativeRule, text: string): { text: string; lossy: boolean } {
   let lines = text.split("\n");
+  let lossy = false;
 
   if (rule.stripLinesMatching) {
     lines = lines.filter((line) => {
@@ -116,6 +130,7 @@ function applyDeclarativeRule(rule: DeclarativeRule, text: string): string {
   }
 
   if (rule.maxLines && lines.length > rule.maxLines) {
+    lossy = true;
     const head = lines.slice(0, rule.maxLines);
     head.push(`... and ${lines.length - rule.maxLines} more lines`);
     lines = head;
@@ -123,8 +138,8 @@ function applyDeclarativeRule(rule: DeclarativeRule, text: string): string {
 
   const result = lines.join("\n").trim();
   if (result.length === 0 && rule.onEmpty) {
-    return rule.onEmpty;
+    return { text: rule.onEmpty, lossy };
   }
 
-  return result;
+  return { text: result, lossy };
 }
