@@ -1,8 +1,11 @@
 import type { Api } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AccountBalancer } from "./accounts/balancer.js";
-import { AccountStore } from "./accounts/store.js";
-import { executeWithMultiAccountFailover } from "./accounts/wrapper.js";
+import {
+  AccountBalancer,
+  AccountStore,
+  executeWithMultiAccountFailover,
+  installLogoutHook,
+} from "./accounts/index.js";
 import {
   ANTIGRAVITY_PRIMARY_ENDPOINT,
   PROVIDER_ID,
@@ -234,4 +237,9 @@ export default async function (pi: ExtensionAPI) {
 
   // Register unified multi-provider web search tool & login providers
   registerWebSearch(pi);
+
+  // Hook into Pi's ModelRuntime.logout to present native account selector on multi-account logout
+  pi.on("session_start", async (_event, ctx) => {
+    installLogoutHook(ctx);
+  });
 }

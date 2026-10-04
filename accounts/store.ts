@@ -492,14 +492,32 @@ export class AccountStore {
     }
 
     // If a supported provider has no credentials in auth.json and no env variable,
-    // it was logged out or never configured: prune its accounts from accounts.json
+    // it was logged out externally or never configured:
     for (const provider of SUPPORTED_PROVIDERS) {
       if (!authProviders.has(provider)) {
-        const countBefore = this.data.accounts.length;
-        this.data.accounts = this.data.accounts.filter((a) => a.provider !== provider);
-        if (this.data.accounts.length !== countBefore) {
+        const activeId = this.data.activeAccounts[provider];
+        if (activeId) {
+          // Only prune the active account that was mirrored into auth.json
+          const index = this.data.accounts.findIndex((a) => a.id === activeId);
+          if (index >= 0) {
+            this.data.accounts.splice(index, 1);
+            modified = true;
+          }
           delete this.data.activeAccounts[provider];
+        }
+        // If there are still accounts remaining in accounts.json for this provider:
+        const remaining = this.data.accounts.filter((a) => a.provider === provider);
+        if (remaining.length > 0) {
+          // Promote the next available account to active
+          this.data.activeAccounts[provider] = remaining[0].id;
+          authProviders.add(provider);
           modified = true;
+        } else {
+          const countBefore = this.data.accounts.length;
+          this.data.accounts = this.data.accounts.filter((a) => a.provider !== provider);
+          if (this.data.accounts.length !== countBefore) {
+            modified = true;
+          }
         }
       }
     }
@@ -581,6 +599,26 @@ export class AccountStore {
   }
 
   /**
+   * Removes a provider's entry from ~/.pi/agent/auth.json.
+   */
+  public removeProviderFromPiAuth(provider: string): void {
+    if (!existsSync(this.piAuthPath)) return;
+    try {
+      const currentAuth = JSON.parse(readFileSync(this.piAuthPath, "utf-8")) || {};
+      if (currentAuth[provider]) {
+        delete currentAuth[provider];
+        writeFileSync(this.piAuthPath, JSON.stringify(currentAuth, null, 2), {
+          encoding: "utf-8",
+          mode: 0o600,
+        });
+        this.lastMtimes.auth = this.getFileMtime(this.piAuthPath);
+      }
+    } catch (err) {
+      console.error(`[AccountStore] Failed to remove ${provider} from auth.json:`, err);
+    }
+  }
+
+  /**
    * Removes an account from the store.
    */
   public remove(id: string): boolean {
@@ -594,6 +632,7 @@ export class AccountStore {
         this.syncActiveToPiAuth(removed.provider);
       } else {
         delete this.data.activeAccounts[removed.provider];
+        this.removeProviderFromPiAuth(removed.provider);
       }
     }
     // Clean up any session bindings pointing to the removed account
@@ -609,6 +648,31 @@ export class AccountStore {
     }
     this.save();
     return true;
+  }
+
+  /**
+   * Removes all accounts for a specific provider.
+   */
+  public removeAllForProvider(provider: string): number {
+    const countBefore = this.data.accounts.length;
+    this.data.accounts = this.data.accounts.filter((a) => a.provider !== provider);
+    const removedCount = countBefore - this.data.accounts.length;
+    delete this.data.activeAccounts[provider];
+    this.removeProviderFromPiAuth(provider);
+
+    if (this.data.sessionBindings) {
+      for (const [sessionId, provMap] of Object.entries(this.data.sessionBindings)) {
+        if (provMap[provider]) {
+          delete provMap[provider];
+          if (Object.keys(provMap).length === 0) {
+            delete this.data.sessionBindings[sessionId];
+          }
+        }
+      }
+    }
+
+    this.save();
+    return removedCount;
   }
 
   /**
