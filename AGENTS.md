@@ -162,6 +162,12 @@ pi-for-raviedho/
      - **Edge Cases & Gaps**: Missing endpoints (e.g. token counting, webhooks), parameter validation quirks, or platform-specific constraints.
    - Present the audit report and obtain user confirmation before starting implementation.
 
+7. **Native UI Harmony & Minimal Surface Area**:
+   - Always match Pi's native interaction model, visual language, and keyboard conventions.
+   - Do **not** inject synthetic pseudo-options such as `[ Cancel ]`, `[ Back ]`, or `← Back` into selector lists (`ctx.ui.select`); Pi's native TUI components inherently use `Esc` for cancellation and dismissal.
+   - Touch as minimal a surface area of the host application as possible. Avoid replacing core components (e.g. replacing the primary editor or recreating entire host dialogs) when a targeted hook, lightweight lifecycle event, or native dialog invocation (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.notify`) achieves the same behavior.
+   - Multi-account flows (e.g. account selection during `/logout`) must look and feel like native Pi sub-selectors with standard formatting (e.g. `(active)`, clean identity labels) rather than bespoke custom dashboards.
+
 ---
 
 ## Testing Workflow
