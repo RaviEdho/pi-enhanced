@@ -227,14 +227,19 @@ export async function loginAntigravity(
     // If local server cannot bind (e.g. port taken), rely on onPrompt fallback
   }
 
-  callbacks.onAuth({ url: authUrl });
+  callbacks.onAuth({
+    url: authUrl,
+    instructions: "A browser window should open. Complete login to finish.",
+  });
 
   // Dual wait: browser redirect callback or user prompt paste
-  const promptPromise = callbacks
-    .onPrompt({
-      message: "Complete sign-in in browser, or paste the callback URL / code here:",
-    })
-    .then((input) => {
+  const promptPromise = (
+    callbacks.onPrompt({
+      type: "manual_code",
+      message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
+      placeholder: REDIRECT_URI,
+    } as any)
+  ).then((input: string) => {
       const trimmed = input.trim();
       if (trimmed.includes("code=")) {
         try {

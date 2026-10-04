@@ -178,13 +178,6 @@ export async function loginHyper(callbacks: OAuthLoginCallbacks): Promise<OAuthC
     expiresInSeconds: deviceAuth.expires_in,
   });
 
-  callbacks.onAuth?.({
-    url: deviceAuth.verification_url,
-    instructions: `Confirm code: ${deviceAuth.user_code}`,
-  });
-
-  callbacks.onProgress?.(`Waiting for confirmation on ${deviceAuth.verification_url} (Code: ${deviceAuth.user_code})...`);
-
   const pollResult = await pollDeviceAuth(deviceAuth, callbacks.signal);
 
   callbacks.onProgress?.("Device confirmed, exchanging tokens...");
