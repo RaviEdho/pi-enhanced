@@ -27,6 +27,7 @@ import type {
   LoadCodeAssistResponse,
   OnboardOperation,
 } from "./types.js";
+import { oauthErrorHtml, oauthSuccessHtml } from "@earendil-works/pi-ai/utils/oauth-page";
 
 async function postLoadCodeAssist(
   body: Record<string, unknown>,
@@ -180,38 +181,35 @@ export async function loginAntigravity(
     server = http.createServer((req, res) => {
       try {
         const reqUrl = new URL(req.url ?? "/", `http://127.0.0.1:${CALLBACK_PORT}`);
-        if (reqUrl.pathname === CALLBACK_PATH) {
-          const code = reqUrl.searchParams.get("code");
-          const error = reqUrl.searchParams.get("error");
-
-          if (error) {
-            res.writeHead(400, { "Content-Type": "text/html" });
-            res.end(`<html><body><h2>Authentication failed: ${error}</h2></body></html>`);
-            codeReject(new Error(`OAuth error: ${error}`));
-            return;
-          }
-
-          if (code) {
-            res.writeHead(200, { "Content-Type": "text/html" });
-            res.end(`
-              <!DOCTYPE html>
-              <html>
-                <head><title>Authentication Successful</title></head>
-                <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #121212; color: #e0e0e0;">
-                  <div style="text-align: center; border: 1px solid #333; padding: 2rem; border-radius: 8px; background: #1e1e1e;">
-                    <h2 style="color: #4caf50; margin-top: 0;">✓ Antigravity OAuth Successful</h2>
-                    <p>You can close this browser tab and return to Pi.</p>
-                  </div>
-                </body>
-              </html>
-            `);
-            codeResolve(code);
-            return;
-          }
+        if (reqUrl.pathname !== CALLBACK_PATH) {
+          res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(oauthErrorHtml("Callback route not found."));
+          return;
         }
-        res.writeHead(404);
-        res.end();
+
+        const error = reqUrl.searchParams.get("error");
+        if (error) {
+          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(oauthErrorHtml("Antigravity authorization failed.", `Error: ${error}`));
+          codeReject(new Error(`OAuth error: ${error}`));
+          return;
+        }
+
+        const code = reqUrl.searchParams.get("code");
+        if (!code) {
+          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(oauthErrorHtml("Missing authorization code."));
+          return;
+        }
+
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(oauthSuccessHtml("Signed in to Antigravity. You may now close this page."));
+        codeResolve(code);
       } catch (err) {
+        try {
+          res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(oauthErrorHtml("Internal error while processing OAuth callback."));
+        } catch {}
         codeReject(err instanceof Error ? err : new Error(String(err)));
       }
     });
