@@ -96,13 +96,13 @@ export function computeTimeElapsedFraction(
  */
 export function makeProgressBar(
   usedFraction: number,
-  width = 24,
+  width = 25,
   timeElapsedFraction?: number,
-  themeOrColorize: boolean | UsageTheme = false
+  themeOrColorize: boolean | UsageTheme = false,
+  allowHalfBlock = false
 ): string {
   const safeWidth = Math.max(4, width);
   const clampedUsed = Math.max(0, Math.min(1, usedFraction));
-  const usedSlots = Math.round(clampedUsed * safeWidth);
 
   let markerIndex: number | undefined;
   if (timeElapsedFraction !== undefined && !Number.isNaN(timeElapsedFraction)) {
@@ -121,19 +121,31 @@ export function makeProgressBar(
   const emptyChar = "░";
   const markerChar = "┃";
 
-  if (!theme) {
+  // Standard integer blocks without half-block subdividing (e.g. monochrome footer)
+  if (!theme || !allowHalfBlock) {
+    const usedSlots = Math.round(clampedUsed * safeWidth);
     let bar = "";
     for (let i = 0; i < safeWidth; i++) {
       if (markerIndex !== undefined && i === markerIndex) {
-        bar += markerChar;
+        bar += theme ? theme.fg("accent", markerChar) : markerChar;
       } else if (i < usedSlots) {
-        bar += fillChar;
+        bar += theme
+          ? theme.fg(
+              clampedUsed >= 0.95 ? "error" : clampedUsed >= 0.8 ? "warning" : "success",
+              fillChar
+            )
+          : fillChar;
       } else {
-        bar += emptyChar;
+        bar += theme ? theme.fg("dim", emptyChar) : emptyChar;
       }
     }
     return bar;
   }
+
+  // Half-block resolution (reserved for /usage with theme)
+  const totalHalfSlots = Math.round(clampedUsed * safeWidth * 2);
+  const fullSlots = Math.floor(totalHalfSlots / 2);
+  const hasHalf = totalHalfSlots % 2 === 1;
 
   const colorToken = clampedUsed >= 0.95 ? "error" : clampedUsed >= 0.8 ? "warning" : "success";
 
@@ -141,8 +153,10 @@ export function makeProgressBar(
   for (let i = 0; i < safeWidth; i++) {
     if (markerIndex !== undefined && i === markerIndex) {
       bar += theme.fg("accent", markerChar);
-    } else if (i < usedSlots) {
+    } else if (i < fullSlots) {
       bar += theme.fg(colorToken, fillChar);
+    } else if (i === fullSlots && hasHalf) {
+      bar += theme.fg(colorToken, emptyChar);
     } else {
       bar += theme.fg("dim", emptyChar);
     }
@@ -159,6 +173,105 @@ export interface FormatUsageOptions {
   theme?: UsageTheme;
 }
 
+function formatAccountBadge(
+  report: ProviderUsageReport,
+  theme: UsageTheme,
+  indentCount = 4
+): string {
+  const accent = (s: string) => theme.fg("accent", s);
+  const dim = (s: string) => (theme.dim ? theme.dim(s) : theme.fg("dim", s));
+  const bold = (s: string) => theme.bold(s);
+  const warning = (s: string) => theme.fg("warning", s);
+
+  const isSession = !!report.isSessionAccount;
+  const bullet = isSession ? accent("●") : dim("○");
+
+  const rawEmail = report.accountEmail || report.accountId || "account";
+  const cleanEmail = rawEmail.replace(/\s*\[COOLDOWN[^\]]*\]/gi, "").trim();
+  const emailStyled = isSession ? bold(accent(cleanEmail)) : cleanEmail;
+
+  const badges: string[] = [];
+  if (isSession) {
+    badges.push(accent("[in use]"));
+  }
+
+  const cooldownMins =
+    report.cooldownMinutes ??
+    (rawEmail.match(/\[COOLDOWN\s*~?(\d+)m\]/i)?.[1]
+      ? parseInt(rawEmail.match(/\[COOLDOWN\s*~?(\d+)m\]/i)![1], 10)
+      : undefined);
+  if (cooldownMins && cooldownMins > 0) {
+    badges.push(warning(`[cooldown ~${cooldownMins}m]`));
+  }
+
+  if (report.planType) {
+    badges.push(dim(`· ${report.planType}`));
+  }
+
+  if (report.resetCredits && report.resetCredits > 0) {
+    badges.push(
+      warning(`· ✦ ${report.resetCredits} reset${report.resetCredits === 1 ? "" : "s"}`)
+    );
+  }
+
+  const badgeStr = badges.length > 0 ? " " + badges.join(" ") : "";
+  const indent = indentCount > 0 ? " ".repeat(indentCount) : "";
+  return `${indent}${bullet} ${emailStyled}${badgeStr}`;
+}
+
+function formatBucketEntry(
+  report: ProviderUsageReport,
+  bucket: import("./types.js").QuotaBucket | undefined,
+  barWidth: number,
+  now: number,
+  theme: UsageTheme
+): { bar: string; metric: string; full: string; visibleLen: number } {
+  if (!bucket) {
+    return { bar: "", metric: "", full: "", visibleLen: 0 };
+  }
+
+  const dim = (s: string) => (theme.dim ? theme.dim(s) : theme.fg("dim", s));
+  const warning = (s: string) => theme.fg("warning", s);
+  const error = (s: string) => theme.fg("error", s);
+
+  const timeElapsed = computeTimeElapsedFraction(
+    bucket.resetTime,
+    bucket.windowSeconds,
+    now,
+    bucket.usedFraction
+  );
+  const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
+
+  const freePct = Math.max(0, 100 - bucket.usedFraction * 100);
+  const pctStr = `${freePct.toFixed(1)}%`.padStart(6);
+  const pctColored =
+    bucket.usedFraction >= 0.95
+      ? error(pctStr)
+      : bucket.usedFraction >= 0.8
+        ? warning(pctStr)
+        : dim(pctStr);
+
+  let detailStr = "";
+  if (report.providerId === "hyper" && report.capacitySummary) {
+    detailStr = report.capacitySummary;
+  } else if (bucket.usedFraction <= 0) {
+    detailStr = "ready";
+  } else if (bucket.resetTime) {
+    detailStr = formatRelativeTime(bucket.resetTime, now);
+  } else if (report.capacitySummary) {
+    detailStr = report.capacitySummary;
+  }
+
+  const metric = detailStr
+    ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
+    : pctColored;
+
+  const full = `${bar}   ${metric}`;
+  const visibleLen = barWidth + 3 + visibleWidth(metric);
+
+  return { bar, metric, full, visibleLen };
+}
+
 /**
  * Builds formatted lines for provider quotas and accounts following native Pi UI conventions.
  */
@@ -171,12 +284,11 @@ export function buildUsageLines(
     options?.theme ?? createDefaultCliTheme(options?.colorize !== false);
   const availableWidth =
     options?.availableWidth ??
-    (typeof process !== "undefined" && process.stdout?.columns ? process.stdout.columns : 80);
+    (typeof process !== "undefined" && process.stdout?.columns ? process.stdout.columns : 120);
 
   const accent = (s: string) => theme.fg("accent", s);
   const dim = (s: string) => (theme.dim ? theme.dim(s) : theme.fg("dim", s));
   const bold = (s: string) => theme.bold(s);
-  const warning = (s: string) => theme.fg("warning", s);
   const error = (s: string) => theme.fg("error", s);
 
   const lines: string[] = [];
@@ -221,104 +333,95 @@ export function buildUsageLines(
     const countTag = acctCount > 1 ? dim(` (${acctCount} accounts)`) : "";
     lines.push(`  ${bold(accent(providerName))}${countTag}`);
 
-    // Render accounts
-    for (let aIdx = 0; aIdx < providerReports.length; aIdx++) {
-      const report = providerReports[aIdx];
-      const isSession = !!report.isSessionAccount;
-      const bullet = isSession ? accent("●") : dim("○");
+    const canFitTwoColumns =
+      availableWidth >= 100 &&
+      providerReports.length === 2 &&
+      !providerReports.some((r) => r.error);
 
-      const rawEmail = report.accountEmail || report.accountId || "account";
-      const cleanEmail = rawEmail.replace(/\s*\[COOLDOWN[^\]]*\]/gi, "").trim();
-      const emailStyled = isSession ? bold(accent(cleanEmail)) : cleanEmail;
+    if (canFitTwoColumns) {
+      // 2-Account Side-by-Side Presentation
+      const acc1 = providerReports[0];
+      const acc2 = providerReports[1];
 
-      const badges: string[] = [];
-      if (isSession) {
-        badges.push(accent("[in use]"));
-      }
+      // Calculate bar width and column 2 start position
+      const leftPrefixW = 6 + labelWidth + 2;
+      const col1MetricWidth = 14;
+      const colGap = 8;
+      const availableForBars =
+        availableWidth - leftPrefixW - colGap - 2 * (3 + col1MetricWidth);
+      const barWidth = Math.max(15, Math.min(25, Math.floor(availableForBars / 2)));
+      const col1Width = barWidth + 3 + col1MetricWidth;
+      const col2Start = leftPrefixW + col1Width + colGap;
 
-      const cooldownMins =
-        report.cooldownMinutes ??
-        (rawEmail.match(/\[COOLDOWN\s*~?(\d+)m\]/i)?.[1]
-          ? parseInt(rawEmail.match(/\[COOLDOWN\s*~?(\d+)m\]/i)![1], 10)
-          : undefined);
-      if (cooldownMins && cooldownMins > 0) {
-        badges.push(warning(`[cooldown ~${cooldownMins}m]`));
-      }
+      const leftHeader = formatAccountBadge(acc1, theme, 4);
+      const rightHeader = formatAccountBadge(acc2, theme, 0);
+      const padHeaders = " ".repeat(Math.max(2, col2Start - visibleWidth(leftHeader)));
+      lines.push(`${leftHeader}${padHeaders}${rightHeader}`);
 
-      if (report.planType) {
-        badges.push(dim(`· ${report.planType}`));
-      }
-
-      if (report.resetCredits && report.resetCredits > 0) {
-        badges.push(
-          warning(`· ✦ ${report.resetCredits} reset${report.resetCredits === 1 ? "" : "s"}`)
-        );
-      }
-
-      const badgeStr = badges.length > 0 ? " " + badges.join(" ") : "";
-      lines.push(`    ${bullet} ${emailStyled}${badgeStr}`);
-
-      // Account buckets / errors
-      if (report.error) {
-        lines.push(`      ${error(`⚠️  Could not fetch usage: ${report.error}`)}`);
-      } else {
-        const allBuckets = report.groups.flatMap((g) => g.buckets);
-        if (allBuckets.length === 0) {
-          if (report.capacitySummary) {
-            lines.push(`      ${dim(report.capacitySummary)}`);
-          } else {
-            lines.push(`      ${dim("No active quota limits reported.")}`);
-          }
-        } else {
-          for (const bucket of allBuckets) {
-            const rawLabel = truncateToWidth(bucket.displayName, labelWidth, "…");
-            const labelPad = " ".repeat(Math.max(0, labelWidth - visibleWidth(rawLabel)));
-            const labelStr = `${rawLabel}${labelPad}`;
-
-            // Available width for progress bar
-            // "      " (6) + label (labelWidth) + "  " (2) + bar + "  " (2) + pct (11) + "  " (2) + reset (~18)
-            const reserved = 6 + labelWidth + 2 + 2 + 11 + 2 + 18;
-            const barBudget = Math.max(12, Math.min(26, availableWidth - reserved));
-
-            const timeElapsed = computeTimeElapsedFraction(
-              bucket.resetTime,
-              bucket.windowSeconds,
-              now,
-              bucket.usedFraction
-            );
-            const bar = makeProgressBar(bucket.usedFraction, barBudget, timeElapsed, theme);
-
-            const freePct = Math.max(0, 100 - bucket.usedFraction * 100);
-            const pctStr = `${freePct.toFixed(1)}%`.padStart(6);
-            const pctColored =
-              bucket.usedFraction >= 0.95
-                ? error(pctStr)
-                : bucket.usedFraction >= 0.8
-                  ? warning(pctStr)
-                  : dim(pctStr);
-
-            let detailStr = "";
-            if (report.providerId === "hyper" && report.capacitySummary) {
-              detailStr = report.capacitySummary;
-            } else if (bucket.usedFraction <= 0) {
-              detailStr = "ready";
-            } else if (bucket.resetTime) {
-              detailStr = formatRelativeTime(bucket.resetTime, now);
-            } else if (report.capacitySummary) {
-              detailStr = report.capacitySummary;
-            }
-
-            const metricStr = detailStr
-              ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
-              : pctColored;
-
-            lines.push(`      ${labelStr}  ${bar}  ${metricStr}`);
-          }
+      const buckets1 = acc1.groups.flatMap((g) => g.buckets);
+      const buckets2 = acc2.groups.flatMap((g) => g.buckets);
+      const seenIds = new Set<string>();
+      const allBuckets: { id: string; name: string }[] = [];
+      for (const b of [...buckets1, ...buckets2]) {
+        if (!seenIds.has(b.bucketId)) {
+          seenIds.add(b.bucketId);
+          allBuckets.push({ id: b.bucketId, name: b.displayName });
         }
       }
 
-      if (aIdx < providerReports.length - 1) {
-        lines.push("");
+      for (const { id, name } of allBuckets) {
+        const b1 = buckets1.find((b) => b.bucketId === id);
+        const b2 = buckets2.find((b) => b.bucketId === id);
+
+        const rawLabel = truncateToWidth(name, labelWidth, "…");
+        const labelPad = " ".repeat(Math.max(0, labelWidth - visibleWidth(rawLabel)));
+        const labelPrefix = `      ${rawLabel}${labelPad}  `;
+
+        const entry1 = formatBucketEntry(acc1, b1, barWidth, now, theme);
+        const entry2 = formatBucketEntry(acc2, b2, barWidth, now, theme);
+
+        const col1Vis = entry1.visibleLen;
+        const padToCol2 = " ".repeat(Math.max(2, col2Start - (leftPrefixW + col1Vis)));
+
+        lines.push(`${labelPrefix}${entry1.full}${padToCol2}${entry2.full}`);
+      }
+    } else {
+      // Single-Column / Stacked Presentation
+      const barBudget = Math.max(
+        15,
+        Math.min(25, availableWidth - (6 + labelWidth + 2 + 3 + 16))
+      );
+
+      for (let aIdx = 0; aIdx < providerReports.length; aIdx++) {
+        const report = providerReports[aIdx];
+        const header = formatAccountBadge(report, theme, 4);
+        lines.push(header);
+
+        if (report.error) {
+          lines.push(`      ${error(`⚠️  Could not fetch usage: ${report.error}`)}`);
+        } else {
+          const allBuckets = report.groups.flatMap((g) => g.buckets);
+          if (allBuckets.length === 0) {
+            if (report.capacitySummary) {
+              lines.push(`      ${dim(report.capacitySummary)}`);
+            } else {
+              lines.push(`      ${dim("No active quota limits reported.")}`);
+            }
+          } else {
+            for (const bucket of allBuckets) {
+              const rawLabel = truncateToWidth(bucket.displayName, labelWidth, "…");
+              const labelPad = " ".repeat(Math.max(0, labelWidth - visibleWidth(rawLabel)));
+              const labelStr = `${rawLabel}${labelPad}`;
+
+              const entry = formatBucketEntry(report, bucket, barBudget, now, theme);
+              lines.push(`      ${labelStr}  ${entry.full}`);
+            }
+          }
+        }
+
+        if (aIdx < providerReports.length - 1) {
+          lines.push("");
+        }
       }
     }
   }

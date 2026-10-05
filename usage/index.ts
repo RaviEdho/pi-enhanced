@@ -717,7 +717,7 @@ export function registerUsageCommand(pi: ExtensionAPI): void {
           }
           const text = formatUsageText(result.reports, {
             sessionInfo: result.sessionInfo,
-            availableWidth: process.stdout.columns || 100,
+            availableWidth: process.stdout.columns || 120,
           });
           console.log(text);
         } catch (err) {

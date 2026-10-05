@@ -200,7 +200,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
     now,
     primary.usedFraction
   );
-  const progressBar = makeProgressBar(primary.usedFraction, 12, timeElapsed, false);
+  const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
 
   const barSegment = `[${progressBar}] ${usedPct}%`;
 
