@@ -61,12 +61,18 @@ interface CapacityStat {
 
 function formatWindowLabel(seconds: number): string {
   const daySeconds = 86_400;
+  if (seconds >= 28 * daySeconds && seconds <= 31 * daySeconds) {
+    return "Monthly Quota";
+  }
+  if (seconds >= 6 * daySeconds && seconds <= 8 * daySeconds) {
+    return "Weekly Quota";
+  }
   if (seconds >= daySeconds) {
     const days = Math.round(seconds / daySeconds);
-    return `${days} ${days === 1 ? "day" : "days"}`;
+    return `${days}-Day Quota`;
   }
   const hours = Math.max(1, Math.round(seconds / 3600));
-  return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${hours}-Hour Limit`;
 }
 
 function formatWindowShort(seconds: number): string {

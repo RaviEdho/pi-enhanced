@@ -24,6 +24,7 @@ export interface ProviderUsageReport {
   isActiveAccount?: boolean;
   planType?: string;
   resetCredits?: number;
+  cooldownMinutes?: number;
   fetchedAt: number;
   groups: QuotaGroup[];
   capacitySummary?: string;

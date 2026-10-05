@@ -131,8 +131,8 @@ export async function fetchAntigravityUsage(
         let displayName = b.displayName ?? b.bucketId ?? "Quota";
         if (b.bucketId === "gemini-weekly") displayName = "Gemini (Weekly)";
         else if (b.bucketId === "gemini-5h") displayName = "Gemini (5 Hour)";
-        else if (b.bucketId === "3p-weekly") displayName = "Claude & GPT (shared) (Weekly)";
-        else if (b.bucketId === "3p-5h") displayName = "Claude & GPT (shared) (5 Hour)";
+        else if (b.bucketId === "3p-weekly") displayName = "Claude & GPT (Weekly)";
+        else if (b.bucketId === "3p-5h") displayName = "Claude & GPT (5 Hour)";
 
         return {
           bucketId: b.bucketId ?? "default",

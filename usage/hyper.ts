@@ -67,7 +67,7 @@ export async function fetchHyperUsage(
 
     const bucket: QuotaBucket = {
       bucketId: "hypercredits",
-      displayName: `Credits (${formattedBalance} HC / $${usdVal})`,
+      displayName: "Credits",
       window: "monthly",
       windowSeconds: 30 * 86400,
       usedFraction,
