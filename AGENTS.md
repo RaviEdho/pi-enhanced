@@ -59,6 +59,7 @@ pi-for-raviedho/
 │   ├── antigravity/
 │   │   ├── constants.ts        # Wire profiles, OAuth endpoints, Google client configuration
 │   │   ├── models.ts           # Dynamic model catalog discovery & collapsing from Google
+│   │   ├── oauth-page.ts       # Self-contained OAuth success/error HTML response templates
 │   │   ├── oauth.ts            # OAuth 2.0 PKCE flow, loopback server, and token refresh
 │   │   ├── stream.ts           # Cloud Code Assist SSE streaming client & schema transformation
 │   │   └── types.ts            # Cloud Code Assist protocol schemas
