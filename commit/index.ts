@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -21,7 +22,7 @@ import {
   unstageAllFiles,
   type StashedState,
 } from "./git.js";
-import { BlockingCommitEditor, CommitStatusBroadcaster } from "./editor.js";
+import { CommitStatusBroadcaster } from "./editor.js";
 import { CommitConfirmationDialog } from "./dialog.js";
 import {
   formatCost,
@@ -40,10 +41,19 @@ import type {
 } from "./types.js";
 
 export function registerCommitCommand(pi: ExtensionAPI): void {
+  let isCommitActive = false;
+
   pi.registerCommand("commit", {
     description: "Autonomously inspect git diff and generate a commit (-u/--unstaged, -s/--single, -m/--multi)",
     handler: async (args, ctx) => {
-      const cwd = ctx.cwd;
+      if (isCommitActive) {
+        ctx.ui.notify("A commit operation is already in progress.", "warning");
+        return;
+      }
+      isCommitActive = true;
+
+      try {
+        const cwd = ctx.cwd;
 
       const isSingle = /\b(--single|-s)\b/i.test(args);
       const isMulti = /\b(--multi|-m)\b/i.test(args);
@@ -339,7 +349,6 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         description: `Detected ${staged.length} staged file${staged.length === 1 ? "" : "s"}`,
       });
 
-      let activeEditor: BlockingCommitEditor | undefined;
       let activeSession: any = undefined;
       const abortController = new AbortController();
       let isAborting = false;
@@ -358,31 +367,98 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         }
       };
 
-      if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-        ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
-          activeEditor = new BlockingCommitEditor(
-            tui,
-            editorTheme,
-            broadcaster,
-            () => {
+      const startTime = Date.now();
+      const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+      let frameIndex = 0;
+      let transientWarningTimer: NodeJS.Timeout | undefined;
+      let transientWarningText: string | undefined;
+
+      const triggerTransientWarning = (msg: string) => {
+        transientWarningText = msg;
+        if (transientWarningTimer) {
+          clearTimeout(transientWarningTimer);
+        }
+        updateWorkingIndicator();
+        transientWarningTimer = setTimeout(() => {
+          transientWarningText = undefined;
+          transientWarningTimer = undefined;
+          updateWorkingIndicator();
+        }, 3000);
+        transientWarningTimer.unref?.();
+      };
+
+      const updateWorkingIndicator = () => {
+        if (!ctx.hasUI) return;
+
+        let line: string;
+        if (transientWarningText) {
+          const warnIcon = ctx.ui.theme?.fg ? ctx.ui.theme.fg("warning", "⚠") : "⚠";
+          const warnMsg = ctx.ui.theme?.fg ? ctx.ui.theme.fg("warning", transientWarningText) : transientWarningText;
+          line = `  ${warnIcon} ${warnMsg}`;
+        } else {
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const spinner = ctx.ui.theme?.fg
+            ? ctx.ui.theme.fg("accent", SPINNER_FRAMES[frameIndex])
+            : SPINNER_FRAMES[frameIndex];
+          const statusText = ctx.ui.theme?.fg
+            ? ctx.ui.theme.fg("text", broadcaster.status)
+            : broadcaster.status;
+          const elapsedText = ctx.ui.theme?.fg
+            ? ctx.ui.theme.fg("dim", `(${elapsed}s)`)
+            : `(${elapsed}s)`;
+          const cancelHint = ctx.ui.theme?.fg
+            ? ctx.ui.theme.fg("dim", "• Esc to cancel")
+            : "• Esc to cancel";
+
+          line = `  ${spinner} ${statusText} ${elapsedText}  ${cancelHint}`;
+          frameIndex = (frameIndex + 1) % SPINNER_FRAMES.length;
+        }
+
+        if (typeof ctx.ui.setWidget === "function") {
+          ctx.ui.setWidget("commit", [line]);
+        }
+      };
+
+      updateWorkingIndicator();
+      const workingTimer = setInterval(updateWorkingIndicator, 80);
+      workingTimer.unref?.();
+      const unsubBroadcaster = broadcaster.subscribe(updateWorkingIndicator);
+
+      const unsubTerminalInput = typeof ctx.ui.onTerminalInput === "function"
+        ? ctx.ui.onTerminalInput((data) => {
+            if (
+              matchesKey(data, "escape") ||
+              matchesKey(data, "esc") ||
+              matchesKey(data, "ctrl+c") ||
+              data === "\x1b" ||
+              data === "\x03"
+            ) {
               void handleAbort();
-            },
-            ctx.ui.theme,
-            keybindings
-          );
-          return activeEditor;
-        });
-      }
+              return { consume: true };
+            }
+            if (matchesKey(data, "enter")) {
+              triggerTransientWarning("Commit in progress. Press Esc to cancel it first.");
+              return { consume: true };
+            }
+            return undefined;
+          })
+        : undefined;
+
+      const cleanupWorkingIndicator = () => {
+        if (transientWarningTimer) {
+          clearTimeout(transientWarningTimer);
+          transientWarningTimer = undefined;
+        }
+        clearInterval(workingTimer);
+        unsubBroadcaster();
+        unsubTerminalInput?.();
+        if (ctx.hasUI && typeof ctx.ui.setWidget === "function") {
+          ctx.ui.setWidget("commit", undefined);
+        }
+      };
 
       if (abortController.signal.aborted) {
-        activeEditor?.dispose();
-        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-          try {
-            ctx.ui.setEditorComponent(undefined);
-          } catch {
-            // ignore
-          }
-        }
+        cleanupWorkingIndicator();
         await cancelCommit("Commit cancelled by user.");
         return;
       }
@@ -398,6 +474,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
           broadcaster.addAction(action);
         },
         diffedFiles,
+        signal: abortController.signal,
       });
 
       let turnCount = 0;
@@ -408,20 +485,12 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       let cacheWriteTokens = 0;
       let totalTokens = 0;
       let totalCost = 0;
-      const startTime = Date.now();
 
       let unsubscribe: (() => void) | undefined;
       let overview = await getStagedOverview(cwd);
 
       if (abortController.signal.aborted) {
-        activeEditor?.dispose();
-        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-          try {
-            ctx.ui.setEditorComponent(undefined);
-          } catch {
-            // ignore
-          }
-        }
+        cleanupWorkingIndicator();
         await cancelCommit("Commit cancelled by user.");
         return;
       }
@@ -561,18 +630,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         return;
       } finally {
         unsubscribe?.();
-        try {
-          activeEditor?.dispose();
-        } catch {
-          // ignore
-        }
-        if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
-          try {
-            ctx.ui.setEditorComponent(undefined);
-          } catch {
-            // ignore
-          }
-        }
+        cleanupWorkingIndicator();
       }
 
       if (abortController.signal.aborted) {
@@ -588,7 +646,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         ctx.ui.notify(rollbackMsg ? `${warnMsg}\n${rollbackMsg}` : warnMsg, "warning");
         return;
       }
-      const commitPlan: CommitPlanProposal = capturedPlan;
+      let commitPlan: CommitPlanProposal = capturedPlan;
 
       // Fallback calculation for totalCost if model has rates but was not populated
       if (totalCost === 0 && model.cost && (model.cost.input > 0 || model.cost.output > 0)) {
@@ -727,7 +785,7 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
         process.stdout.write(`  • Model: ${usage.modelId} (${usage.turns} turn${usage.turns === 1 ? "" : "s"} in ${formatDuration(usage.durationMs)})\n`);
         process.stdout.write(`  • Tokens: ${usage.totalTokens.toLocaleString()} total (in: ${usage.inputTokens.toLocaleString()}, out: ${usage.outputTokens.toLocaleString()})\n`);
         const costStr = usage.totalCost > 0
-          ? `$${formatCost(usage.totalCost)}`
+          ? formatCost(usage.totalCost)
           : (usage.isSubscription ? "Included with subscription" : "$0.00");
         process.stdout.write(`  • Cost: ${costStr}\n`);
 
@@ -777,135 +835,125 @@ export function registerCommitCommand(pi: ExtensionAPI): void {
       // 7. Interactive UI Mode
       const costBadge = formatCostBadge(usage);
 
-      let userChoice: CommitConfirmationResult | undefined;
-      let customUIAttempted = false;
+      while (true) {
+        const isCurrentMultiStage = commitPlan.stages.length > 1;
+        const currentFirstHeader = commitPlan.stages[0]?.scope
+          ? `${commitPlan.stages[0].type}(${commitPlan.stages[0].scope}): ${commitPlan.stages[0].subject}`
+          : `${commitPlan.stages[0]?.type}: ${commitPlan.stages[0]?.subject}`;
 
-      if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
-        customUIAttempted = true;
-        try {
-          userChoice = await ctx.ui.custom<CommitConfirmationResult>((tui, theme, keybindings, done) => {
-            return new CommitConfirmationDialog(
-              tui,
-              theme,
-              {
-                plan: commitPlan,
-                actions: broadcaster.recentActions,
-                overview,
-                diffedFiles,
-                usage,
-                onDone: (res) => done(res),
-              },
-              keybindings
-            );
-          });
-        } catch {
-          customUIAttempted = false;
-          userChoice = undefined;
+        let userChoice: CommitConfirmationResult | undefined;
+        let customUIAttempted = false;
+
+        if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
+          customUIAttempted = true;
+          try {
+            userChoice = await ctx.ui.custom<CommitConfirmationResult>((tui, theme, keybindings, done) => {
+              return new CommitConfirmationDialog(
+                tui,
+                theme,
+                {
+                  plan: commitPlan,
+                  actions: broadcaster.recentActions,
+                  overview,
+                  diffedFiles,
+                  usage,
+                  onDone: (res) => done(res),
+                },
+                keybindings
+              );
+            });
+          } catch {
+            customUIAttempted = false;
+            userChoice = undefined;
+          }
         }
-      }
 
-      // If custom UI was used, cancel immediately on escape or cancel action
-      if (customUIAttempted) {
-        if (!userChoice || userChoice.action === "cancel") {
+        if (customUIAttempted) {
+          if (!userChoice || userChoice.action === "cancel") {
+            await cancelCommit(`Commit cancelled (${costBadge} used).`);
+            return;
+          }
+        } else {
+          // Fallback selector ONLY if custom UI is not available
+          let actionCommit: string;
+          let actionPush: string;
+          const actionEdit = isCurrentMultiStage ? "Edit commit plan" : "Edit commit message";
+
+          if (isCurrentMultiStage) {
+            actionCommit = `Commit all ${commitPlan.stages.length} stages (${costBadge})`;
+            actionPush = `Commit & Push all ${commitPlan.stages.length} stages (${costBadge})`;
+          } else {
+            actionCommit = `Commit: "${currentFirstHeader}" (${costBadge})`;
+            actionPush = `Commit & Push: "${currentFirstHeader}" (${costBadge})`;
+          }
+
+          const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [
+            actionCommit,
+            actionPush,
+            actionEdit,
+          ]);
+
+          if (!choice) {
+            await cancelCommit(`Commit cancelled (${costBadge} used).`);
+            return;
+          }
+
+          if (choice === actionEdit) {
+            userChoice = { action: "edit", stages: commitPlan.stages };
+          } else if (choice === actionPush) {
+            userChoice = { action: "commit-and-push", stages: commitPlan.stages };
+          } else {
+            userChoice = { action: "commit", stages: commitPlan.stages };
+          }
+        }
+
+        if (userChoice.action === "cancel") {
           await cancelCommit(`Commit cancelled (${costBadge} used).`);
           return;
         }
-      } else {
-        // Fallback selector ONLY if custom UI is not available
-        let actionCommit: string;
-        let actionPush: string;
-        const actionEdit = isMultiStage ? "Edit commit plan" : "Edit commit message";
-        const actionCancel = "Cancel";
 
-        if (isMultiStage) {
-          actionCommit = `Commit all ${commitPlan.stages.length} stages (${costBadge})`;
-          actionPush = `Commit & Push all ${commitPlan.stages.length} stages (${costBadge})`;
-        } else {
-          actionCommit = `Commit: "${firstHeaderLine}" (${costBadge})`;
-          actionPush = `Commit & Push: "${firstHeaderLine}" (${costBadge})`;
+        if (userChoice.action === "edit") {
+          const stagesToEdit = userChoice.stages || commitPlan.stages;
+          const editBuffer = isCurrentMultiStage
+            ? formatPlanForEditor(stagesToEdit)
+            : (stagesToEdit[0]?.body?.trim() ? `${currentFirstHeader}\n\n${stagesToEdit[0].body.trim()}` : currentFirstHeader);
+
+          let edited: string | undefined;
+          if (typeof ctx.ui.editor === "function") {
+            edited = await ctx.ui.editor(isCurrentMultiStage ? "Edit commit plan" : "Edit commit message", editBuffer);
+          } else {
+            edited = await ctx.ui.input(isCurrentMultiStage ? "Edit commit plan" : "Edit commit message", editBuffer);
+          }
+
+          if (!edited || !edited.trim()) {
+            await cancelCommit("Commit cancelled (empty message).");
+            return;
+          }
+
+          const newStages = parsePlanFromEditor(edited);
+          if (newStages.length === 0) {
+            const rollbackMsg = await rollbackStagingIfNeeded();
+            const warnMsg = "No valid commits found in edited text; commit cancelled.";
+            ctx.ui.notify(rollbackMsg ? `${warnMsg}\n${rollbackMsg}` : warnMsg, "warning");
+            return;
+          }
+
+          commitPlan = {
+            ...commitPlan,
+            stages: newStages,
+          };
+          continue;
         }
 
-        const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [
-          actionCommit,
-          actionPush,
-          actionEdit,
-          actionCancel,
-        ]);
-
-        if (!choice || choice === actionCancel) {
-          await cancelCommit(`Commit cancelled (${costBadge} used).`);
-          return;
-        }
-
-        if (choice === actionEdit) {
-          userChoice = { action: "edit", stages: commitPlan.stages };
-        } else if (choice === actionPush) {
-          userChoice = { action: "commit-and-push", stages: commitPlan.stages };
-        } else {
-          userChoice = { action: "commit", stages: commitPlan.stages };
-        }
-      }
-
-      if (userChoice.action === "cancel") {
-        await cancelCommit(`Commit cancelled (${costBadge} used).`);
-        return;
-      }
-
-      if (userChoice.action === "edit") {
-        const stagesToEdit = userChoice.stages || commitPlan.stages;
-        const editBuffer = isMultiStage
-          ? formatPlanForEditor(stagesToEdit)
-          : (stagesToEdit[0]?.body?.trim() ? `${firstHeaderLine}\n\n${stagesToEdit[0].body.trim()}` : firstHeaderLine);
-
-        let edited: string | undefined;
-        if (typeof ctx.ui.editor === "function") {
-          edited = await ctx.ui.editor(isMultiStage ? "Edit commit plan" : "Edit commit message", editBuffer);
-        } else {
-          edited = await ctx.ui.input(isMultiStage ? "Edit commit plan" : "Edit commit message", editBuffer);
-        }
-
-        if (!edited || !edited.trim()) {
-          await cancelCommit("Empty message/plan; commit cancelled.");
-          return;
-        }
-
-        const newStages = parsePlanFromEditor(edited);
-        if (newStages.length === 0) {
-          const rollbackMsg = await rollbackStagingIfNeeded();
-          const warnMsg = "No valid commits found in edited text; commit cancelled.";
-          ctx.ui.notify(rollbackMsg ? `${warnMsg}\n${rollbackMsg}` : warnMsg, "warning");
-          return;
-        }
-
-        const commitLabel = newStages.length === 1
-          ? `Commit: "${newStages[0].subject}"`
-          : `Commit all ${newStages.length} stages`;
-        const pushLabel = newStages.length === 1
-          ? `Commit & Push: "${newStages[0].subject}"`
-          : `Commit & Push all ${newStages.length} stages`;
-
-        const postEditChoice = await ctx.ui.select("Action for edited commit(s)", [
-          commitLabel,
-          pushLabel,
-          "Cancel",
-        ]);
-
-        if (!postEditChoice || postEditChoice === "Cancel") {
-          await cancelCommit("Commit cancelled.");
-          return;
-        }
-
-        const success = await executeCommitSequence(newStages, postEditChoice === pushLabel);
+        const stagesToRun = userChoice.stages || commitPlan.stages;
+        const success = await executeCommitSequence(stagesToRun, userChoice.action === "commit-and-push");
         if (!success) {
           await rollbackStagingIfNeeded();
         }
         return;
       }
-
-      const stagesToRun = userChoice.stages || commitPlan.stages;
-      const success = await executeCommitSequence(stagesToRun, userChoice.action === "commit-and-push");
-      if (!success) {
-        await rollbackStagingIfNeeded();
+      } finally {
+        isCommitActive = false;
       }
     },
   });

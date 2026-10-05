@@ -52,8 +52,9 @@ export function createCommitTools(options: {
   onPropose: (plan: CommitPlanProposal) => void;
   onAction?: (action: Omit<CommitActionEntry, "timestamp">) => void;
   diffedFiles?: string[];
+  signal?: AbortSignal;
 }): ToolDefinition[] {
-  const { cwd, onPropose, onAction, diffedFiles } = options;
+  const { cwd, onPropose, onAction, diffedFiles, signal } = options;
 
   const gitOverviewTool: ToolDefinition<any, unknown> = {
     name: "git_overview",
@@ -61,6 +62,9 @@ export function createCommitTools(options: {
     description: "Retrieve list of all currently staged files and git diff statistics.",
     parameters: Type.Object({}),
     async execute() {
+      if (signal?.aborted) {
+        throw new Error("Commit cancelled by user.");
+      }
       const overview = await getStagedOverview(cwd);
       onAction?.({
         type: "overview",
@@ -91,6 +95,9 @@ export function createCommitTools(options: {
       filePath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     }),
     async execute(_toolCallId, params: { filePath?: string | null }) {
+      if (signal?.aborted) {
+        throw new Error("Commit cancelled by user.");
+      }
       const targetPath = params?.filePath?.trim();
       if (!targetPath) {
         return {
