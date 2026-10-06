@@ -1,11 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fetchAntigravityUsage } from "../usage/antigravity.js";
-import { fetchCodexUsage } from "../usage/codex.js";
-import { computeTimeElapsedFraction } from "../usage/format.js";
-import { fetchHyperUsage } from "../usage/hyper.js";
-import type { ProviderUsageReport, QuotaBucket } from "../usage/types.js";
+import { fetchAntigravityUsage } from "../ux/usage/antigravity.js";
+import { fetchCodexUsage } from "../ux/usage/codex.js";
+import { computeTimeElapsedFraction } from "../ux/usage/format.js";
+import { fetchHyperUsage } from "../ux/usage/hyper.js";
+import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
 

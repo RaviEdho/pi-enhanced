@@ -5,9 +5,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { AccountBalancer, isAccountEligibleForModel } from "../accounts/balancer.js";
-import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../accounts/quota.js";
-import { AccountStore } from "../accounts/store.js";
+import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balancer.js";
+import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
+import { AccountStore } from "../../accounts/store.js";
 import {
   computeTimeElapsedFraction,
   formatRelativeTime,

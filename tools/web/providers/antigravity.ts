@@ -6,13 +6,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { AccountBalancer } from "../../accounts/balancer.js";
-import { AccountStore } from "../../accounts/store.js";
+import { AccountBalancer } from "../../../accounts/balancer.js";
+import { AccountStore } from "../../../accounts/store.js";
 import {
   ANTIGRAVITY_PRIMARY_ENDPOINT,
   getAntigravityUserAgent,
   PROVIDER_ID,
-} from "../../providers/antigravity/constants.js";
+} from "../../../providers/antigravity/constants.js";
 import type { SearchCitation, SearchParams, SearchResponse, SearchSource } from "../types.js";
 import { SearchProvider } from "./base.js";
 

@@ -1,5 +1,5 @@
-import { CREDITS_FETCH_TIMEOUT_MS, CREDITS_URL, HYPER_USER_AGENT, PROVIDER_ID, PROVIDER_NAME } from "../providers/hyper/constants.js";
-import type { CreditsResponse } from "../providers/hyper/types.js";
+import { CREDITS_FETCH_TIMEOUT_MS, CREDITS_URL, HYPER_USER_AGENT, PROVIDER_ID, PROVIDER_NAME } from "../../providers/hyper/constants.js";
+import type { CreditsResponse } from "../../providers/hyper/types.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
 
 /**

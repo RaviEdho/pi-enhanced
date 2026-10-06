@@ -2,8 +2,8 @@ import {
   ANTIGRAVITY_PRIMARY_ENDPOINT,
   LOAD_CODE_ASSIST_URL,
   getAntigravityUserAgent,
-} from "../providers/antigravity/constants.js";
-import type { LoadCodeAssistResponse } from "../providers/antigravity/types.js";
+} from "../../providers/antigravity/constants.js";
+import type { LoadCodeAssistResponse } from "../../providers/antigravity/types.js";
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
 
 interface RawQuotaBucket {

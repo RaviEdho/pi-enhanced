@@ -3,7 +3,7 @@ import { discoverProject, refreshAntigravityToken } from "../providers/antigravi
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { refreshHyperToken } from "../providers/hyper/oauth.js";
-import type { ProviderUsageReport } from "../usage/types.js";
+import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential, ResolvedAccountAuth } from "./types.js";

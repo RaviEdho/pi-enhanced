@@ -18,14 +18,9 @@
   "files": [
     "index.ts",
     "accounts",
-    "commit",
-    "compressor",
-    "continue",
     "providers",
-    "scout",
-    "timer",
-    "usage",
-    "web",
+    "tools",
+    "ux",
     "README.md"
   ],
   "pi": {

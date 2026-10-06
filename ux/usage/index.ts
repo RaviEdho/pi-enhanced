@@ -12,9 +12,9 @@ import type {
   TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { AccountBalancer } from "../accounts/balancer.js";
-import { QuotaManager } from "../accounts/quota.js";
-import { AccountStore } from "../accounts/store.js";
+import { AccountBalancer } from "../../accounts/balancer.js";
+import { QuotaManager } from "../../accounts/quota.js";
+import { AccountStore } from "../../accounts/store.js";
 import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
 import { buildUsageLines, formatUsageText } from "./format.js";

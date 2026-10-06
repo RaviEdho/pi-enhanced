@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AccountStore } from "../accounts/store.js";
+import { AccountStore } from "../../accounts/store.js";
 import type { SearchProviderId } from "./types.js";
 
 const AUTH_FILE_PATH = join(homedir(), ".pi/agent/auth.json");

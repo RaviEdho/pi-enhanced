@@ -12,13 +12,9 @@
   "include": [
     "index.ts",
     "accounts/**/*",
-    "commit/**/*",
-    "compressor/**/*",
-    "continue/**/*",
     "providers/**/*",
-    "scout/**/*",
-    "timer/**/*",
-    "usage/**/*"
+    "tools/**/*",
+    "ux/**/*"
   ],
   "exclude": [
     "node_modules"

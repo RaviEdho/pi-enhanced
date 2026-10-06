@@ -11,12 +11,12 @@ Guidance and instructions for AI agents working in this repository.
 - **Google Antigravity Provider (`providers/antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
 - **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **OpenAI Codex Plan Filter (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Fetches the live model catalog from OpenAI and drops unsupported models from `/model` and `pi --list-models` via `@earendil-works/pi-ai`'s native `filterModels` hook.
-- **Provider Quota & Usage Monitor (`usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command.
-- **Autonomous Commit (`commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
-- **Continue Shortcut (`continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
-- **Terminal Output Compressor (`compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
-- **Codebase Scout Search Engine (`scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
-- **Unified Web Search & Fetch Tools (`web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
+- **Provider Quota & Usage Monitor (`ux/usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command and status footer.
+- **Autonomous Commit (`tools/commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
+- **Continue Shortcut (`ux/continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
+- **Terminal Output Compressor (`tools/compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
+- **Codebase Scout Search Engine (`tools/scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
+- **Unified Web Search & Fetch Tools (`tools/web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
 
 ---
 
@@ -24,40 +24,18 @@ Guidance and instructions for AI agents working in this repository.
 
 ```text
 pi-for-raviedho/
-├── accounts/
+├── accounts/                   # Multi-account store, balancer, failover, quota sync
 │   ├── balancer.ts             # AccountBalancer: session affinity, 429 cooldown, token refresh
 │   ├── index.ts                # Account subsystem public exports
+│   ├── logout.ts               # Native TUI account selector during /logout
+│   ├── quota.ts                # Multi-account quota polling, health caching & pace balancing
 │   ├── store.ts                # AccountStore: persistence, auth.json sync
 │   ├── types.ts                # AccountCredential and store schemas
 │   └── wrapper.ts              # executeWithMultiAccountFailover: stream wrapper with 429 rotation
-├── commit/
-│   ├── dialog.ts               # Interactive proposal confirmation dialog with actions & cost metrics
-│   ├── editor.ts               # BlockingCommitEditor with live status & recent action logging
-│   ├── format.ts               # Token, cost, and duration formatting utilities
-│   ├── git.ts                  # Git helpers: diff extraction, staging, commit execution
-│   ├── index.ts                # /commit command registration & interactive approval loop
-│   ├── prompt.ts               # Commit guidelines & sub-agent system instructions
-│   ├── tools.ts                # Minimal git inspection tools (git_overview, git_file_diff, propose_commit)
-│   └── types.ts                # CommitProposal, usage metrics, and git overview data types
-├── continue/
-│   ├── index.ts                # Input handler registering "." continue shortcut
-│   └── prompt.ts               # System directive instructing model to resume unfinished work
-├── compressor/
-│   ├── parsers/
-│   │   ├── git.ts              # Git status, push, commit, log, diff noise reduction
-│   │   ├── lint.ts             # tsc, eslint, biome, ruff, generic linter parsing
-│   │   ├── system.ts           # ls, tree, find, ps, curl/wget download filter
-│   │   └── test.ts             # vitest, jest, pytest, cargo test, go test compression
-│   ├── index.ts                # Output compressor registration, /recall, /gain commands
-│   ├── pipeline.ts             # Central pipeline routing parsers, rules & dedup
-│   ├── recall.ts               # In-memory RecallStore for full uncompressed outputs
-│   ├── rules.ts                # Declarative rules table (docker, pkg managers, terraform)
-│   ├── sanitizer.ts            # ANSI stripping, carriage return resolution, line dedup
-│   ├── tracker.ts              # GainTracker analytics store for token/byte reduction
-│   └── types.ts                # Filter, recall, rule, and analytics data types
-├── providers/
+├── providers/                  # Inference providers & dynamic model discovery
 │   ├── antigravity/
 │   │   ├── constants.ts        # Wire profiles, OAuth endpoints, Google client configuration
+│   │   ├── index.ts            # Antigravity provider registration & streaming adapter
 │   │   ├── models.ts           # Dynamic model catalog discovery & collapsing from Google
 │   │   ├── oauth-page.ts       # Self-contained OAuth success/error HTML response templates
 │   │   ├── oauth.ts            # OAuth 2.0 PKCE flow, loopback server, and token refresh
@@ -68,59 +46,91 @@ pi-for-raviedho/
 │   │   ├── index.ts            # Provider wrapper with filterModels hook
 │   │   ├── plan.ts             # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
 │   │   └── types.ts            # Catalog & cache types
-│   └── hyper/
-│       ├── constants.ts        # Base URLs, API endpoints, User-Agent, timeouts
-│       ├── models.ts           # Dynamic model catalog discovery & fallback mapping from Hyper
-│       ├── oauth.ts            # OAuth 2.0 Device Flow login, loopback poll, and token exchange
-│       ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
-│       └── types.ts            # Hyper device auth, token, and model schemas
-├── scout/
-│   ├── classifier.ts           # Code definition & import scanner (TS, JS, Python, Rust, Go, C/C++)
-│   ├── cursor.ts               # In-memory pagination cursor store
-│   ├── external.ts             # External path & unindexed directory search runner
-│   ├── formatter.ts            # Match-centered line truncation & token budgeting
-│   ├── frecency.ts             # In-memory & persistent frecency tracker with git recency bonus
-│   ├── index.ts                # Scout search engine registration & commands (/scout-health, etc.)
-│   ├── indexer.ts              # In-memory file indexer, git status tracker, and grep engine
-│   ├── interceptor.ts          # Transparent shell search command interceptor & agent steering
-│   ├── matcher.ts              # Typo-tolerant fuzzy matcher & query constraint parser
-│   ├── tools.ts                # Tool definitions (find, grep, multi_grep)
-│   └── types.ts                # Search data structures and configuration types
-├── timer/
-│   └── index.ts                # Working status indicator elapsed duration timer
-├── usage/
-│   ├── antigravity.ts          # Cloud Code Assist quota bucket scraper
-│   ├── codex.ts                # OpenAI Codex /wham/usage quota scraper
-│   ├── format.ts               # Terminal & ASCII progress bar formatting
-│   ├── hyper.ts                # Charm Hyper /v1/credits quota scraper
-│   ├── index.ts                # /usage command registration (TUI overlay + CLI fallback)
-│   └── types.ts                # Quota report structures
-├── web/
-│   ├── fetch/
-│   │   ├── base.ts             # Abstract FetchProvider base class
-│   │   ├── exa.ts              # Exa Contents fetch provider
-│   │   ├── jina.ts             # Jina Reader free public fallback provider
-│   │   ├── parallel.ts         # Parallel Extract fetch provider
-│   │   ├── pipeline.ts         # Central web fetch failover & character budgeting pipeline
-│   │   ├── tavily.ts           # Tavily Extract fetch provider
-│   │   ├── tinyfish.ts         # TinyFish Fetch headless browser provider
-│   │   └── types.ts            # Web fetch data types and schemas
-│   ├── providers/
-│   │   ├── antigravity.ts      # Google Gemini Grounding via Cloud Code Assist
-│   │   ├── base.ts             # Abstract SearchProvider base class
-│   │   ├── brave.ts            # Brave Search API integration
-│   │   ├── exa.ts              # Exa Search API + public MCP fallback
-│   │   ├── parallel.ts         # Parallel Search API + public MCP fallback
-│   │   ├── tavily.ts           # Tavily Search API with direct answers
-│   │   └── tinyfish.ts         # TinyFish Search API integration
-│   ├── auth.ts                 # Multi-source API key resolver (env, auth.json, accounts.json)
-│   ├── formatter.ts            # Token-budgeted response & source citation formatter
-│   ├── index.ts                # Web search subsystem entry point
-│   ├── login.ts                # /login provider registrations for search engines
-│   ├── pipeline.ts             # Central failover search router
-│   ├── query.ts                # Google-style query parser & lenient constraint filter
-│   ├── tools.ts                # web_search & web_fetch tool definitions & TypeBox schemas
-│   └── types.ts                # Web search data types & schemas
+│   ├── hyper/
+│   │   ├── constants.ts        # Base URLs, API endpoints, User-Agent, timeouts
+│   │   ├── index.ts            # Charm Hyper provider registration & streaming adapter
+│   │   ├── models.ts           # Dynamic model catalog discovery & fallback mapping from Hyper
+│   │   ├── oauth.ts            # OAuth 2.0 Device Flow login, loopback poll, and token exchange
+│   │   ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
+│   │   └── types.ts            # Hyper device auth, token, and model schemas
+│   └── index.ts                # registerProviders aggregator
+├── tools/                      # Agent capability tools
+│   ├── commit/
+│   │   ├── dialog.ts           # Interactive proposal confirmation dialog with actions & cost metrics
+│   │   ├── editor.ts           # BlockingCommitEditor with live status & recent action logging
+│   │   ├── format.ts           # Token, cost, and duration formatting utilities
+│   │   ├── git.ts              # Git helpers: diff extraction, staging, commit execution
+│   │   ├── index.ts            # /commit command registration & interactive approval loop
+│   │   ├── prompt.ts           # Commit guidelines & sub-agent system instructions
+│   │   ├── tools.ts            # Minimal git inspection tools (git_overview, git_file_diff, propose_commit)
+│   │   └── types.ts            # CommitProposal, usage metrics, and git overview data types
+│   ├── compressor/
+│   │   ├── parsers/
+│   │   │   ├── git.ts          # Git status, push, commit, log, diff noise reduction
+│   │   │   ├── lint.ts         # tsc, eslint, biome, ruff, generic linter parsing
+│   │   │   ├── system.ts       # ls, tree, find, ps, curl/wget download filter
+│   │   │   └── test.ts         # vitest, jest, pytest, cargo test, go test compression
+│   │   ├── index.ts            # Output compressor registration, /recall, /gain commands
+│   │   ├── pipeline.ts         # Central pipeline routing parsers, rules & dedup
+│   │   ├── recall.ts           # In-memory RecallStore for full uncompressed outputs
+│   │   ├── rules.ts            # Declarative rules table (docker, pkg managers, terraform)
+│   │   ├── sanitizer.ts        # ANSI stripping, carriage return resolution, line dedup
+│   │   ├── tracker.ts          # GainTracker analytics store for token/byte reduction
+│   │   └── types.ts            # Filter, recall, rule, and analytics data types
+│   ├── scout/
+│   │   ├── classifier.ts       # Code definition & import scanner (TS, JS, Python, Rust, Go, C/C++)
+│   │   ├── cursor.ts           # In-memory pagination cursor store
+│   │   ├── external.ts         # External path & unindexed directory search runner
+│   │   ├── formatter.ts        # Match-centered line truncation & token budgeting
+│   │   ├── frecency.ts         # In-memory & persistent frecency tracker with git recency bonus
+│   │   ├── index.ts            # Scout search engine registration & commands (/scout-health, etc.)
+│   │   ├── indexer.ts          # In-memory file indexer, git status tracker, and grep engine
+│   │   ├── interceptor.ts      # Transparent shell search command interceptor & agent steering
+│   │   ├── matcher.ts          # Typo-tolerant fuzzy matcher & query constraint parser
+│   │   ├── tools.ts            # Tool definitions (find, grep, multi_grep)
+│   │   └── types.ts            # Search data structures and configuration types
+│   ├── web/
+│   │   ├── fetch/
+│   │   │   ├── base.ts         # Abstract FetchProvider base class
+│   │   │   ├── exa.ts          # Exa Contents fetch provider
+│   │   │   ├── jina.ts         # Jina Reader free public fallback provider
+│   │   │   ├── parallel.ts     # Parallel Extract fetch provider
+│   │   │   ├── pipeline.ts     # Central web fetch failover & character budgeting pipeline
+│   │   │   ├── tavily.ts       # Tavily Extract fetch provider
+│   │   │   ├── tinyfish.ts     # TinyFish Fetch headless browser provider
+│   │   │   └── types.ts        # Web fetch data types and schemas
+│   │   ├── providers/
+│   │   │   ├── antigravity.ts  # Google Gemini Grounding via Cloud Code Assist
+│   │   │   ├── base.ts         # Abstract SearchProvider base class
+│   │   │   ├── brave.ts        # Brave Search API integration
+│   │   │   ├── exa.ts          # Exa Search API + public MCP fallback
+│   │   │   ├── parallel.ts     # Parallel Search API + public MCP fallback
+│   │   │   ├── tavily.ts       # Tavily Search API with direct answers
+│   │   │   └── tinyfish.ts     # TinyFish Search API integration
+│   │   ├── auth.ts             # Multi-source API key resolver (env, auth.json, accounts.json)
+│   │   ├── formatter.ts        # Token-budgeted response & source citation formatter
+│   │   ├── index.ts            # Web search subsystem entry point
+│   │   ├── login.ts            # /login provider registrations for search engines
+│   │   ├── pipeline.ts         # Central failover search router
+│   │   ├── query.ts            # Google-style query parser & lenient constraint filter
+│   │   ├── tools.ts            # web_search & web_fetch tool definitions & TypeBox schemas
+│   │   └── types.ts            # Web search data types & schemas
+│   └── index.ts                # registerTools aggregator
+├── ux/                         # Workflow & user experience enhancements
+│   ├── continue/
+│   │   ├── index.ts            # Input handler registering "." continue shortcut
+│   │   └── prompt.ts           # System directive instructing model to resume unfinished work
+│   ├── timer/
+│   │   └── index.ts            # Working status indicator elapsed duration timer
+│   ├── usage/
+│   │   ├── antigravity.ts      # Cloud Code Assist quota bucket scraper
+│   │   ├── codex.ts            # OpenAI Codex /wham/usage quota scraper
+│   │   ├── footer.ts           # Status footer showing quota consumption & time progress
+│   │   ├── format.ts           # Terminal & ASCII progress bar formatting
+│   │   ├── hyper.ts            # Charm Hyper /v1/credits quota scraper
+│   │   ├── index.ts            # /usage command registration (TUI overlay + CLI fallback)
+│   │   └── types.ts            # Quota report structures
+│   └── index.ts                # registerUX aggregator
 ├── index.ts                    # Root extension entry point
 ├── package.json                # Pi manifest, package metadata, peerDependencies
 ├── tsconfig.json               # NodeNext TypeScript configuration
