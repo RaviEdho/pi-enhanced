@@ -524,11 +524,10 @@ export class AccountStore {
 
     if (modified) {
       this.save();
-    }
-
-    for (const provider of SUPPORTED_PROVIDERS) {
-      if (this.data.activeAccounts[provider] && authProviders.has(provider)) {
-        this.syncActiveToPiAuth(provider);
+      for (const provider of SUPPORTED_PROVIDERS) {
+        if (this.data.activeAccounts[provider] && authProviders.has(provider)) {
+          this.syncActiveToPiAuth(provider);
+        }
       }
     }
   }
