@@ -234,7 +234,7 @@ function getCachePath(): string {
   return join(homedir(), ".pi/agent/hyper-models-cache.json");
 }
 
-function loadCachedModels(): Model<"openai-completions">[] | null {
+export function loadCachedModels(): Model<"openai-completions">[] | null {
   const cachePath = getCachePath();
   if (!existsSync(cachePath)) return null;
   try {
@@ -249,7 +249,7 @@ function loadCachedModels(): Model<"openai-completions">[] | null {
   return null;
 }
 
-function saveCachedModels(models: Model<"openai-completions">[]): void {
+export function saveCachedModels(models: Model<"openai-completions">[]): void {
   try {
     const cachePath = getCachePath();
     const dir = dirname(cachePath);
@@ -264,6 +264,9 @@ function saveCachedModels(models: Model<"openai-completions">[]): void {
     // Ignore cache save errors
   }
 }
+
+export const loadCachedHyperModels = loadCachedModels;
+export const saveCachedHyperModels = saveCachedModels;
 
 function buildThinkingLevelMap(levels: string[]): ThinkingLevelMap | undefined {
   if (levels.length === 0) return undefined;

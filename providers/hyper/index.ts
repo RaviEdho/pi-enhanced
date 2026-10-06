@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_HYPER_MODELS,
   fetchHyperModels,
+  loadCachedModels,
 } from "./models.js";
 import {
   getHyperApiKey,
@@ -27,27 +28,25 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
 
-  // Retrieve active token for Charm Hyper initial model discovery
-  let hyperToken: string | undefined = process.env.HYPER_API_KEY;
-  const activeHyperAccount = store.getActive(HYPER_PROVIDER_ID);
-  if (activeHyperAccount) {
-    try {
-      hyperToken = await balancer.ensureFreshToken(activeHyperAccount);
-    } catch {
-      // Non-fatal if offline
-    }
-  }
+  // Always load from disk cache first, falling back to offline defaults
+  let hyperModels = loadCachedModels() || DEFAULT_HYPER_MODELS;
 
-  // Dynamically fetch live models from Charm Hyper
-  let hyperModels = DEFAULT_HYPER_MODELS;
-  try {
-    const dynamicHyperModels = await fetchHyperModels(hyperToken);
-    if (dynamicHyperModels && dynamicHyperModels.length > 0) {
-      hyperModels = dynamicHyperModels;
+  // Kick off non-blocking background discovery to refresh cached models
+  const activeHyperAccount = store.getActive(HYPER_PROVIDER_ID);
+  void (async () => {
+    try {
+      let hyperToken = process.env.HYPER_API_KEY;
+      if (activeHyperAccount) {
+        hyperToken = await balancer.ensureFreshToken(activeHyperAccount);
+      }
+      const dynamicHyperModels = await fetchHyperModels(hyperToken);
+      if (dynamicHyperModels && dynamicHyperModels.length > 0) {
+        hyperModels = dynamicHyperModels;
+      }
+    } catch {
+      // Non-fatal background refresh
     }
-  } catch {
-    // Keep defaults on network failure
-  }
+  })();
 
   // Register Charm Hyper provider with multi-account failover and streaming support
   pi.registerProvider(HYPER_PROVIDER_ID, {
@@ -60,7 +59,7 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
 
     async refreshModels(context) {
       if (context?.allowNetwork === false || context?.signal?.aborted) {
-        return hyperModels;
+        return loadCachedModels() || hyperModels;
       }
       const currentActive = store.getActive(HYPER_PROVIDER_ID);
       let activeToken = process.env.HYPER_API_KEY;
@@ -79,10 +78,10 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
         }
       }
       if (!activeToken) {
-        return hyperModels;
+        return loadCachedModels() || hyperModels;
       }
       const live = await fetchHyperModels(activeToken, context?.signal);
-      return live && live.length > 0 ? live : hyperModels;
+      return live && live.length > 0 ? live : (loadCachedModels() || hyperModels);
     },
 
     oauth: {

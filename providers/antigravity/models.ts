@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import {
   ANTIGRAVITY_PRIMARY_ENDPOINT,
@@ -5,6 +8,41 @@ import {
   getAntigravityUserAgent,
 } from "./constants.js";
 import type { AntigravityDiscoveryApiModel, AntigravityDiscoveryResponse } from "./types.js";
+
+function getCachePath(): string {
+  return join(homedir(), ".pi/agent/antigravity-models-cache.json");
+}
+
+export function loadCachedAntigravityModels(): ProviderModelConfig[] | null {
+  const cachePath = getCachePath();
+  if (!existsSync(cachePath)) return null;
+  try {
+    const raw = readFileSync(cachePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as ProviderModelConfig[];
+    }
+  } catch {
+    // Ignore cache load errors
+  }
+  return null;
+}
+
+export function saveCachedAntigravityModels(models: ProviderModelConfig[]): void {
+  try {
+    const cachePath = getCachePath();
+    const dir = dirname(cachePath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    writeFileSync(cachePath, JSON.stringify(models, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch {
+    // Ignore cache save errors
+  }
+}
 
 /** Default offline/pre-fetch fallback catalog */
 export const DEFAULT_ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
@@ -186,7 +224,11 @@ export async function fetchAndCollapseAntigravityModels(
     if (!data.models) return null;
 
     const collapsed = collapseAntigravityModels(data.models);
-    return collapsed.length > 0 ? collapsed : null;
+    if (collapsed.length > 0) {
+      saveCachedAntigravityModels(collapsed);
+      return collapsed;
+    }
+    return null;
   } catch {
     return null;
   }

@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_ANTIGRAVITY_MODELS,
   fetchAndCollapseAntigravityModels,
+  loadCachedAntigravityModels,
 } from "./models.js";
 import {
   getAntigravityApiKey,
@@ -28,28 +29,25 @@ export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<voi
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
 
-  // Retrieve active token for initial model discovery
-  let token: string | undefined;
+  // Always load from disk cache first, falling back to offline defaults
+  let models = loadCachedAntigravityModels() || DEFAULT_ANTIGRAVITY_MODELS;
+
+  // Kick off non-blocking background discovery to refresh cached models if active account exists
   const activeAccount = store.getActive(PROVIDER_ID);
   if (activeAccount) {
-    try {
-      token = await balancer.ensureFreshToken(activeAccount);
-    } catch {
-      // Non-fatal if offline
-    }
-  }
-
-  // Dynamically fetch and collapse live models from Google if token is available
-  let models = DEFAULT_ANTIGRAVITY_MODELS;
-  if (token) {
-    try {
-      const dynamicModels = await fetchAndCollapseAntigravityModels(token);
-      if (dynamicModels && dynamicModels.length > 0) {
-        models = dynamicModels;
+    void (async () => {
+      try {
+        const token = await balancer.ensureFreshToken(activeAccount);
+        if (token) {
+          const dynamicModels = await fetchAndCollapseAntigravityModels(token);
+          if (dynamicModels && dynamicModels.length > 0) {
+            models = dynamicModels;
+          }
+        }
+      } catch {
+        // Non-fatal background refresh
       }
-    } catch {
-      // Keep defaults on network failure
-    }
+    })();
   }
 
   // Register Google Antigravity provider with multi-account failover and streaming support
@@ -62,7 +60,7 @@ export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<voi
 
     async refreshModels(context) {
       if (context?.allowNetwork === false || context?.signal?.aborted) {
-        return models;
+        return loadCachedAntigravityModels() || models;
       }
       const currentActive = store.getActive(PROVIDER_ID);
       let activeToken: string | undefined;
@@ -79,10 +77,11 @@ export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<voi
       if (activeToken) {
         const liveModels = await fetchAndCollapseAntigravityModels(activeToken, context?.signal);
         if (liveModels && liveModels.length > 0) {
+          models = liveModels;
           return liveModels;
         }
       }
-      return models;
+      return loadCachedAntigravityModels() || models;
     },
 
     oauth: {
