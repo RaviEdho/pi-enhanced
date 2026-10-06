@@ -4,7 +4,7 @@ Guidance and instructions for AI agents working in this repository.
 
 ## Repository Overview
 
-`pi-for-raviedho` is a personal extension suite for the [Pi](https://github.com/earendil-works/pi) coding agent. It bundles custom providers, tools, quota monitors, and model filtering logic into an installable Pi package.
+`pi-enhanced` is an enhanced extension suite for the [Pi](https://github.com/earendil-works/pi) coding agent. It bundles custom providers, tools, quota monitors, and model filtering logic into an installable Pi package.
 
 ### Key Capabilities
 - **Multi-Account Manager & Balancer (`accounts/`)**: Multi-account store (`accounts.json`), session affinity hashing, weekly reset pace optimization, automatic sync from Pi (`auth.json`), automatic token refresh, and transparent 429 rate limit failover across accounts during streaming turns.
@@ -23,7 +23,7 @@ Guidance and instructions for AI agents working in this repository.
 ## Directory Layout
 
 ```text
-pi-for-raviedho/
+pi-enhanced/
 ├── accounts/                   # Multi-account store, balancer, failover, quota sync
 │   ├── balancer.ts             # AccountBalancer: session affinity, 429 cooldown, token refresh
 │   ├── index.ts                # Account subsystem public exports
@@ -142,7 +142,7 @@ pi-for-raviedho/
 ## Development Principles & Rules
 
 1. **Root-Level Package Structure**:
-   - `index.ts` lives at the repository root. Do not wrap files in redundant nested directories (e.g. avoid `pi-for-raviedho/pi-for-raviedho/`).
+   - `index.ts` lives at the repository root. Do not wrap files in redundant nested directories (e.g. avoid `pi-enhanced/pi-enhanced/`).
    - `package.json` declares `"pi": { "extensions": ["./index.ts"] }`.
 
 2. **Module Imports & NodeNext**:
@@ -205,7 +205,7 @@ pi -p "/usage"
 
 ## Release & Distribution Workflow
 
-This package is distributed directly via **GitHub** (`pi install git:github.com/RaviEdho/pi-for-raviedho`).
+This package is distributed directly via **GitHub** (`pi install git:github.com/RaviEdho/pi-enhanced`).
 
 ### Step-by-Step Release Process
 

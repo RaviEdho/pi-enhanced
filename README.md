@@ -1,6 +1,6 @@
-# pi-for-raviedho
+# pi-enhanced
 
-Personalized Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, and dynamic OpenAI Codex plan filtering.
+Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
 
 ## Features
 
@@ -39,7 +39,7 @@ Personalized Pi extension package providing the **Google Antigravity** provider,
 ### 1. Install Extension Globally
 
 ```bash
-pi install git:github.com/RaviEdho/pi-for-raviedho
+pi install git:github.com/RaviEdho/pi-enhanced
 ```
 
 Verify installed packages:

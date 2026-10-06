@@ -1,7 +1,7 @@
 {
-  "name": "pi-for-raviedho",
+  "name": "pi-enhanced",
   "version": "0.1.0",
-  "description": "Personalized Pi extension package providing Google Antigravity, Charm Hyper inference provider, and dynamic OpenAI Codex plan filtering.",
+  "description": "Enhanced Pi extension package providing Google Antigravity, Charm Hyper inference provider, autonomous commit, output compression, codebase search, unified web search, and quota monitoring.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -9,12 +9,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RaviEdho/pi-for-raviedho.git"
+    "url": "git+https://github.com/RaviEdho/pi-enhanced.git"
   },
   "bugs": {
-    "url": "https://github.com/RaviEdho/pi-for-raviedho/issues"
+    "url": "https://github.com/RaviEdho/pi-enhanced/issues"
   },
-  "homepage": "https://github.com/RaviEdho/pi-for-raviedho#readme",
+  "homepage": "https://github.com/RaviEdho/pi-enhanced#readme",
   "files": [
     "index.ts",
     "accounts",

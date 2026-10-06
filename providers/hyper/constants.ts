@@ -10,7 +10,7 @@ export const CREDITS_URL = `${HYPER_API_BASE_URL}/credits`;
 export const PROVIDER_INFO_URL = `${HYPER_API_BASE_URL}/provider`;
 export const MODELS_URL = `${HYPER_API_BASE_URL}/models`;
 
-export const HYPER_USER_AGENT = "pi-for-raviedho/0.1.0";
+export const HYPER_USER_AGENT = "pi-enhanced/0.1.0";
 
 export const DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5;
 export const OAUTH_FETCH_TIMEOUT_MS = 30_000;
