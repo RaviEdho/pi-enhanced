@@ -37,7 +37,11 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
     try {
       let hyperToken = process.env.HYPER_API_KEY;
       if (activeHyperAccount) {
-        hyperToken = await balancer.ensureFreshToken(activeHyperAccount);
+        try {
+          hyperToken = await balancer.ensureFreshToken(activeHyperAccount);
+        } catch {
+          // Token expired or revoked; fetch public catalog without token
+        }
       }
       const dynamicHyperModels = await fetchHyperModels(hyperToken);
       if (dynamicHyperModels && dynamicHyperModels.length > 0) {
