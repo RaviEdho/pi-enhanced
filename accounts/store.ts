@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 1;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai"]);
 
 export class AccountStore {
   private static instance?: AccountStore;
@@ -247,6 +247,7 @@ export class AccountStore {
         projectId: active.projectId,
         email: active.email,
         accountId: active.accountId,
+        clientId: active.clientId,
         orgId: active.orgId,
       };
     } else if (active.type === "api_key") {
@@ -381,13 +382,14 @@ export class AccountStore {
               extractAccountIdFromJwt(access);
             const projectId = typeof cred.projectId === "string" ? cred.projectId : undefined;
             const key = typeof cred.key === "string" ? cred.key : undefined;
+            const clientId = typeof cred.clientId === "string" ? cred.clientId : undefined;
             const tokenSuffix = refresh ? `token-${refresh.slice(-8)}` : access ? `tok-${access.slice(-8)}` : undefined;
             const identity = email || accountId || (projectId && projectId !== "aicode-consumers" ? projectId : undefined) || (key ? `key-${key.slice(-6)}` : undefined) || tokenSuffix || "default";
             const id = AccountStore.generateAccountId(provider, identity);
 
             const planType =
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
-              (provider === "openai-codex" ? extractPlanTypeFromJwt(access) : undefined) ||
+              (provider === "openai-codex" || provider === "openai" ? extractPlanTypeFromJwt(access) : undefined) ||
               (provider === "hyper" ? "free" : undefined) ||
               (provider === "google-antigravity" ? "free-tier" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
@@ -419,6 +421,7 @@ export class AccountStore {
                 email,
                 accountId,
                 projectId,
+                clientId,
                 orgId: teamId,
                 orgName: teamName,
                 planType,
@@ -436,6 +439,7 @@ export class AccountStore {
               if (email && !existing.email) existing.email = email;
               if (accountId && !existing.accountId) existing.accountId = accountId;
               if (projectId && !existing.projectId) existing.projectId = projectId;
+              if (clientId && !existing.clientId) existing.clientId = clientId;
               if (teamId && !existing.orgId) existing.orgId = teamId;
               if (teamName && !existing.orgName) existing.orgName = teamName;
               if (key && !existing.apiKey) existing.apiKey = key;

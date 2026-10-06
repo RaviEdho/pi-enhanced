@@ -316,6 +316,44 @@ export class AccountBalancer {
         if (account.access) return account.access;
         throw err;
       }
+    } else if (account.provider === "openai") {
+      if (account.type === "api_key" || account.apiKey) {
+        return account.apiKey || account.access || "";
+      }
+      try {
+        const baseOpenAI = builtinProviders().find((p) => p.id === "openai");
+        if (baseOpenAI?.auth.oauth?.refresh) {
+          const cred = await baseOpenAI.auth.oauth.refresh(
+            {
+              type: "oauth",
+              access: account.access || "",
+              refresh: account.refresh,
+              expires: account.expires || 0,
+              clientId: account.clientId,
+            } as any,
+            new AbortController().signal
+          );
+          if (cred && cred.access) {
+            account.access = cred.access;
+            if (cred.refresh) account.refresh = cred.refresh;
+            account.expires = cred.expires;
+            if ((cred as any).clientId) account.clientId = (cred as any).clientId;
+            account.updatedAt = Date.now();
+            this.store.upsert(account);
+            return cred.access;
+          }
+        }
+      } catch (err) {
+        if (isAuthRevocationError(err)) {
+          account.disabledCause = `Session expired or revoked (run /login ${account.provider})`;
+          account.updatedAt = Date.now();
+          this.store.upsert(account);
+          throw new Error(account.disabledCause);
+        }
+        console.warn(`[AccountBalancer] OpenAI token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
+        if (account.access) return account.access;
+        throw err;
+      }
     }
 
     if (account.provider === "hyper") {

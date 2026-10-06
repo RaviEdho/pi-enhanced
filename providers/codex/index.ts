@@ -158,3 +158,42 @@ export function registerCodexFilter(pi: ExtensionAPI): void {
 
   pi.registerProvider(filteredCodexProvider);
 }
+
+/**
+ * Registers the OpenAI provider wrapper with multi-account failover for ChatGPT subscription accounts.
+ */
+export function registerOpenAIProvider(pi: ExtensionAPI): void {
+  const baseOpenAI = builtinProviders().find((p) => p.id === "openai");
+  if (!baseOpenAI) {
+    return;
+  }
+
+  const wrappedOpenAI: Provider = {
+    ...baseOpenAI,
+
+    streamSimple(model: Model<Api>, transcript: TranscriptContext, options?: SimpleStreamOptions) {
+      const store = AccountStore.getInstance();
+      const accounts = store.list("openai").filter((a) => !a.disabledCause);
+
+      // If no accounts or only 1 static API key without OAuth, pass through standard streamSimple
+      if (accounts.length === 0 || (accounts.length === 1 && accounts[0].type === "api_key")) {
+        return baseOpenAI.streamSimple(model, transcript, options);
+      }
+
+      return executeWithMultiAccountFailover(
+        "openai",
+        model,
+        transcript,
+        options,
+        (m, ctx, opts, resolvedAuth) => {
+          return baseOpenAI.streamSimple(m, ctx, {
+            ...opts,
+            apiKey: resolvedAuth.token,
+          });
+        }
+      );
+    },
+  };
+
+  pi.registerProvider(wrappedOpenAI);
+}

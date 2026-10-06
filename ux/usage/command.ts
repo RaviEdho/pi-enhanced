@@ -301,7 +301,109 @@ export async function collectUsageReports(
     }
   }
 
-  // 3. Charm Hyper multi-account fetch in parallel
+  // 3. OpenAI (ChatGPT subscription) multi-account fetch in parallel
+  const isOpenAIActive = options?.currentProvider === "openai";
+  const openaiAccounts = store.list("openai").filter((a) => a.type === "oauth");
+  const openaiPromises: Promise<ProviderUsageReport>[] = [];
+  if (openaiAccounts.length > 0) {
+    const sessionAccount = isOpenAIActive
+      ? balancer.getSessionAccount(
+          "openai",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
+    for (const acc of openaiAccounts) {
+      if (signal?.aborted) break;
+      const isSession = isOpenAIActive && sessionAccount?.id === acc.id;
+      const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
+      const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
+      const label = acc.email || acc.accountId || acc.id;
+
+      if (acc.disabledCause) {
+        openaiPromises.push(
+          Promise.resolve({
+            providerId: "openai",
+            providerName: "OpenAI (ChatGPT)",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
+      openaiPromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          try {
+            const token = await balancer.ensureFreshToken(acc);
+            const report = await fetchCodexUsage({
+              accessToken: token,
+              accountId: acc.accountId,
+              email: label,
+              refreshToken: acc.refresh,
+              signal,
+            });
+            report.providerId = "openai";
+            report.providerName = "OpenAI (ChatGPT)";
+            report.isSessionAccount = isSession;
+            report.accountId = acc.id;
+            report.accountEmail = label;
+            report.cooldownMinutes = isCooldown ? mins : undefined;
+            if (report.error && isAuthRevocationError(report.error)) {
+              acc.disabledCause = `Session expired or revoked (run /login openai)`;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+              report.error = acc.disabledCause;
+            }
+            QuotaManager.getInstance().setReport(acc.id, report);
+            return report;
+          } catch (err) {
+            return {
+              providerId: "openai",
+              providerName: "OpenAI (ChatGPT)",
+              accountEmail: label,
+              accountId: acc.id,
+              isSessionAccount: isSession,
+              planType: acc.planType,
+              cooldownMinutes: isCooldown ? mins : undefined,
+              fetchedAt: Date.now(),
+              groups: [],
+              error: formatUsageErrorMessage(err, "openai"),
+            };
+          }
+        })()
+      );
+    }
+  } else {
+    // Fallback to auth.json if openai is configured with OAuth
+    const authMap = loadConfiguredAuth();
+    const openaiAuth = authMap["openai"];
+    if (openaiAuth?.access && openaiAuth.type === "oauth") {
+      openaiPromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          const report = await fetchCodexUsage({
+            accessToken: openaiAuth.access!,
+            accountId: openaiAuth.accountId,
+            email: openaiAuth.email,
+            refreshToken: openaiAuth.refresh,
+            signal,
+          });
+          report.providerId = "openai";
+          report.providerName = "OpenAI (ChatGPT)";
+          report.isSessionAccount = isOpenAIActive;
+          return report;
+        })()
+      );
+    }
+  }
+
+  // 4. Charm Hyper multi-account fetch in parallel
   const isHyperActive = options?.currentProvider === "hyper";
   const hyperPromises: Promise<ProviderUsageReport>[] = [];
   if (hyperAccounts.length > 0) {
@@ -400,6 +502,7 @@ export async function collectUsageReports(
   const settled = await Promise.allSettled([
     ...antigravityPromises,
     ...codexPromises,
+    ...openaiPromises,
     ...hyperPromises,
   ]);
   for (const s of settled) {

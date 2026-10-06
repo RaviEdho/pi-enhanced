@@ -6,6 +6,7 @@ export interface AccountCredential {
   email?: string;
   accountId?: string;
   projectId?: string;
+  clientId?: string;
   planType?: string;
   orgId?: string;
   orgName?: string;
