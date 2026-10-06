@@ -29,6 +29,4 @@ export function registerWebSearch(pi: ExtensionAPI): void {
 }
 
 export * from "./types.js";
-export * from "./pipeline.js";
 export * from "./fetch/types.js";
-export * from "./fetch/pipeline.js";

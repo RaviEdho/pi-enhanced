@@ -1,6 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { FrecencyTracker } from "./frecency.js";
-import { FileIndexer } from "./indexer.js";
 import { registerSearchInterceptor } from "./interceptor.js";
 import {
   createFindToolDefinition,
@@ -9,8 +7,6 @@ import {
 } from "./tools.js";
 
 export function registerScout(pi: ExtensionAPI): void {
-  const frecency = FrecencyTracker.getInstance();
-
   // Register core search tools
   pi.registerTool(createFindToolDefinition("find"));
   pi.registerTool(createGrepToolDefinition("grep"));
@@ -36,6 +32,7 @@ export function registerScout(pi: ExtensionAPI): void {
   pi.on("session_start", async () => {
     try {
       activateSearchTools();
+      const { FileIndexer } = await import("./indexer.js");
       const indexer = FileIndexer.getInstance();
       // Start background scan without blocking startup
       indexer.scan().catch(() => {});
@@ -92,12 +89,18 @@ export function registerScout(pi: ExtensionAPI): void {
   registerSearchInterceptor(pi);
 
   // Save frecency to disk cleanly on shutdown
-  pi.on("session_shutdown", () => {
-    frecency.saveSync();
+  pi.on("session_shutdown", async () => {
+    try {
+      const { FrecencyTracker } = await import("./frecency.js");
+      FrecencyTracker.getInstance().saveSync();
+    } catch {
+      // Ignore shutdown errors
+    }
   });
 
   // Rescan command to force reindexing
   const handleRescan = async (_args: string | undefined, ctx: any) => {
+    const { FileIndexer } = await import("./indexer.js");
     const indexer = FileIndexer.getInstance(ctx.cwd);
     await indexer.scan(true);
     const count = indexer.getIndexedFileCount();
@@ -121,7 +124,10 @@ export function registerScout(pi: ExtensionAPI): void {
 
   // Health command
   const handleHealth = async (_args: string | undefined, ctx: any) => {
+    const { FileIndexer } = await import("./indexer.js");
+    const { FrecencyTracker } = await import("./frecency.js");
     const indexer = FileIndexer.getInstance(ctx.cwd);
+    const frecency = FrecencyTracker.getInstance();
     await indexer.scan();
     const filesCount = indexer.getIndexedFileCount();
     const gitCount = indexer.getGitModifiedCount();

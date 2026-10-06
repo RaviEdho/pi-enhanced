@@ -5,10 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { formatSearchResponseForLLM } from "./formatter.js";
-import { FetchPipeline } from "./fetch/pipeline.js";
 import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
-import { SearchPipeline } from "./pipeline.js";
 import type { SearchProviderId } from "./types.js";
 
 const WebSearchParametersSchema = Type.Object({
@@ -81,6 +78,8 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, TinyFish, Exa, Parallel).",
     parameters: WebSearchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const { SearchPipeline } = await import("./pipeline.js");
+      const { formatSearchResponseForLLM } = await import("./formatter.js");
       const pipeline = SearchPipeline.getInstance();
 
       if (params.provider) {
@@ -226,6 +225,7 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
       "Fetch and extract clean Markdown content from any web page, documentation article, or blog post. Automatically handles JavaScript-rendered SPAs and anti-bot challenges with multi-provider failover (TinyFish, Parallel, Exa, Tavily, Jina Reader).",
     parameters: WebFetchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const { FetchPipeline } = await import("./fetch/pipeline.js");
       const pipeline = FetchPipeline.getInstance();
 
       if (params.provider) {

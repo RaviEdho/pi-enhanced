@@ -1,12 +1,6 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { runFilterPipeline } from "./pipeline.js";
-import { RecallStore } from "./recall.js";
-import { GainTracker } from "./tracker.js";
 
 export function registerOutputCompressor(pi: ExtensionAPI): void {
-  const recallStore = RecallStore.getInstance();
-  const tracker = GainTracker.getInstance();
-
   // Intercept tool results from bash/powershell to filter noisy output before LLM context
   pi.on("tool_result", async (event: ToolResultEvent) => {
     try {
@@ -32,6 +26,11 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
       }
 
       const rawText = textBlocks.map((c) => c.text).join("\n");
+      const { runFilterPipeline } = await import("./pipeline.js");
+      const { RecallStore } = await import("./recall.js");
+      const { GainTracker } = await import("./tracker.js");
+      const tracker = GainTracker.getInstance();
+      const recallStore = RecallStore.getInstance();
       const result = runFilterPipeline(command, rawText, event.isError);
 
       if (!result || result.text === rawText) {
@@ -69,6 +68,8 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
   pi.registerCommand("recall", {
     description: "Inspect the raw unfiltered output of a recent command: /recall [id]",
     handler: async (args, ctx) => {
+      const { RecallStore } = await import("./recall.js");
+      const recallStore = RecallStore.getInstance();
       const id = args?.trim();
 
       if (!id) {
@@ -129,6 +130,8 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
   pi.registerCommand("gain", {
     description: "Display token savings achieved by native output filtering",
     handler: async (_args, ctx) => {
+      const { GainTracker } = await import("./tracker.js");
+      const tracker = GainTracker.getInstance();
       const summaryText = tracker.formatSummary();
       if (ctx.hasUI && ctx.mode === "tui") {
         ctx.ui.notify(summaryText, "info");
