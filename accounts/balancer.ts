@@ -102,6 +102,19 @@ export function extractCooldownMs(error: unknown): number {
   return DEFAULT_COOLDOWN_MS;
 }
 
+function isAuthRevocationError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("revoked") ||
+    msg.includes("invalid_grant") ||
+    msg.includes("unauthorized_client") ||
+    msg.includes("token has invalid claims") ||
+    msg.includes("token is expired") ||
+    msg.includes("authentication_error") ||
+    msg.includes("401")
+  );
+}
+
 export class AccountBalancer {
   private static instance?: AccountBalancer;
   private store: AccountStore;
@@ -209,6 +222,10 @@ export class AccountBalancer {
    * Refreshes OAuth token for an account if expired or expiring soon.
    */
   public async ensureFreshToken(account: AccountCredential): Promise<string> {
+    if (account.disabledCause) {
+      throw new Error(account.disabledCause);
+    }
+
     const now = Date.now();
     const isNearExpiry = account.expires && now + EXPIRY_BUFFER_MS >= account.expires;
 
@@ -256,7 +273,13 @@ export class AccountBalancer {
         this.store.upsert(account);
         return refreshed.access;
       } catch (err) {
-        console.error(`[AccountBalancer] Antigravity token refresh failed for ${account.id}:`, err);
+        if (isAuthRevocationError(err)) {
+          account.disabledCause = `Session expired or revoked (run /login ${account.provider})`;
+          account.updatedAt = Date.now();
+          this.store.upsert(account);
+          throw new Error(account.disabledCause);
+        }
+        console.warn(`[AccountBalancer] Antigravity token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
         if (account.access) return account.access;
         throw err;
       }
@@ -283,7 +306,13 @@ export class AccountBalancer {
           }
         }
       } catch (err) {
-        console.error(`[AccountBalancer] OpenAI Codex token refresh failed for ${account.id}:`, err);
+        if (isAuthRevocationError(err)) {
+          account.disabledCause = `Session expired or revoked (run /login ${account.provider})`;
+          account.updatedAt = Date.now();
+          this.store.upsert(account);
+          throw new Error(account.disabledCause);
+        }
+        console.warn(`[AccountBalancer] OpenAI Codex token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
         if (account.access) return account.access;
         throw err;
       }
@@ -312,7 +341,13 @@ export class AccountBalancer {
             return cred.access;
           }
         } catch (err) {
-          console.error(`[AccountBalancer] Charm Hyper token refresh failed for ${account.id}:`, err);
+          if (isAuthRevocationError(err)) {
+            account.disabledCause = `Session expired or revoked (run /login ${account.provider})`;
+            account.updatedAt = Date.now();
+            this.store.upsert(account);
+            throw new Error(account.disabledCause);
+          }
+          console.warn(`[AccountBalancer] Charm Hyper token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
           if (account.access) return account.access;
           throw err;
         }

@@ -32,6 +32,30 @@ interface StoredAuthEntry {
   accountId?: string;
 }
 
+function isAuthRevocationError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("revoked") ||
+    msg.includes("invalid_grant") ||
+    msg.includes("unauthorized_client") ||
+    msg.includes("token has invalid claims") ||
+    msg.includes("token is expired") ||
+    msg.includes("authentication_error") ||
+    msg.includes("token_revoked") ||
+    msg.includes("invalidated oauth token") ||
+    msg.includes("authentication failed") ||
+    msg.includes("401")
+  );
+}
+
+function formatUsageErrorMessage(err: unknown, provider: string): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (isAuthRevocationError(msg)) {
+    return `Session expired or revoked (run /login ${provider})`;
+  }
+  return msg;
+}
+
 export interface CollectUsageOptions {
   signal?: AbortSignal;
   sessionId?: string;
@@ -97,6 +121,24 @@ export async function collectUsageReports(
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const label = acc.email || acc.id;
 
+      if (acc.disabledCause) {
+        antigravityPromises.push(
+          Promise.resolve({
+            providerId: "google-antigravity",
+            providerName: "Google Antigravity",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
       antigravityPromises.push(
         (async (): Promise<ProviderUsageReport> => {
           try {
@@ -117,6 +159,12 @@ export async function collectUsageReports(
               acc.updatedAt = Date.now();
               store.upsert(acc);
             }
+            if (report.error && isAuthRevocationError(report.error)) {
+              acc.disabledCause = `Session expired or revoked (run /login google-antigravity)`;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+              report.error = acc.disabledCause;
+            }
             QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
@@ -130,7 +178,7 @@ export async function collectUsageReports(
               cooldownMinutes: isCooldown ? mins : undefined,
               fetchedAt: Date.now(),
               groups: [],
-              error: err instanceof Error ? err.message : String(err),
+              error: formatUsageErrorMessage(err, "google-antigravity"),
             };
           }
         })()
@@ -174,6 +222,24 @@ export async function collectUsageReports(
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const label = acc.email || acc.accountId || acc.id;
 
+      if (acc.disabledCause) {
+        codexPromises.push(
+          Promise.resolve({
+            providerId: "openai-codex",
+            providerName: "OpenAI Codex",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
       codexPromises.push(
         (async (): Promise<ProviderUsageReport> => {
           try {
@@ -189,6 +255,12 @@ export async function collectUsageReports(
             report.accountId = acc.id;
             report.accountEmail = label;
             report.cooldownMinutes = isCooldown ? mins : undefined;
+            if (report.error && isAuthRevocationError(report.error)) {
+              acc.disabledCause = `Session expired or revoked (run /login openai-codex)`;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+              report.error = acc.disabledCause;
+            }
             QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
@@ -202,7 +274,7 @@ export async function collectUsageReports(
               cooldownMinutes: isCooldown ? mins : undefined,
               fetchedAt: Date.now(),
               groups: [],
-              error: err instanceof Error ? err.message : String(err),
+              error: formatUsageErrorMessage(err, "openai-codex"),
             };
           }
         })()
@@ -247,6 +319,24 @@ export async function collectUsageReports(
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
       const label = acc.email || acc.orgName || acc.id;
 
+      if (acc.disabledCause) {
+        hyperPromises.push(
+          Promise.resolve({
+            providerId: "hyper",
+            providerName: "Charm Hyper",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
       hyperPromises.push(
         (async (): Promise<ProviderUsageReport> => {
           try {
@@ -261,6 +351,12 @@ export async function collectUsageReports(
             report.accountId = acc.id;
             report.accountEmail = label;
             report.cooldownMinutes = isCooldown ? mins : undefined;
+            if (report.error && isAuthRevocationError(report.error)) {
+              acc.disabledCause = `Session expired or revoked (run /login hyper)`;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+              report.error = acc.disabledCause;
+            }
             QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
@@ -274,7 +370,7 @@ export async function collectUsageReports(
               cooldownMinutes: isCooldown ? mins : undefined,
               fetchedAt: Date.now(),
               groups: [],
-              error: err instanceof Error ? err.message : String(err),
+              error: formatUsageErrorMessage(err, "hyper"),
             };
           }
         })()

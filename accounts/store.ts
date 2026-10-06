@@ -108,6 +108,10 @@ export class AccountStore {
         };
 
         for (const acc of this.data.accounts) {
+          if (acc.disabledCause && /401|invalidated|revoked|authentication failed|credits check failed/i.test(acc.disabledCause)) {
+            const prov = acc.provider.replace("openai-", "").replace("google-", "");
+            acc.disabledCause = `Session expired or revoked (run /login ${prov})`;
+          }
           const block = activeBlocks.get(acc.id);
           if (block && (!acc.blockedUntil || block.blockedUntil! > acc.blockedUntil)) {
             acc.blockedUntil = block.blockedUntil;

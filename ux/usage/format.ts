@@ -398,7 +398,16 @@ export function buildUsageLines(
         lines.push(header);
 
         if (report.error) {
-          lines.push(`      ${error(`⚠️  Could not fetch usage: ${report.error}`)}`);
+          const isAuth =
+            /401|revoked|expired|unauthorized|invalidated|authentication failed|invalid_grant|invalid token|credits check failed/i.test(
+              report.error
+            );
+          const cleanErr = isAuth
+            ? `Session expired or revoked (run /login ${report.providerId.replace("openai-", "").replace("google-", "")})`
+            : (report.error.startsWith("Session") || report.error.startsWith("Token") || report.error.includes("/login")
+                ? report.error
+                : `Could not fetch usage: ${report.error}`);
+          lines.push(`      ${error(`⚠️  ${cleanErr}`)}`);
         } else {
           const allBuckets = report.groups.flatMap((g) => g.buckets);
           if (allBuckets.length === 0) {

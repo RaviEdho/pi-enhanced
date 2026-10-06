@@ -115,12 +115,13 @@ export class QuotaManager {
     this.saveDiskCache();
 
     if (report.error) {
-      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed/i.test(report.error);
+      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
       if (isAuthErr) {
         const store = AccountStore.getInstance();
         const acc = store.get(accountId);
-        if (acc && !acc.disabledCause) {
-          acc.disabledCause = `Authentication failed: ${report.error}`;
+        if (acc) {
+          const prov = acc.provider.replace("openai-", "").replace("google-", "");
+          acc.disabledCause = `Session expired or revoked (run /login ${prov})`;
           store.upsert(acc);
         }
       }
@@ -236,9 +237,10 @@ export class QuotaManager {
 
     const report = this.getReport(account.id);
     if (report?.error) {
-      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed/i.test(report.error);
-      if (isAuthErr && !account.disabledCause) {
-        account.disabledCause = `Authentication failed: ${report.error}`;
+      const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
+      if (isAuthErr) {
+        const prov = account.provider.replace("openai-", "").replace("google-", "");
+        account.disabledCause = `Session expired or revoked (run /login ${prov})`;
         AccountStore.getInstance().upsert(account);
       }
       return {
@@ -248,7 +250,7 @@ export class QuotaManager {
         weight: 9999.0,
         remainingFraction: 0.0,
         isUnstarted: false,
-        reason: report.error,
+        reason: account.disabledCause || report.error,
       };
     }
 
