@@ -117,10 +117,6 @@ export function registerScout(pi: ExtensionAPI): void {
     description: "Force rescan the repository index and refresh git status",
     handler: handleRescan,
   });
-  pi.registerCommand("search-rescan", {
-    description: "Alias for /scout-rescan",
-    handler: handleRescan,
-  });
 
   // Health command
   const handleHealth = async (_args: string | undefined, ctx: any) => {
@@ -151,10 +147,6 @@ export function registerScout(pi: ExtensionAPI): void {
 
   pi.registerCommand("scout-health", {
     description: "Display scout search engine health, indexed file counts, and frecency memory",
-    handler: handleHealth,
-  });
-  pi.registerCommand("search-health", {
-    description: "Alias for /scout-health",
     handler: handleHealth,
   });
 }
