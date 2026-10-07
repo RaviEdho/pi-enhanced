@@ -137,6 +137,13 @@ export class QuotaManager {
   }
 
   /**
+   * Retrieves the raw cache entry (report + fetch timestamp) for an account.
+   */
+  public getReportEntry(accountId: string): CachedQuotaEntry | undefined {
+    return this.cache.get(accountId);
+  }
+
+  /**
    * Retrieves the cached report for an account if not expired.
    */
   public getReport(accountId: string): ProviderUsageReport | undefined {
@@ -235,7 +242,8 @@ export class QuotaManager {
       };
     }
 
-    const report = this.getReport(account.id);
+    const entry = this.getReportEntry(account.id);
+    const report = entry?.report;
     if (report?.error) {
       const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
       if (isAuthErr) {
@@ -243,15 +251,22 @@ export class QuotaManager {
         account.disabledCause = `Session expired or revoked (run /login ${prov})`;
         AccountStore.getInstance().upsert(account);
       }
-      return {
-        isExhausted: true,
-        usedFraction: 1.0,
-        paceDelta: 1.0,
-        weight: 9999.0,
-        remainingFraction: 0.0,
-        isUnstarted: false,
-        reason: account.disabledCause || report.error,
-      };
+      if (isAuthErr || Date.now() - (entry?.fetchedAt ?? 0) < DEFAULT_CACHE_TTL_MS) {
+        // Auth errors permanently disable the account; transient (non-auth) errors
+        // are only trusted while the cached entry is fresh so a single failed
+        // quota poll cannot lock the account out of rotation.
+        return {
+          isExhausted: true,
+          usedFraction: 1.0,
+          paceDelta: 1.0,
+          weight: 9999.0,
+          remainingFraction: 0.0,
+          isUnstarted: false,
+          reason: account.disabledCause || report.error,
+        };
+      }
+      // Stale transient error: fall through and treat the account as if no
+      // report existed (healthy until a fresh fetch proves otherwise).
     }
 
     if (!report || report.groups.length === 0) {

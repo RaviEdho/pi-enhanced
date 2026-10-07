@@ -4,7 +4,7 @@ import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/co
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { refreshHyperToken } from "../providers/hyper/oauth.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
-import { QuotaManager } from "./quota.js";
+import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential, ResolvedAccountAuth } from "./types.js";
 
@@ -99,6 +99,15 @@ export function extractCooldownMs(error: unknown): number {
     }
   }
 
+  // Match hours: "resets in 2 hours" or "in ~2h"
+  const hourMatch = msg.match(/(?:resets|again|wait)\s+in\s+~?(\d+)\s*h/i);
+  if (hourMatch && hourMatch[1]) {
+    const hours = parseInt(hourMatch[1], 10);
+    if (!isNaN(hours) && hours > 0) {
+      return (hours * 60 + 1) * 60 * 1000;
+    }
+  }
+
   return DEFAULT_COOLDOWN_MS;
 }
 
@@ -168,6 +177,8 @@ export class AccountBalancer {
 
   /**
    * Retrieves the account currently in use (or selected via affinity & quota) for a session.
+   * Pure/read-only: never persists or mutates session bindings — binding is owned by
+   * selectAccount() so that display paths (footer, /usage) cannot re-bind affinity.
    */
   public getSessionAccount(
     provider: string,
@@ -212,9 +223,6 @@ export class AccountBalancer {
       chosen = evaluated[0].account;
     }
 
-    if (sessionId && chosen) {
-      this.recordSessionBinding(sessionId, provider, chosen.id);
-    }
     return chosen;
   }
 
@@ -441,9 +449,14 @@ export class AccountBalancer {
     }
 
     // Preemptive quota check: fetch live quota for candidates lacking cached reports
+    // (or carrying stale error reports, which must not permanently exclude the account)
     await Promise.allSettled(
       candidates.map(async (acc) => {
-        if (!quotaManager.getReport(acc.id)) {
+        const cached = quotaManager.getReportEntry(acc.id);
+        const cachedReport = cached?.report;
+        const cachedErrorIsStale =
+          !!cachedReport?.error && Date.now() - (cached?.fetchedAt ?? 0) >= DEFAULT_CACHE_TTL_MS;
+        if (!cachedReport || cachedErrorIsStale) {
           const token = acc.access || acc.apiKey;
           if (token) {
             try {
