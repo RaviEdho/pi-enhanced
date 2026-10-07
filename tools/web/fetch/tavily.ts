@@ -27,9 +27,6 @@ export class TavilyFetchProvider extends FetchProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), params.timeoutMs ?? 15000);
-    if (params.signal) {
-      params.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
 
     let response: Response;
     try {
@@ -43,7 +40,7 @@ export class TavilyFetchProvider extends FetchProvider {
           api_key: apiKey,
           urls: [params.url],
         }),
-        signal: controller.signal,
+        signal: params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
       });
     } finally {
       clearTimeout(timer);

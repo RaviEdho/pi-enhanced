@@ -24,9 +24,6 @@ export class JinaFetchProvider extends FetchProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), params.timeoutMs ?? 15000);
-    if (params.signal) {
-      params.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
 
     let response: Response;
     try {
@@ -36,7 +33,7 @@ export class JinaFetchProvider extends FetchProvider {
           Accept: "text/plain",
           "User-Agent": "pi-coding-agent/1.0",
         },
-        signal: controller.signal,
+        signal: params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
       });
     } finally {
       clearTimeout(timer);

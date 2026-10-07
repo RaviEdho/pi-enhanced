@@ -43,12 +43,11 @@ async function resolveRedirectUrl(url: string, signal?: AbortSignal): Promise<st
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
-    if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
 
     const res = await fetch(url, {
       method: "HEAD",
       redirect: "manual",
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
     }).finally(() => clearTimeout(timeout));
 
     const loc = res.headers.get("location");
@@ -119,17 +118,13 @@ export class AntigravitySearchProvider extends SearchProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
 
-    if (params.signal) {
-      params.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
-
     let response: Response;
     try {
       response = await fetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(envelope),
-        signal: controller.signal,
+        signal: params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
       });
     } finally {
       clearTimeout(timer);

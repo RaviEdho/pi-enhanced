@@ -12,10 +12,15 @@ function truncateSnippet(text: string, maxChars = 280): string {
 
 function formatAge(ageSeconds?: number): string | undefined {
   if (!ageSeconds || ageSeconds < 0) return undefined;
+  if (ageSeconds < 60) return "just now";
   const days = Math.floor(ageSeconds / 86400);
   if (days === 0) {
+    const minutes = Math.floor(ageSeconds / 60);
+    if (minutes < 60) {
+      return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
+    }
     const hours = Math.floor(ageSeconds / 3600);
-    return hours <= 1 ? "1 hour ago" : `${hours} hours ago`;
+    return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
   }
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;

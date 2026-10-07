@@ -62,8 +62,9 @@ export function parseSearchQuery(raw: string): StructuredQuery {
   const terms: QueryTerm[] = [];
   let hasDirectives = false;
 
-  // Tokenize preserving quoted substrings
-  const regex = /(-?)([\w]+:)?(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  // Tokenize preserving quoted substrings. `([\w]+:(?!\/\/))` deliberately does
+  // not treat a URL scheme ("https://…") as a directive so pasted URLs survive.
+  const regex = /(-?)([\w]+:(?!\/\/))?(?:"([^"]*)"|'([^']*)'|(\S+))/g;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(raw)) !== null) {
@@ -113,6 +114,11 @@ export function parseSearchQuery(raw: string): StructuredQuery {
         before = val;
         continue;
       }
+
+      // Unrecognized directive (e.g. "time:12:30"): keep the whole token as a
+      // plain search term instead of silently dropping the directive prefix.
+      terms.push({ text: isNegated ? match[0].slice(1) : match[0], negated: isNegated });
+      continue;
     }
 
     if (quotedVal !== undefined) {

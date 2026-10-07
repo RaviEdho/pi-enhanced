@@ -60,9 +60,6 @@ export class ParallelSearchProvider extends SearchProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
 
-    if (params.signal) {
-      params.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
 
     let response: Response;
     try {
@@ -76,7 +73,7 @@ export class ParallelSearchProvider extends SearchProvider {
           "User-Agent": "pi-coding-agent/1.0",
         },
         body: JSON.stringify(requestBody),
-        signal: controller.signal,
+        signal: params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
       });
     } finally {
       clearTimeout(timer);
@@ -128,9 +125,6 @@ export class ParallelSearchProvider extends SearchProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
 
-    if (params.signal) {
-      params.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
 
     let response: Response;
     try {
@@ -142,7 +136,7 @@ export class ParallelSearchProvider extends SearchProvider {
           "User-Agent": "pi-coding-agent/1.0",
         },
         body: JSON.stringify(mcpPayload),
-        signal: controller.signal,
+        signal: params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
       });
     } finally {
       clearTimeout(timer);
