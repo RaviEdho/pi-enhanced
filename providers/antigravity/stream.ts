@@ -281,6 +281,27 @@ async function* parseSseStream(
   }
 
   try {
+    const pendingChunks: CloudCodeAssistResponseChunk[] = [];
+
+    const processLine = (line: string): boolean => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) return false;
+
+      if (trimmed.startsWith("data:")) {
+        const dataStr = trimmed.slice(5).trim();
+        if (dataStr === "[DONE]") return true;
+        try {
+          const parsed: unknown = JSON.parse(dataStr);
+          if (parsed && typeof parsed === "object") {
+            pendingChunks.push(parsed as CloudCodeAssistResponseChunk);
+          }
+        } catch {
+          // Ignore malformed intermediate chunks
+        }
+      }
+      return false;
+    };
+
     while (true) {
       if (signal?.aborted) {
         throw new Error("Stream aborted by caller");
@@ -294,22 +315,26 @@ async function* parseSseStream(
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith(":")) continue;
-
-        if (trimmed.startsWith("data:")) {
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === "[DONE]") return;
-          try {
-            const parsed: unknown = JSON.parse(dataStr);
-            if (parsed && typeof parsed === "object") {
-              yield parsed as CloudCodeAssistResponseChunk;
-            }
-          } catch {
-            // Ignore malformed intermediate chunks
-          }
-        }
+        if (processLine(line)) return;
       }
+
+      while (pendingChunks.length > 0) {
+        yield pendingChunks.shift()!;
+      }
+    }
+
+    // Flush any final line the server sent without a trailing newline before
+    // closing the stream, so the last event (e.g. a tool call or usage data)
+    // is never silently dropped at EOF.
+    if (buffer.trim()) {
+      const finalLines = buffer.split(/\r?\n/);
+      buffer = "";
+      for (const line of finalLines) {
+        if (processLine(line)) return;
+      }
+    }
+    while (pendingChunks.length > 0) {
+      yield pendingChunks.shift()!;
     }
   } finally {
     if (signal) {
