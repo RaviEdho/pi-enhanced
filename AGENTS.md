@@ -136,7 +136,7 @@ pi-enhanced/
 │   │   ├── footer.ts           # Status footer showing quota consumption & time progress
 │   │   ├── format.ts           # Terminal & ASCII progress bar formatting
 │   │   ├── hyper.ts            # Charm Hyper /v1/credits quota scraper
-│   │   ├── index.ts            # /usage command registration (TUI overlay + CLI fallback)
+│   │   ├── index.ts            # /usage command registration + usage report collection
 │   │   └── types.ts            # Quota report structures
 │   └── index.ts                # registerUX aggregator
 ├── index.ts                    # Root extension entry point
