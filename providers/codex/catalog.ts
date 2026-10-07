@@ -24,6 +24,9 @@ function getCacheFilePath(): string {
 
 /**
  * Loads the cached Codex catalog from memory or disk.
+ * Returns null when no fresh (within CACHE_TTL_MS) catalog is available so
+ * callers can fall back or trigger a live refresh instead of filtering
+ * against arbitrarily stale data.
  */
 export function loadCachedCatalog(): CodexModelSummary[] | null {
   if (memoryCache && Date.now() - memoryCache.updatedAt < CACHE_TTL_MS) {
@@ -41,6 +44,11 @@ export function loadCachedCatalog(): CodexModelSummary[] | null {
         Array.isArray(parsed.models) &&
         typeof parsed.updatedAt === "number"
       ) {
+        // Enforce the TTL on disk-cached entries as well; expired catalogs must
+        // not be treated as authoritative (they would hide newly added models).
+        if (Date.now() - parsed.updatedAt >= CACHE_TTL_MS) {
+          return null;
+        }
         memoryCache = parsed;
         return parsed.models;
       }
@@ -49,7 +57,9 @@ export function loadCachedCatalog(): CodexModelSummary[] | null {
     }
   }
 
-  return memoryCache ? memoryCache.models : null;
+  return memoryCache && Date.now() - memoryCache.updatedAt < CACHE_TTL_MS
+    ? memoryCache.models
+    : null;
 }
 
 /**
