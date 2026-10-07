@@ -87,18 +87,53 @@ export interface BranchCommitSummary {
   currentBranch: string;
   commits: string[];
   diffStat: string;
+  /** Set when the base ref could not be resolved; commits/diffStat are then meaningless. */
+  error?: string;
+}
+
+/**
+ * Expands a `git status --porcelain` path field, turning rename arrows
+ * ("old -> new") into the individual paths so downstream git commands
+ * receive valid pathspecs.
+ */
+function unquotePath(p: string): string {
+  if (p.startsWith("\"") && p.endsWith("\"") && p.length > 1) return p.slice(1, -1);
+  return p;
+}
+
+function expandPorcelainPath(rawPath: string): string[] {
+  const trimmed = rawPath.trim();
+  if (!trimmed.includes(" -> ")) return [unquotePath(trimmed)];
+  const [oldPath, newPath] = trimmed.split(" -> ").map((p) => unquotePath(p.trim()));
+  if (!oldPath || !newPath) return [unquotePath(trimmed)];
+  return [oldPath, newPath];
 }
 
 export async function getBranchDiffSummary(baseBranch: string, cwd: string): Promise<BranchCommitSummary> {
   const currentBranch = await getCurrentBranch(cwd);
-  
+
   // Resolve base ref (prefer origin/base if exists, else local base)
-  let baseRef = baseBranch;
+  let baseRef: string | null = null;
   try {
     await execGit(["rev-parse", "--verify", `origin/${baseBranch}`], cwd);
     baseRef = `origin/${baseBranch}`;
   } catch {
-    // use local baseBranch as is
+    try {
+      await execGit(["rev-parse", "--verify", baseBranch], cwd);
+      baseRef = baseBranch;
+    } catch {
+      baseRef = null;
+    }
+  }
+
+  if (!baseRef) {
+    return {
+      baseBranch,
+      currentBranch,
+      commits: [],
+      diffStat: "",
+      error: `Base branch "${baseBranch}" was not found locally or on origin`,
+    };
   }
 
   let commits: string[] = [];
@@ -222,13 +257,17 @@ export async function getWorkingTreeStatus(cwd: string): Promise<WorkingTreeStat
     if (!line.trim()) continue;
     const x = line[0];
     const y = line[1];
-    const path = line.slice(3).trim();
+    const paths = expandPorcelainPath(line.slice(3));
 
-    if (x !== " " && x !== "?") {
-      staged.push(path);
-    }
-    if (x === "?" || y !== " ") {
-      unstaged.push(path);
+    // Expand rename pairs ("old -> new") into both the deleted old path and the
+    // added new path so staging/restore commands receive valid pathspecs.
+    for (const path of paths) {
+      if (x !== " " && x !== "?") {
+        staged.push(path);
+      }
+      if (x === "?" || y !== " ") {
+        unstaged.push(path);
+      }
     }
   }
 
@@ -245,7 +284,10 @@ export async function getChangedFiles(cwd: string): Promise<string[]> {
 }
 
 export async function getStagedFiles(cwd: string): Promise<string[]> {
-  const output = await execGit(["diff", "--cached", "--name-only"], cwd);
+  // --no-renames: report the deleted old path and the added new path of a staged
+  // rename as separate entries so unstaging + re-staging by path list cannot
+  // silently split a rename into "added file + dangling deletion".
+  const output = await execGit(["diff", "--cached", "--name-only", "--no-renames"], cwd);
   if (!output.trim()) return [];
   return output
     .split("\n")
@@ -316,6 +358,20 @@ export async function stashStagedChanges(
   const statusOutput = await execGit(["status", "--porcelain"], cwd);
   if (!statusOutput.trim()) return null;
 
+  // Renames/copies make "commit only unstaged changes" ambiguous (the staged side
+  // is a deletion + an addition pair). Refuse before mutating anything so the
+  // user's staged state is never mangled by the stash/restore dance.
+  const hasRenameOrCopy = statusOutput.split("\n").some((line) => {
+    if (!line.trim()) return false;
+    const x = line[0];
+    return x === "R" || x === "C";
+  });
+  if (hasRenameOrCopy) {
+    throw new Error(
+      "Staged renames/copies cannot be split from unstaged changes. Commit the staged rename first (or stage it together with the unstaged edits)."
+    );
+  }
+
   const purelyStaged: string[] = [];
   const partiallyStaged: string[] = [];
 
@@ -323,12 +379,15 @@ export async function stashStagedChanges(
     if (!line.trim()) continue;
     const x = line[0];
     const y = line[1];
-    const filePath = line.slice(3).trim();
-    if (x !== " " && x !== "?") {
-      if (y === " ") {
-        purelyStaged.push(filePath);
-      } else {
-        partiallyStaged.push(filePath);
+    const paths = expandPorcelainPath(line.slice(3));
+    // Expand rename pairs so restore pathspecs are valid ("old -> new" is not).
+    for (const filePath of paths) {
+      if (x !== " " && x !== "?") {
+        if (y === " ") {
+          purelyStaged.push(filePath);
+        } else {
+          partiallyStaged.push(filePath);
+        }
       }
     }
   }

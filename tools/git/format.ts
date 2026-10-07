@@ -22,14 +22,20 @@ export function formatCost(cost: number): string {
 }
 
 /**
- * Format duration in human-readable units (e.g. 450ms, 2.3s, 1m12s).
+ * Format duration in human-readable units (e.g. 450ms, 2.3s, 1m12s, 1h5m3s).
  */
 export function formatDuration(durationMs: number): string {
   if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))}ms`;
   const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSec = Math.round(seconds % 60);
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  const totalSeconds = Math.round(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSec = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h${minutes}m${remainingSec}s`;
+  }
   return `${minutes}m${remainingSec}s`;
 }
 

@@ -39,6 +39,13 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
   }
 
   const branchSummary = await getBranchDiffSummary(baseBranch, cwd);
+  if (branchSummary.error) {
+    ctx.ui.notify(
+      `Cannot generate PR: ${branchSummary.error}. Pass an explicit base branch: /git pr <base>`,
+      "warning"
+    );
+    return;
+  }
   if (branchSummary.commits.length === 0 && !branchSummary.diffStat) {
     ctx.ui.notify(`Branch is identical to ${baseBranch}; no commits or diffs found.`, "info");
     return;
