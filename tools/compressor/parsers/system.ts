@@ -3,18 +3,18 @@ import type { ParsedOutput, ParserResult } from "../types.js";
 export function filterSystemCommand(command: string, raw: string, isError: boolean): ParserResult {
   if (isError) return null;
 
-  // curl / wget
-  if (/\b(curl|wget)\b/.test(command)) {
+  // curl / wget (word boundaries that exclude hyphenated names like "curl-loader")
+  if (/(?<![\w-])(?:curl|wget)(?![\w-])/.test(command)) {
     return filterDownloadCommand(raw);
   }
 
-  // ls / tree / find
-  if (/\b(ls|tree|find)\b/.test(command)) {
+  // ls / tree / find — hyphen/suffix-safe so "npm run find-assets" doesn't match
+  if (/(?<![\w-])(?:ls|tree|find)(?![\w-])/.test(command)) {
     return filterFileListing(command, raw);
   }
 
   // docker ps / podman ps
-  if (/\b(docker|podman)\s+ps\b/.test(command)) {
+  if (/(?<![\w-])(?:docker|podman)\s+ps(?![\w-])/.test(command)) {
     return filterDockerPs(raw);
   }
 

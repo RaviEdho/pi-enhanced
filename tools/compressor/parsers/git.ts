@@ -11,20 +11,87 @@ const MAX_TOTAL_DIFF_LINES = 250;
 const MAX_LOG_COMMITS = 30;
 
 /**
+ * Splits a shell command into top-level segments on &&, ; and || delimiters,
+ * ignoring those characters inside single or double quotes so commit messages
+ * like `git commit -m "fix: a; b"` are not split apart.
+ */
+function splitTopLevelSegments(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      current += ch;
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === "\\" && i + 1 < command.length) {
+        current += ch + command[i + 1];
+        i++;
+        continue;
+      }
+      current += ch;
+      if (ch === '"') inDouble = false;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      current += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < command.length) {
+      current += ch + command[i + 1];
+      i++;
+      continue;
+    }
+    if (command.startsWith("&&", i) || command.startsWith("||", i) || ch === ";") {
+      parts.push(current);
+      current = "";
+      if (ch !== ";") i++;
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * Removes quoted segments from a command so subcommand dispatch regexes cannot
+ * match git words that appear inside commit messages (e.g. -m "git rebase tip").
+ */
+function stripQuotedSegments(command: string): string {
+  return command
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+}
+
+/**
  * If the shell command is chained (e.g. `git add . && git commit -m "..."`),
  * resolve to the primary or trailing git subcommand that produced stdout.
  */
 function extractRelevantGitCommand(command: string): string {
+  let resolved = command;
   if (command.includes("&&") || command.includes(";") || command.includes("||")) {
-    const parts = command.split(/\s*(?:&&|;|\|\|)\s*/);
+    const parts = splitTopLevelSegments(command);
     for (let i = parts.length - 1; i >= 0; i--) {
       const part = parts[i].trim();
       if (/\bgit\b/.test(part)) {
-        return part;
+        resolved = part;
+        break;
       }
     }
   }
-  return command;
+  return stripQuotedSegments(resolved);
 }
 
 export function filterGitCommand(command: string, raw: string, isError: boolean): ParserResult {

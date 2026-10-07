@@ -63,7 +63,8 @@ export const DECLARATIVE_RULES: DeclarativeRule[] = [
   },
   {
     name: "system-disk",
-    matchCommand: /\bdf(\s+-[a-zA-Z]+)?\b/,
+    // Standalone `df` only — "df.py", "asdf" etc. must not trigger the rule
+    matchCommand: /(?<![\w.\-])df(?:\s+-[a-zA-Z]+)?(?![\w.\-])/,
     stripLinesMatching: [/^\s*$/, /\/(dev|sys|run|snap|docker|overlay)/],
     maxLines: 20,
   },

@@ -22,6 +22,8 @@ export interface RecallEntry {
   filteredText: string;
   savedBytes: number;
   timestamp: number;
+  /** Temp file holding the raw output for large entries (cleaned up on eviction). */
+  filePath?: string;
 }
 
 export interface DeclarativeRule {

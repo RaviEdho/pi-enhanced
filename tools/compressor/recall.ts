@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RecallEntry } from "./types.js";
@@ -37,6 +37,7 @@ export class RecallStore {
       try {
         const filePath = join(tmpdir(), `pi-recall-${id}.log`);
         writeFileSync(filePath, rawText, "utf8");
+        entry.filePath = filePath;
       } catch {
         // Temp file creation failure is non-fatal
       }
@@ -45,13 +46,25 @@ export class RecallStore {
     if (this.insertionOrder.length >= this.maxEntries) {
       const oldestId = this.insertionOrder.shift();
       if (oldestId) {
-        this.entries.delete(oldestId);
+        this.removeEntry(oldestId);
       }
     }
 
     this.insertionOrder.push(id);
     this.entries.set(id, entry);
     return id;
+  }
+
+  private removeEntry(id: string): void {
+    const removed = this.entries.get(id);
+    this.entries.delete(id);
+    if (removed?.filePath) {
+      try {
+        rmSync(removed.filePath, { force: true });
+      } catch {
+        // Temp file cleanup failure is non-fatal
+      }
+    }
   }
 
   public get(id: string): RecallEntry | undefined {
@@ -67,7 +80,9 @@ export class RecallStore {
   }
 
   public clear(): void {
-    this.entries.clear();
+    for (const id of this.entries.keys()) {
+      this.removeEntry(id);
+    }
     this.insertionOrder.length = 0;
   }
 }
