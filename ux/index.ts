@@ -17,5 +17,18 @@ export function registerUX(pi: ExtensionAPI): void {
 }
 
 export { registerContinueShortcut } from "./continue/index.js";
-export { registerWorkingTimer } from "./timer/index.js";
+export {
+  buildTurnSummary,
+  buildWorkingMessage,
+  formatLatency,
+  formatTokenCount,
+  formatTokenRate,
+  formatTurnSummary,
+  formatWorkingDuration,
+  registerTurnSummaryRenderer,
+  registerWorkingTimer,
+  TURN_SUMMARY_ENTRY_TYPE,
+  type RunMetrics,
+  type TurnSummary,
+} from "./timer/index.js";
 export { registerUsageCommand, registerUsageFooter } from "./usage/index.js";

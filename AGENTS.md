@@ -121,7 +121,7 @@ pi-enhanced/
 │   │   ├── index.ts            # Input handler registering "." continue shortcut
 │   │   └── prompt.ts           # System directive instructing model to resume unfinished work
 │   ├── timer/
-│   │   └── index.ts            # Working status indicator elapsed duration timer
+│   │   └── index.ts            # Working status telemetry timer & settled turn summary entry
 │   ├── usage/
 │   │   ├── antigravity.ts      # Cloud Code Assist quota bucket scraper
 │   │   ├── codex.ts            # OpenAI Codex /wham/usage quota scraper
