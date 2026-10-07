@@ -12,7 +12,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **OpenAI & ChatGPT Subscription Balancer (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Unifies both ChatGPT login flows—the official Responses API (`/login openai` -> Sign in with ChatGPT) and the legacy Codex backend (`/login openai-codex`)—with multi-account failover, auto-switching, plan-based model filtering, quota scraping, and rate limit resilience.
 - **Provider Quota & Usage Monitor (`ux/usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command and status footer.
-- **Autonomous Commit (`tools/commit/`)**: Lightweight, autonomous `/commit` slash command that spins up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), intelligent single vs. multi-stage atomic commit planning, transparent live action progress, zero conversation context bloat, and full token/cost accounting.
+- **Autonomous Git Assistant (`/git`, `/commit`)**: Lightweight, autonomous `/commit` and `/git` slash commands that spin up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`, `git_branch_overview`, `propose_pr`), intelligent single vs. multi-stage atomic commit planning, PR drafting, branch recommendations, merge conflict resolution, release drafting, and zero conversation context bloat.
 - **Continue Shortcut (`ux/continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
 - **Terminal Output Compressor (`tools/compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
 - **Codebase Scout Search Engine (`tools/scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
@@ -55,13 +55,21 @@ pi-enhanced/
 │   │   └── types.ts            # Hyper device auth, token, and model schemas
 │   └── index.ts                # registerProviders aggregator
 ├── tools/                      # Agent capability tools
-│   ├── commit/
+│   ├── git/                    # Autonomous Git assistant & commit sub-agent
+│   │   ├── branch-runner.ts    # Smart branch name recommendations & worktrees
 │   │   ├── dialog.ts           # Interactive proposal confirmation dialog with actions & cost metrics
 │   │   ├── editor.ts           # BlockingCommitEditor with live status & recent action logging
 │   │   ├── format.ts           # Token, cost, and duration formatting utilities
 │   │   ├── git.ts              # Git helpers: diff extraction, staging, commit execution
-│   │   ├── index.ts            # /commit command registration & interactive approval loop
+│   │   ├── index.ts            # /git and /commit command registration
+│   │   ├── pr-runner.ts        # AI-powered Pull Request generator & GitHub CLI integration
 │   │   ├── prompt.ts           # Commit guidelines & sub-agent system instructions
+│   │   ├── release-runner.ts   # Release notes and changelog generator
+│   │   ├── resolve-runner.ts   # AI merge conflict resolver
+│   │   ├── routine-runner.ts   # Zero-token local git helpers (sync, undo, status hub)
+│   │   ├── runner.ts           # Central commit execution runner
+│   │   ├── smart-prompts.ts    # System instructions for smart workflow ops (PR, branch, conflict)
+│   │   ├── smart-tools.ts      # Tools for PR inspection and conflict resolution
 │   │   ├── tools.ts            # Minimal git inspection tools (git_overview, git_file_diff, propose_commit)
 │   │   └── types.ts            # CommitProposal, usage metrics, and git overview data types
 │   ├── compressor/

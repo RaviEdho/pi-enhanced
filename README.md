@@ -27,7 +27,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Dynamic OpenAI Codex Plan Filtering**: Automatically detects your ChatGPT plan tier (`free`, `plus`, `pro`) from your OAuth token, queries OpenAI's live model endpoint, and filters out unavailable models from `/model` and `pi --list-models`.
 - **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI / ChatGPT subscriptions, OpenAI Codex, Charm Hyper) with deterministic session affinity for optimal prompt caching, automatic OAuth token refresh, weekly reset-pace balancing, and transparent failover on 429 / quota exhaustion.
 - **Provider Quotas with Reset Pace Markers**: Live multi-account quota monitoring via `/usage` showing usage percentage, plan tier, reset countdowns, and real-time reset progress markers (`┃`) on the usage bar.
-- **Autonomous Commit (`/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`). Automatically determines whether changes should be consolidated into a single commit or structured into an ordered sequence of atomic, multi-stage commits, with an interactive preview dialog, plan editor, and optional git push.
+- **Autonomous Git Assistant (`/git`, `/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), supports atomic multi-stage commits, PR generation (`/git pr`), smart branching (`/git branch`), merge conflict resolution (`/git resolve`), release drafting (`/git release`), and instant zero-token helpers (`/git sync`, `/git undo`).
 - **Terminal Output Compressor (`tools/compressor/`, `/gain`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, compressing 60–90% of raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Stores full uncompressed outputs in an LRU buffer accessible via `/recall <id>` and provides token reduction statistics via `/gain`.
 - **Continue Shortcut (`.` Continue)**: Pressing `.` (literal dot only) immediately resumes agent work on the most recent intent without summarizing, asking for confirmation, or leaving any user message bubble in the chat transcript.
 - **Live Turn Telemetry in the Working Status**: The `Working` indicator shows elapsed time plus real-time per-run metrics appended inline — cumulative tokens in/out (`↑15.2k ↓3.1k`), time-to-first-token (`TTFT 0.9s`), and decode throughput (`38 tok/s`). Counters sum every turn and model call while the agent is still working and reset once the run settles.
@@ -90,16 +90,29 @@ Run `/usage` to view live quotas, progress bars, and reset times across all acco
 pi -p "/usage"
 ```
 
-### 5. Autonomous Commits
+### 5. Autonomous Git Assistant (`/git`, `/commit`)
 
-Run `/commit` to inspect changes and generate commit messages autonomously:
+Run `/git` or `/commit` to autonomously inspect changes and manage git workflows:
 
 ```text
-/commit
-/commit focus on auth error handling improvements
-/commit --unstaged        # Or -u: stash staged changes, commit only unstaged, then restore staged
-/commit --single          # Or -s: force a single consolidated commit
-/commit --multi           # Or -m: split changes into atomic commit stages
+/git                          # Interactive status hub & workflow launcher
+/git commit                   # Autonomous commit (same as /commit)
+/commit                       # Shorthand alias to /git commit
+/commit -u                    # Stash staged changes, commit only unstaged, then restore staged
+/commit -s                    # Force a single consolidated commit
+/commit -m                    # Split changes into atomic commit stages
+
+# Smart Workflow Operations (AI-Assisted)
+/git pr [base-branch]         # Generate structured PR title, body & optionally create via `gh pr create`
+/git branch [description]     # Smart conventional branch name recommender & switcher
+/git worktree [list|add|rm]   # Git worktree manager for parallel task isolation
+/git resolve [file]           # Autonomous merge conflict analyzer & hunk resolver
+/git release [tag]            # Release notes & changelog drafter grouped by conventional types
+
+# Instant Routine Helpers (0 LLM Tokens)
+/git sync                     # Safe pull --rebase & push to upstream
+/git undo                     # Soft-undo last commit, keeping changes in working tree
+/git status                   # Interactive status overview
 ```
 
 - **Unstaged Commit Isolation**: When both staged and unstaged changes are detected, choose "Commit only unstaged changes (stash staged)" or pass `-u` / `--unstaged`. Your manual staged changes are safely preserved in git stash while the unstaged changes are committed, and restored to the index automatically upon completion or safely rolled back on cancel.
