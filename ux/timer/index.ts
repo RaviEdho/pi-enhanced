@@ -70,12 +70,22 @@ interface TurnMetrics {
   requestStartMs: number;
   /** When the first output token of this turn arrived. */
   firstTokenMs?: number;
+  /** When this turn completed. */
+  messageEndMs?: number;
   /** Streamed content characters, used to estimate output tokens live. */
   chars: number;
+  /** Characters received in the very first chunk delta. */
+  firstChunkChars: number;
+  /** Number of delta stream chunks received in this turn. */
+  chunkCount: number;
   /** Provider-reported prompt tokens for this turn (input + cacheRead + cacheWrite). */
   usageInput: number;
   /** Provider-reported output tokens for this turn. */
   usageOutput: number;
+  /** Whether any tool call block was observed in this turn. */
+  hasToolCalls: boolean;
+  /** Whether any text or thinking block was observed in this turn. */
+  hasText: boolean;
 }
 
 /** Telemetry accumulated across every turn/call of a single agent run. */
@@ -87,6 +97,12 @@ export interface RunMetrics {
   output: number;
   /** Sum of per-turn decode windows (first token to message end), excluding tool time. */
   decodeMs: number;
+  /** Valid streaming decode duration in ms (excluding instant tool calls and single-chunk responses). */
+  validDecodeMs: number;
+  /** Tokens generated during valid streaming decode windows (excluding pre-buffered first chunks). */
+  validDecodeTokens: number;
+  /** Total wall-clock duration waiting for provider responses across all calls. */
+  totalModelMs: number;
   /** Sum of every per-call time-to-first-token measurement. */
   ttftSumMs: number;
   /** Number of calls that produced a first token (TTFT samples). */
@@ -110,13 +126,26 @@ export interface TurnSummary {
   avgTps?: number;
   /** Number of model calls observed during the run. */
   calls: number;
+  /** Type of TPS reported in avgTps: 'gen' (pure generation) or 'e2e' (turnaround). */
+  tpsKind?: "gen" | "e2e";
+  /** End-to-end turnaround tokens per second across all model request durations. */
+  e2eTps?: number;
 }
 
 /** Custom entry type used to persist a settled run's telemetry in the transcript. */
 export const TURN_SUMMARY_ENTRY_TYPE = "pi-enhanced-turn-summary";
 
 function createTurnMetrics(now: number): TurnMetrics {
-  return { requestStartMs: now, chars: 0, usageInput: 0, usageOutput: 0 };
+  return {
+    requestStartMs: now,
+    chars: 0,
+    firstChunkChars: 0,
+    chunkCount: 0,
+    usageInput: 0,
+    usageOutput: 0,
+    hasToolCalls: false,
+    hasText: false,
+  };
 }
 
 function createRunMetrics(now: number): RunMetrics {
@@ -125,6 +154,9 @@ function createRunMetrics(now: number): RunMetrics {
     input: 0,
     output: 0,
     decodeMs: 0,
+    validDecodeMs: 0,
+    validDecodeTokens: 0,
+    totalModelMs: 0,
     ttftSumMs: 0,
     callCount: 0,
     turn: createTurnMetrics(now),
@@ -159,11 +191,30 @@ export function buildWorkingMessage(run: RunMetrics, now: number): string {
     parts.push(`TTFT ${formatLatency(run.ttftMs)}`);
   }
 
-  const liveDecodeMs =
-    run.turn.firstTokenMs !== undefined ? Math.max(0, now - run.turn.firstTokenMs) : 0;
-  const totalDecodeMs = run.decodeMs + liveDecodeMs;
-  if (totalDecodeMs > 0 && totalOutput > 0) {
-    parts.push(`${formatTokenRate((totalOutput / totalDecodeMs) * 1000)} tok/s`);
+  // Calculate live decoding speed:
+  let liveTokens = run.validDecodeTokens;
+  let liveDecodeMs = run.validDecodeMs;
+
+  const currentTurn = run.turn;
+  if (currentTurn.firstTokenMs !== undefined && currentTurn.chunkCount >= 2) {
+    const turnElapsedMs = Math.max(0, now - currentTurn.firstTokenMs);
+    if (turnElapsedMs >= 150) {
+      const turnTokens = liveTurnOutput(currentTurn);
+      let turnFirstChunkTokens = 0;
+      if (currentTurn.chars > 0 && currentTurn.firstChunkChars > 0 && currentTurn.firstChunkChars < currentTurn.chars) {
+        turnFirstChunkTokens = Math.round((currentTurn.firstChunkChars / currentTurn.chars) * turnTokens);
+      }
+      const netTurnTokens = Math.max(1, turnTokens - turnFirstChunkTokens);
+      liveTokens += netTurnTokens;
+      liveDecodeMs += turnElapsedMs;
+    }
+  }
+
+  if (liveDecodeMs > 0 && liveTokens > 0) {
+    parts.push(`${formatTokenRate((liveTokens / liveDecodeMs) * 1000)} tok/s`);
+  } else if (run.totalModelMs >= 200 && run.output > 0) {
+    // Non-streaming / fallback turnaround rate
+    parts.push(`${formatTokenRate((run.output / run.totalModelMs) * 1000)} tok/s`);
   }
 
   return `Working (${parts.join(" · ")})`;
@@ -177,7 +228,22 @@ export function buildWorkingMessage(run: RunMetrics, now: number): string {
 export function buildTurnSummary(run: RunMetrics, now: number): TurnSummary {
   const elapsedMs = Math.max(0, now - run.startedAtMs);
   const avgTtftMs = run.callCount > 0 ? run.ttftSumMs / run.callCount : undefined;
-  const avgTps = run.decodeMs > 0 && run.output > 0 ? (run.output / run.decodeMs) * 1000 : undefined;
+
+  // 1. Generation TPS: pure decoding throughput from valid streaming windows
+  let genTps: number | undefined;
+  if (run.validDecodeMs > 0 && run.validDecodeTokens > 0) {
+    genTps = (run.validDecodeTokens / run.validDecodeMs) * 1000;
+  } else if (run.decodeMs > 0 && run.output > 0) {
+    // Fallback for tests or synthetic runs where decodeMs was provided directly
+    genTps = (run.output / run.decodeMs) * 1000;
+  }
+
+  // 2. End-to-End TPS: overall turnaround speed across all model requests
+  const totalModelMs = run.totalModelMs > 0 ? run.totalModelMs : elapsedMs;
+  const e2eTps = totalModelMs >= 100 && run.output > 0 ? (run.output / totalModelMs) * 1000 : undefined;
+
+  const avgTps = genTps ?? e2eTps;
+  const tpsKind: "gen" | "e2e" | undefined = genTps !== undefined ? "gen" : e2eTps !== undefined ? "e2e" : undefined;
 
   return {
     elapsedMs,
@@ -186,6 +252,8 @@ export function buildTurnSummary(run: RunMetrics, now: number): TurnSummary {
     avgTtftMs,
     avgTps,
     calls: run.callCount,
+    tpsKind,
+    e2eTps,
   };
 }
 
@@ -223,7 +291,19 @@ export function registerTurnSummaryRenderer(pi: ExtensionAPI): void {
     const lines = [theme.fg("dim", single)];
 
     if (expanded) {
-      lines.push(theme.fg("dim", `${summary.calls} model call${summary.calls === 1 ? "" : "s"}`));
+      const details: string[] = [
+        `${summary.calls} model call${summary.calls === 1 ? "" : "s"}`,
+      ];
+      if (
+        summary.avgTps !== undefined &&
+        summary.e2eTps !== undefined &&
+        Math.abs(summary.e2eTps - summary.avgTps) >= 1
+      ) {
+        details.push(
+          `decode: ${formatTokenRate(summary.avgTps)} tok/s · e2e: ${formatTokenRate(summary.e2eTps)} tok/s`
+        );
+      }
+      lines.push(theme.fg("dim", details.join(" · ")));
     }
 
     return new Text(lines.join("\n"), 1, 0);
@@ -322,7 +402,31 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
       streamEvent.type === "thinking_delta" ||
       streamEvent.type === "toolcall_delta"
     ) {
-      turn.chars += streamEvent.delta.length;
+      const deltaLen = streamEvent.delta.length;
+      if (deltaLen > 0) {
+        if (turn.chunkCount === 0) {
+          turn.firstChunkChars = deltaLen;
+        }
+        turn.chunkCount += 1;
+        turn.chars += deltaLen;
+      }
+    }
+
+    if (
+      streamEvent.type === "text_start" ||
+      streamEvent.type === "text_delta" ||
+      streamEvent.type === "thinking_start" ||
+      streamEvent.type === "thinking_delta"
+    ) {
+      turn.hasText = true;
+    }
+
+    if (
+      streamEvent.type === "toolcall_start" ||
+      streamEvent.type === "toolcall_delta" ||
+      streamEvent.type === "toolcall_end"
+    ) {
+      turn.hasToolCalls = true;
     }
 
     const usage = message.usage;
@@ -339,16 +443,54 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     const message = event.message;
     if (message.role !== "assistant") return;
 
+    const now = Date.now();
     const turn = run.turn;
-    const usage = message.usage;
+    turn.messageEndMs = now;
 
-    run.input += (usage?.input || 0) + (usage?.cacheRead || 0) + (usage?.cacheWrite || 0);
-    // Fall back to the streamed-character estimate when the provider omits usage.
-    run.output += usage?.output && usage.output > 0 ? usage.output : liveTurnOutput(turn);
+    if (message.content.some((b) => b.type === "toolCall")) {
+      turn.hasToolCalls = true;
+    }
+    if (message.content.some((b) => b.type === "text" || b.type === "thinking")) {
+      turn.hasText = true;
+    }
+
+    const usage = message.usage;
+    const turnInput = (usage?.input || 0) + (usage?.cacheRead || 0) + (usage?.cacheWrite || 0);
+    const turnOutput = usage?.output && usage.output > 0 ? usage.output : liveTurnOutput(turn);
+
+    run.input += turnInput;
+    run.output += turnOutput;
+
+    const requestDurationMs = Math.max(0, now - turn.requestStartMs);
+    run.totalModelMs += requestDurationMs;
+
+    const decodeMs = turn.firstTokenMs !== undefined ? Math.max(0, now - turn.firstTokenMs) : 0;
+    run.decodeMs += decodeMs;
 
     if (turn.firstTokenMs !== undefined) {
-      run.decodeMs += Math.max(0, Date.now() - turn.firstTokenMs);
       run.ttftMs = Math.max(0, turn.firstTokenMs - turn.requestStartMs);
+    }
+
+    // Determine whether this turn was a valid multi-chunk streaming decode window.
+    // Filter out:
+    // 1. Instant tool calls: e.g. Gemini emitting complete functionCall in ~5ms without streaming tokens
+    // 2. Non-streaming / single-chunk responses: all output delivered in <= 1 chunk with negligible decode duration
+    const isInstantToolCall =
+      turn.hasToolCalls && !turn.hasText && (decodeMs < 80 || turn.chunkCount <= 1);
+    const isSingleChunkOrNonStreaming =
+      turn.firstTokenMs === undefined || (decodeMs < 30 && turn.chunkCount <= 1);
+
+    const isValidStreamingTurn =
+      !isInstantToolCall && !isSingleChunkOrNonStreaming && decodeMs >= 80 && turn.chunkCount >= 2;
+
+    if (isValidStreamingTurn && turnOutput > 0) {
+      let firstChunkTokens = 0;
+      if (turn.chars > 0 && turn.firstChunkChars > 0 && turn.firstChunkChars < turn.chars) {
+        firstChunkTokens = Math.round((turn.firstChunkChars / turn.chars) * turnOutput);
+      }
+      const netTokens = Math.max(1, turnOutput - firstChunkTokens);
+      run.validDecodeMs += decodeMs;
+      run.validDecodeTokens += netTokens;
     }
 
     // Finalize this turn; the next `turn_start` begins a fresh live window.
