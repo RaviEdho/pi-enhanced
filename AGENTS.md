@@ -211,37 +211,8 @@ pi -p "/usage"
 
 ---
 
-## Release & Distribution Workflow
+## Distribution
 
 This package is distributed directly via **GitHub** (`pi install git:github.com/RaviEdho/pi-enhanced`).
 
-### Step-by-Step Release Process
-
-1. **Ensure Working Directory is Clean**:
-   ```bash
-   git status
-   npm run typecheck
-   ```
-
-2. **Bump the Version**:
-   Use `npm version` to update `package.json`, create a commit, and create a git tag:
-   ```bash
-   # Bug fixes / small updates:
-   npm version patch
-
-   # New features / new models:
-   npm version minor
-
-   # Breaking changes:
-   npm version major
-   ```
-
-3. **Push Commits and Tags**:
-   ```bash
-   git push --follow-tags
-   ```
-
-4. **Create GitHub Release**:
-   ```bash
-   gh release create vX.Y.Z --generate-notes
-   ```
+There is no npm packaging, version-bump, or GitHub release pipeline. Do not run `npm version` or create releases — the `version` field in `package.json` is informational only. Shipping a change simply means merging to the default branch; users pick it up on their next `pi install` / update.
