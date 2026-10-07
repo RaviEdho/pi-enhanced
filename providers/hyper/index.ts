@@ -28,29 +28,11 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
 
-  // Always load from disk cache first, falling back to offline defaults
-  let hyperModels = loadCachedModels() || DEFAULT_HYPER_MODELS;
-
-  // Kick off non-blocking background discovery to refresh cached models
-  const activeHyperAccount = store.getActive(HYPER_PROVIDER_ID);
-  void (async () => {
-    try {
-      let hyperToken = process.env.HYPER_API_KEY;
-      if (activeHyperAccount) {
-        try {
-          hyperToken = await balancer.ensureFreshToken(activeHyperAccount);
-        } catch {
-          // Token expired or revoked; fetch public catalog without token
-        }
-      }
-      const dynamicHyperModels = await fetchHyperModels(hyperToken);
-      if (dynamicHyperModels && dynamicHyperModels.length > 0) {
-        hyperModels = dynamicHyperModels;
-      }
-    } catch {
-      // Non-fatal background refresh
-    }
-  })();
+  // Always load from disk cache first, falling back to offline defaults.
+  // Live discovery happens through refreshModels(): Pi invokes it during model
+  // runtime startup, so a background fetch here would duplicate the request and
+  // could never update the already-registered provider object.
+  const hyperModels = loadCachedModels() || DEFAULT_HYPER_MODELS;
 
   // Register Charm Hyper provider with multi-account failover and streaming support
   pi.registerProvider(HYPER_PROVIDER_ID, {
@@ -87,7 +69,6 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
       const live = await fetchHyperModels(activeToken, context?.signal);
       return live && live.length > 0 ? live : (loadCachedModels() || hyperModels);
     },
-
     oauth: {
       name: HYPER_PROVIDER_NAME,
       login: loginHyper,

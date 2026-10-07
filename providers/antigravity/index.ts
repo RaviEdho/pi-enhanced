@@ -29,26 +29,11 @@ export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<voi
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
 
-  // Always load from disk cache first, falling back to offline defaults
-  let models = loadCachedAntigravityModels() || DEFAULT_ANTIGRAVITY_MODELS;
-
-  // Kick off non-blocking background discovery to refresh cached models if active account exists
-  const activeAccount = store.getActive(PROVIDER_ID);
-  if (activeAccount) {
-    void (async () => {
-      try {
-        const token = await balancer.ensureFreshToken(activeAccount);
-        if (token) {
-          const dynamicModels = await fetchAndCollapseAntigravityModels(token);
-          if (dynamicModels && dynamicModels.length > 0) {
-            models = dynamicModels;
-          }
-        }
-      } catch {
-        // Non-fatal background refresh
-      }
-    })();
-  }
+  // Always load from disk cache first, falling back to offline defaults.
+  // Live discovery happens through refreshModels(): Pi invokes it during model
+  // runtime startup, so a background fetch here would duplicate the request and
+  // could never update the already-registered provider object.
+  const models = loadCachedAntigravityModels() || DEFAULT_ANTIGRAVITY_MODELS;
 
   // Register Google Antigravity provider with multi-account failover and streaming support
   pi.registerProvider(PROVIDER_ID, {
@@ -77,7 +62,7 @@ export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<voi
       if (activeToken) {
         const liveModels = await fetchAndCollapseAntigravityModels(activeToken, context?.signal);
         if (liveModels && liveModels.length > 0) {
-          models = liveModels;
+          // Returning the list is enough: Pi publishes it as the provider's live models.
           return liveModels;
         }
       }
