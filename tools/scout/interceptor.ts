@@ -210,6 +210,23 @@ function parseRgCommand(args: string[]): ParsedSearchCommand | null {
       continue;
     }
 
+    // Output-shape changing flags cannot be faithfully reproduced by the
+    // in-memory grep engine — let the real command run instead.
+    if (
+      arg === "-l" ||
+      arg === "--files-with-matches" ||
+      arg === "--files-without-match" ||
+      arg === "-c" ||
+      arg === "--count" ||
+      arg === "--count-matches" ||
+      arg === "-o" ||
+      arg === "--only-matching" ||
+      arg === "--json" ||
+      arg === "--stats"
+    ) {
+      return null;
+    }
+
     if (arg === "-e" || arg === "--regexp") {
       if (i + 1 < args.length) {
         pattern = args[++i];
@@ -465,12 +482,24 @@ function parseGrepCommand(args: string[]): ParsedSearchCommand | null {
       if (arg.includes("i")) ignoreCase = true;
       if (arg.includes("F")) literal = true;
       if (arg.includes("w")) wordRegexp = true;
+      // Output-shape changing flags cannot be faithfully reproduced by the
+      // in-memory grep engine — let the real command run instead.
+      if (arg.includes("l") || arg.includes("c")) return null;
       continue;
     }
 
     if (arg.startsWith("--")) {
       if (arg === "--ignore-case") ignoreCase = true;
       if (arg === "--fixed-strings") literal = true;
+      if (
+        arg === "--files-with-matches" ||
+        arg === "--files-without-match" ||
+        arg === "--count" ||
+        arg === "--count-matches" ||
+        arg === "--only-matching"
+      ) {
+        return null;
+      }
       continue;
     }
 
@@ -697,9 +726,19 @@ function parseFdCommand(args: string[]): ParsedSearchCommand | null {
 interface PendingSearchExecution {
   command: ParsedSearchCommand;
   rawCommand: string;
+  createdAt: number;
 }
 
 const pendingShellSearches = new Map<string, PendingSearchExecution>();
+const PENDING_SEARCH_TTL_MS = 15 * 60 * 1000;
+
+function prunePendingSearches(now: number): void {
+  for (const [id, entry] of pendingShellSearches) {
+    if (now - entry.createdAt > PENDING_SEARCH_TTL_MS) {
+      pendingShellSearches.delete(id);
+    }
+  }
+}
 
 /**
  * Register the transparent search interceptor:
@@ -722,10 +761,14 @@ export function registerSearchInterceptor(pi: ExtensionAPI): void {
     const parsed = parseSearchCommand(rawCmd);
     if (!parsed) return;
 
+    // Drop stale entries from calls that never produced a tool_result (e.g. aborted turns)
+    prunePendingSearches(Date.now());
+
     // Track pending search keyed by toolCallId
     pendingShellSearches.set(event.toolCallId, {
       command: parsed,
       rawCommand: rawCmd,
+      createdAt: Date.now(),
     });
 
     // Mutate shell invocation to an instant no-op (zero disk or process overhead)

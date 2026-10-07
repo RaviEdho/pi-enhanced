@@ -57,6 +57,7 @@ export class FileIndexer {
   private cwd: string;
   private files: Map<string, IndexedFile> = new Map();
   private gitStatuses: Map<string, GitFileStatus> = new Map();
+  private deletedPaths: Set<string> = new Set();
   private frecency = FrecencyTracker.getInstance();
   private isScanning = false;
   private lastScanTime = 0;
@@ -102,6 +103,7 @@ export class FileIndexer {
       });
 
       this.gitStatuses.clear();
+      this.deletedPaths.clear();
       const lines = stdout.split("\n");
       for (const line of lines) {
         if (!line || line.length < 4) continue;
@@ -132,6 +134,9 @@ export class FileIndexer {
 
         if (status) {
           this.gitStatuses.set(filePath, status);
+          if (status === "deleted") {
+            this.deletedPaths.add(filePath);
+          }
         }
       }
 
@@ -285,15 +290,15 @@ export class FileIndexer {
 
     const scored: Array<{ file: IndexedFile; score: number }> = [];
 
-    for (const file of this.files.values()) {
+    const considerFile = (file: IndexedFile) => {
       if (!matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
-        continue;
+        return;
       }
 
       let matchScore = 0;
       if (pattern) {
         const match = fuzzyMatch(pattern, file.relativePath);
-        if (!match) continue;
+        if (!match) return;
         matchScore = match.score;
       } else {
         matchScore = 50; // Base score if no pattern (list files matching constraints)
@@ -302,6 +307,26 @@ export class FileIndexer {
       // Combine fuzzy match score with frecency score
       const totalScore = matchScore + file.frecencyScore;
       scored.push({ file, score: totalScore });
+    };
+
+    for (const file of this.files.values()) {
+      considerFile(file);
+    }
+
+    // Deleted-but-tracked files are not on disk and therefore not indexed by
+    // walkDir; surface them as synthetic candidates so `git:deleted` queries work.
+    if (constraints.gitFilter === "deleted") {
+      for (const relPath of this.deletedPaths) {
+        if (this.files.has(relPath)) continue;
+        considerFile({
+          relativePath: relPath,
+          absolutePath: path.join(this.cwd, relPath),
+          size: 0,
+          mtime: 0,
+          gitStatus: "deleted",
+          frecencyScore: 0,
+        });
+      }
     }
 
     // Sort by descending score
@@ -522,8 +547,16 @@ export class FileIndexer {
         const line = lines[i];
 
         for (const pattern of patterns) {
-          const haystack = options?.ignoreCase ? line.toLowerCase() : line;
-          const needle = options?.ignoreCase ? pattern.toLowerCase() : pattern;
+          // Smart case (aligned with grep()): lowercase patterns match
+          // case-insensitively unless ignoreCase is explicitly set.
+          const ignoreCase =
+            options?.ignoreCase === true
+              ? true
+              : options?.ignoreCase === false
+                ? false
+                : pattern.toLowerCase() === pattern;
+          const haystack = ignoreCase ? line.toLowerCase() : line;
+          const needle = ignoreCase ? pattern.toLowerCase() : pattern;
           const idx = haystack.indexOf(needle);
           if (idx !== -1) {
             const { isDefinition, isImport } = classifyLine(line);

@@ -56,6 +56,12 @@ export class FrecencyTracker {
   public saveSync(): void {
     if (!this.dirty) return;
     try {
+      // Keep the store bounded: retain only the most recently accessed entries.
+      const MAX_ENTRIES = 2000;
+      if (this.entries.size > MAX_ENTRIES) {
+        const sorted = [...this.entries.entries()].sort((a, b) => b[1].lastAccess - a[1].lastAccess);
+        this.entries = new Map(sorted.slice(0, MAX_ENTRIES));
+      }
       const dir = path.dirname(this.storePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
