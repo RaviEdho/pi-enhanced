@@ -26,13 +26,15 @@ class BackgroundJobManager {
   public init(pi: ExtensionAPI): void {
     this.pi = pi;
 
-    // Track streaming state to coordinate follow-up message delivery
-    pi.on("turn_start", () => {
+    // Track streaming state to coordinate follow-up message delivery.
+    // We stay in streaming mode for the entire agent run (between agent_start and agent_settled),
+    // and do NOT reset streaming on turn_end so intermediate tool calls do not trigger race conditions.
+    pi.on("agent_start", () => {
       this.isStreaming = true;
     });
 
-    pi.on("turn_end", () => {
-      this.isStreaming = false;
+    pi.on("turn_start", () => {
+      this.isStreaming = true;
     });
 
     pi.on("agent_end", () => {
@@ -152,6 +154,9 @@ class BackgroundJobManager {
           task: options.task,
           description: options.description,
           tools: options.tools,
+          readOnly: options.readOnly,
+          maxTurns: options.maxTurns,
+          timeoutMs: options.timeoutMs,
           systemPrompt: options.systemPrompt,
           cwd: options.cwd,
           model: options.model,
@@ -238,9 +243,18 @@ class BackgroundJobManager {
 
     const isCompleted = job.status === "completed";
     const durationSec = (((job.endTime ?? Date.now()) - job.startTime) / 1000).toFixed(1);
-    const output = isCompleted ? (job.result?.output ?? "") : (job.error ?? "Unknown error");
+    const rawOutput = isCompleted ? (job.result?.output ?? "") : (job.error ?? "Unknown error");
 
-    const bannerTextForLLM = `[Background Subagent "${job.description}" (${job.id}) ${isCompleted ? "Completed" : "Failed"} in ${durationSec}s, ${job.turns} turns]:\n\n${output}`;
+    // Context budgeting: truncate excessively large outputs injected into LLM conversation
+    const MAX_REPORT_OUTPUT_CHARS = 12000;
+    let budgetedOutput = rawOutput;
+    if (budgetedOutput.length > MAX_REPORT_OUTPUT_CHARS) {
+      budgetedOutput =
+        budgetedOutput.slice(0, MAX_REPORT_OUTPUT_CHARS) +
+        `\n\n... [Output truncated (${rawOutput.length} characters total). Full output is saved in job record [${job.id}]] ...`;
+    }
+
+    const bannerTextForLLM = `[Background Subagent "${job.description}" (${job.id}) ${isCompleted ? "Completed" : "Failed"} in ${durationSec}s, ${job.turns} turns]:\n\n${budgetedOutput}`;
 
     try {
       await this.pi.sendMessage<SubagentReportDetails>(

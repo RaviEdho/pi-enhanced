@@ -16,7 +16,25 @@ const SubagentParametersSchema = Type.Object({
   tools: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Optional list of tools the subagent is allowed to use (e.g. ['read', 'bash']). Defaults to ['read', 'bash', 'edit', 'write'].",
+        "Optional list of tools the subagent is allowed to use. Available tools include 'read', 'bash', 'edit', 'write', 'find', 'grep', 'multi_grep', 'web_search', 'web_fetch'. Defaults to all available tools.",
+    })
+  ),
+  readOnly: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, runs in read-only mode disabling workspace modification tools ('edit', 'write'). Recommended for analysis, search, and inspection.",
+    })
+  ),
+  maxTurns: Type.Optional(
+    Type.Number({
+      description:
+        "Optional maximum turns limit before automatically terminating (default: 25).",
+    })
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description:
+        "Optional timeout in milliseconds before automatically terminating (default: 300000 = 5m).",
     })
   ),
   background: Type.Optional(
@@ -56,6 +74,9 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           task: params.task,
           description: params.description,
           tools: params.tools,
+          readOnly: params.readOnly,
+          maxTurns: params.maxTurns,
+          timeoutMs: params.timeoutMs,
           cwd: ctx.cwd,
           model: ctx.model,
           thinkingLevel: ctx.thinkingLevel ?? "off",
@@ -89,6 +110,9 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           task: params.task,
           description: params.description,
           tools: params.tools,
+          readOnly: params.readOnly,
+          maxTurns: params.maxTurns,
+          timeoutMs: params.timeoutMs,
           cwd: ctx.cwd,
           model: ctx.model,
           thinkingLevel: ctx.thinkingLevel ?? "off",

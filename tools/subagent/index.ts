@@ -15,16 +15,20 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
  */
 async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
   const isBackground = /\b(--bg|-b|--background)\b/i.test(args);
-  const task = args.replace(/\b(--bg|-b|--background)\b/gi, "").trim();
+  const isReadOnly = /\b(--readonly|-r|--ro)\b/i.test(args);
+  const task = args
+    .replace(/\b(--bg|-b|--background)\b/gi, "")
+    .replace(/\b(--readonly|-r|--ro)\b/gi, "")
+    .trim();
 
   if (!task) {
     if (ctx.hasUI) {
       ctx.ui.notify(
-        "Usage: /subagent <task> (or /subagent --bg <task> for non-blocking background execution)",
+        "Usage: /subagent [--bg] [--readonly] <task>",
         "warning"
       );
     } else {
-      process.stderr.write("Usage: /subagent [--bg] <task>\n");
+      process.stderr.write("Usage: /subagent [--bg] [--readonly] <task>\n");
     }
     return;
   }
@@ -45,6 +49,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   if (isBackground) {
     const startResult = jobManager.startJob({
       task,
+      readOnly: isReadOnly,
       cwd: ctx.cwd,
       model,
       thinkingLevel: ctx.thinkingLevel ?? "off",
@@ -120,6 +125,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   try {
     const result = await runSubagent({
       task,
+      readOnly: isReadOnly,
       cwd: ctx.cwd,
       model,
       thinkingLevel: ctx.thinkingLevel ?? "off",
@@ -175,10 +181,9 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
     const selected = await ctx.ui.select("Background Subagent Jobs", [
       ...items,
       "Cancel all running subagents",
-      "Close",
     ]);
 
-    if (!selected || selected === "Close") return;
+    if (!selected) return;
 
     if (selected === "Cancel all running subagents") {
       jobManager.cancelAllJobs();
@@ -195,7 +200,6 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
       } else if (job && job.status === "running") {
         const action = await ctx.ui.select(`Subagent [${job.id}] is running`, [
           "Cancel this subagent",
-          "Back",
         ]);
         if (action?.startsWith("Cancel")) {
           jobManager.cancelJob(job.id);
@@ -234,7 +238,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
   // Slash commands
   pi.registerCommand("subagent", {
-    description: "Run an isolated subagent (synchronous or background with --bg): /subagent [--bg] <task>",
+    description: "Run an isolated subagent (sync or background with --bg, optional --readonly): /subagent [--bg] [--readonly] <task>",
     handler: async (args, ctx) => {
       await handleSubagentCommand(args, ctx);
     },
