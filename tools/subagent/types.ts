@@ -37,3 +37,38 @@ export interface SubagentResult {
   model: string;
   thinkingLevel: ThinkingLevel;
 }
+
+export type JobStatus = "running" | "completed" | "failed" | "cancelled";
+
+export interface BackgroundJob {
+  id: string;
+  task: string;
+  description: string;
+  status: JobStatus;
+  turns: number;
+  lastStatus: string;
+  tokens: number;
+  result?: SubagentResult;
+  error?: string;
+  abortController: AbortController;
+  startTime: number;
+  endTime?: number;
+  deliverAsFollowUp: boolean;
+  modelName: string;
+  thinkingLevel: ThinkingLevel;
+  polledByAgent: boolean;
+  followUpDelivered: boolean;
+  pendingFollowUp: boolean;
+}
+
+export interface SubagentReportDetails {
+  jobId: string;
+  description: string;
+  status: JobStatus;
+  durationMs: number;
+  turns: number;
+  tokens: number;
+  output?: string;
+  error?: string;
+  modelName: string;
+}
