@@ -91,7 +91,28 @@ Run `/usage` to view live quotas, progress bars, and reset times across all acco
 pi -p "/usage"
 ```
 
-### 5. Autonomous Git Assistant (`/git`, `/commit`)
+### 5. Inspect Context Window Breakdown (`/context`)
+
+Run `/context` to inspect the active context window consumption of the current chat:
+
+```bash
+# In interactive Pi session:
+/context
+
+# Or from terminal:
+pi -p "/context"
+```
+
+- **Compact Usage Bar**: Single-line horizontal progress bar matching Pi's native bar aesthetic with clear percentage and token allocation (`[████░░░░░░░░░░░░░░░░░░░░] 24.2k / 200k (12.1%)`).
+- **Headroom & Auto-compaction**: Clear token headroom with inline compaction trigger countdown (`compacts in 159.5k · at 92%`).
+- **Clean Category Breakdown**: Native Pi typography and aligned sections without screen clutter:
+  - **System**: Base instructions, project guidelines (`AGENTS.md`), and documentation overhead.
+  - **Messages**: User messages and assistant turns, with inline thinking / reasoning tokens.
+  - **Tools**: Tool execution results with call counts and compact breakdown of top tools.
+  - **Compacted**: Compaction run history and summary tokens (if any).
+- **Interactive TUI Controls**: Re-analyze in real time with `r`, trigger manual compaction with `c`, and close cleanly with `esc` or `Enter`. Fits on any terminal without scrolling.
+
+### 6. Autonomous Git Assistant (`/git`, `/commit`)
 
 Run `/git` or `/commit` to autonomously inspect changes and manage git workflows:
 
@@ -123,7 +144,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 - Full token usage and cost accounting displayed in the confirmation dialog, CLI output, and completion notification.
 - Interactive proposal review with full message preview (header & body), detailed file diff metrics, direct commit (`c`), commit & push (`p`), edit (`e`), or cancel (`Esc`).
 
-### 6. Web Search & Web Fetch
+### 7. Web Search & Web Fetch
 
 The `web_search` and `web_fetch` tools are automatically available to LLMs during conversations.
 

@@ -12,6 +12,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **OpenAI & ChatGPT Subscription Balancer (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Unifies both ChatGPT login flows—the official Responses API (`/login openai` -> Sign in with ChatGPT) and the legacy Codex backend (`/login openai-codex`)—with multi-account failover, auto-switching, plan-based model filtering, quota scraping, and rate limit resilience.
 - **Provider Quota & Usage Monitor (`ux/usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command and status footer.
+- **Context Window Usage & Breakdown (`ux/context/`)**: Interactive `/context` slash command and clean single-screen TUI modal featuring native Pi styling conventions, a compact horizontal usage progress bar, available headroom with auto-compaction thresholds, concise category breakdown (`System`, `Messages` with user/assistant/thinking details, `Tools` with call counts and top tools, `Compacted`), and one-key compaction (`c`), refresh (`r`), and close (`esc`).
 - **Autonomous Git Assistant (`/git`, `/commit`)**: Lightweight, autonomous `/commit` and `/git` slash commands that spin up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`, `git_branch_overview`, `propose_pr`), intelligent single vs. multi-stage atomic commit planning, PR drafting, branch recommendations, merge conflict resolution, release drafting, and zero conversation context bloat.
 - **Continue Shortcut (`ux/continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
 - **Terminal Output Compressor (`tools/compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
@@ -132,6 +133,13 @@ pi-enhanced/
 │   │   └── types.ts            # Subagent types & schemas
 │   └── index.ts                # registerTools aggregator
 ├── ux/                         # Workflow & user experience enhancements
+│   ├── context/                # /context command: active context window analysis & breakdown
+│   │   ├── analyzer.ts         # Active projection & session branch token analyzer
+│   │   ├── command.ts          # /context command dispatcher (TUI vs non-TUI)
+│   │   ├── component.ts        # Interactive ContextViewerComponent dialog with scrolling & compaction
+│   │   ├── format.ts           # Terminal & ANSI context breakdown formatter
+│   │   ├── index.ts            # /context command registration
+│   │   └── types.ts            # Context breakdown, category, and consumer schemas
 │   ├── continue/
 │   │   ├── index.ts            # Input handler registering "." continue shortcut
 │   │   └── prompt.ts           # System directive instructing model to resume unfinished work

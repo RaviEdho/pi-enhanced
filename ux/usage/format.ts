@@ -27,7 +27,10 @@ export function createDefaultCliTheme(colorize = true): UsageTheme {
         case "accent":
           return `\x1b[36m${text}\x1b[39m`;
         case "success":
+        case "userMessageText":
           return `\x1b[32m${text}\x1b[39m`;
+        case "customMessageLabel":
+          return `\x1b[35m${text}\x1b[39m`;
         case "warning":
           return `\x1b[33m${text}\x1b[39m`;
         case "error":
