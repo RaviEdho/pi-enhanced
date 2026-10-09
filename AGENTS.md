@@ -17,6 +17,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Terminal Output Compressor (`tools/compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
 - **Codebase Scout Search Engine (`tools/scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
 - **Unified Web Search & Fetch Tools (`tools/web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
+- **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`)**: Zero-overhead in-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions and scoped tools (`read`, `bash`, `edit`, `write`), and streams real-time status updates while keeping parent context clean and bloat-free.
 
 ---
 
@@ -123,6 +124,11 @@ pi-enhanced/
 │   │   ├── query.ts            # Google-style query parser & lenient constraint filter
 │   │   ├── tools.ts            # web_search & web_fetch tool definitions & TypeBox schemas
 │   │   └── types.ts            # Web search data types & schemas
+│   ├── subagent/               # Autonomous isolated subagent routine
+│   │   ├── index.ts            # /subagent command and tool registration
+│   │   ├── runner.ts           # runSubagent in-process runner with model/thinking inheritance
+│   │   ├── tools.ts            # subagent tool definition & TypeBox schema
+│   │   └── types.ts            # Subagent types & schemas
 │   └── index.ts                # registerTools aggregator
 ├── ux/                         # Workflow & user experience enhancements
 │   ├── continue/
