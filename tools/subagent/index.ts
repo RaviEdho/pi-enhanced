@@ -4,6 +4,7 @@ import { jobManager, renderSubagentReportMessage } from "./jobs.js";
 import { runSubagent } from "./runner.js";
 import {
   createSubagentCancelToolDefinition,
+  createSubagentListToolDefinition,
   createSubagentStatusToolDefinition,
   createSubagentToolDefinition,
 } from "./tools.js";
@@ -11,24 +12,25 @@ import {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /**
- * Handles the `/subagent [--bg] <task>` slash command.
+ * Handles the `/subagent [--sync|--fg] [--readonly] <task>` slash command.
+ * Defaults to background execution unless `--sync`, `--fg`, or `--foreground` is specified.
  */
 async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
-  const isBackground = /\b(--bg|-b|--background)\b/i.test(args);
+  const isForeground = /\b(--sync|-s|--fg|-f|--foreground)\b/i.test(args);
   const isReadOnly = /\b(--readonly|-r|--ro)\b/i.test(args);
   const task = args
-    .replace(/\b(--bg|-b|--background)\b/gi, "")
+    .replace(/\b(--sync|-s|--fg|-f|--foreground|--bg|-b|--background)\b/gi, "")
     .replace(/\b(--readonly|-r|--ro)\b/gi, "")
     .trim();
 
   if (!task) {
     if (ctx.hasUI) {
       ctx.ui.notify(
-        "Usage: /subagent [--bg] [--readonly] <task>",
+        "Usage: /subagent [--sync] [--readonly] <task>",
         "warning"
       );
     } else {
-      process.stderr.write("Usage: /subagent [--bg] [--readonly] <task>\n");
+      process.stderr.write("Usage: /subagent [--sync] [--readonly] <task>\n");
     }
     return;
   }
@@ -45,7 +47,8 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
 
   jobManager.setUIContext(ctx.ui);
 
-  // Background execution branch
+  // Background execution is the default unless foreground is explicitly requested
+  const isBackground = !isForeground;
   if (isBackground) {
     const startResult = jobManager.startJob({
       task,
@@ -225,6 +228,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   // Register tools
   pi.registerTool(createSubagentToolDefinition());
   pi.registerTool(createSubagentStatusToolDefinition());
+  pi.registerTool(createSubagentListToolDefinition());
   pi.registerTool(createSubagentCancelToolDefinition());
 
   // Attach UI context on session start and cleanup on shutdown
@@ -238,7 +242,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
   // Slash commands
   pi.registerCommand("subagent", {
-    description: "Run an isolated subagent (sync or background with --bg, optional --readonly): /subagent [--bg] [--readonly] <task>",
+    description: "Run an isolated subagent (defaults to background, use --sync or --fg for blocking, optional --readonly): /subagent [--sync] [--readonly] <task>",
     handler: async (args, ctx) => {
       await handleSubagentCommand(args, ctx);
     },
@@ -254,6 +258,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
 export {
   createSubagentCancelToolDefinition,
+  createSubagentListToolDefinition,
   createSubagentStatusToolDefinition,
   createSubagentToolDefinition,
 } from "./tools.js";

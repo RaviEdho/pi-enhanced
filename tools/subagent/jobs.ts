@@ -132,6 +132,7 @@ class BackgroundJobManager {
       status: "running",
       turns: 0,
       lastStatus: "Initializing…",
+      recentSteps: [],
       tokens: 0,
       abortController,
       startTime: Date.now(),
@@ -167,6 +168,10 @@ class BackgroundJobManager {
             job.turns = prog.turns;
             job.tokens = prog.tokens;
             job.lastStatus = prog.status;
+            job.currentTool = prog.currentTool;
+            if (prog.recentSteps) {
+              job.recentSteps = prog.recentSteps;
+            }
             this.refreshWidget();
           },
         });

@@ -122,6 +122,29 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
   };
 
   let currentStatus = "Subagent started...";
+  let currentTool: string | undefined;
+  const recentSteps: string[] = [];
+
+  const formatToolStep = (toolName: string, args: any): string => {
+    let summary = toolName;
+    if (args && typeof args === "object") {
+      if (args.command) {
+        const cmd = String(args.command).trim().replace(/\s+/g, " ");
+        summary += `: \`${cmd.length > 50 ? `${cmd.slice(0, 47)}...` : cmd}\``;
+      } else if (args.path) {
+        summary += `: ${String(args.path)}`;
+      } else if (args.pattern) {
+        summary += `: "${String(args.pattern)}"`;
+      } else if (args.patterns && Array.isArray(args.patterns)) {
+        summary += `: [${args.patterns.map((p: any) => `"${p}"`).slice(0, 3).join(", ")}]`;
+      } else if (args.query) {
+        summary += `: "${String(args.query)}"`;
+      } else if (args.url) {
+        summary += `: ${String(args.url)}`;
+      }
+    }
+    return summary;
+  };
 
   const internalAbortController = new AbortController();
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -154,10 +177,37 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
         );
       }
       currentStatus = `Turn ${turns}...`;
-      options.onUpdate?.({ status: currentStatus, turns, tokens: usage.totalTokens });
+      options.onUpdate?.({
+        status: currentStatus,
+        turns,
+        tokens: usage.totalTokens,
+        currentTool,
+        recentSteps: [...recentSteps],
+      });
     } else if (event.type === "tool_execution_start") {
+      const stepSummary = formatToolStep(event.toolName, event.args);
+      currentTool = stepSummary;
+      recentSteps.push(stepSummary);
+      if (recentSteps.length > 5) {
+        recentSteps.shift();
+      }
       currentStatus = `Executing ${event.toolName}…`;
-      options.onUpdate?.({ status: currentStatus, turns, tokens: usage.totalTokens });
+      options.onUpdate?.({
+        status: currentStatus,
+        turns,
+        tokens: usage.totalTokens,
+        currentTool,
+        recentSteps: [...recentSteps],
+      });
+    } else if (event.type === "tool_execution_end") {
+      currentTool = undefined;
+      options.onUpdate?.({
+        status: currentStatus,
+        turns,
+        tokens: usage.totalTokens,
+        currentTool: undefined,
+        recentSteps: [...recentSteps],
+      });
     } else if (event.type === "message_end") {
       if (event.message.role === "assistant" && event.message.usage) {
         const u = event.message.usage;
@@ -167,7 +217,13 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
         usage.cacheRead += u.cacheRead || 0;
         usage.cacheWrite += u.cacheWrite || 0;
         usage.totalTokens += u.totalTokens || ((u.input || 0) + (u.output || 0));
-        options.onUpdate?.({ status: currentStatus, turns, tokens: usage.totalTokens });
+        options.onUpdate?.({
+          status: currentStatus,
+          turns,
+          tokens: usage.totalTokens,
+          currentTool,
+          recentSteps: [...recentSteps],
+        });
       }
     }
   });

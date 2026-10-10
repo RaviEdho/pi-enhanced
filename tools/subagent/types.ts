@@ -14,6 +14,8 @@ export interface SubagentProgress {
   status: string;
   turns: number;
   tokens: number;
+  currentTool?: string;
+  recentSteps?: string[];
 }
 
 export interface SubagentRunOptions {
@@ -50,6 +52,8 @@ export interface BackgroundJob {
   status: JobStatus;
   turns: number;
   lastStatus: string;
+  currentTool?: string;
+  recentSteps: string[];
   tokens: number;
   result?: SubagentResult;
   error?: string;
