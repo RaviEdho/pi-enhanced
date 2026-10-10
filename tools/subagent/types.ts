@@ -34,6 +34,22 @@ export interface SubagentRunOptions {
   onUpdate?: (progress: SubagentProgress) => void;
 }
 
+export type JobStatus = "running" | "completed" | "failed" | "cancelled" | "escalated";
+
+export type EscalationReason =
+  | "permission_needed"
+  | "ambiguity"
+  | "destructive_action"
+  | "out_of_scope"
+  | "blocker";
+
+export interface EscalationPayload {
+  reason: EscalationReason;
+  questionOrDecision: string;
+  partialFindings: string;
+  recommendedAction?: string;
+}
+
 export interface SubagentResult {
   output: string;
   turns: number;
@@ -41,9 +57,8 @@ export interface SubagentResult {
   durationMs: number;
   model: string;
   thinkingLevel: ThinkingLevel;
+  escalation?: EscalationPayload;
 }
-
-export type JobStatus = "running" | "completed" | "failed" | "cancelled";
 
 export interface BackgroundJob {
   id: string;
@@ -56,6 +71,7 @@ export interface BackgroundJob {
   recentSteps: string[];
   tokens: number;
   result?: SubagentResult;
+  escalation?: EscalationPayload;
   error?: string;
   abortController: AbortController;
   startTime: number;
@@ -77,5 +93,6 @@ export interface SubagentReportDetails {
   tokens: number;
   output?: string;
   error?: string;
+  escalation?: EscalationPayload;
   modelName: string;
 }

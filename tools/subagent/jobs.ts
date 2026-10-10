@@ -70,7 +70,7 @@ class BackgroundJobManager {
    */
   public markJobPolledByAgent(id: string): void {
     const job = this.jobs.get(id);
-    if (job && (job.status === "completed" || job.status === "failed")) {
+    if (job && (job.status === "completed" || job.status === "failed" || job.status === "escalated")) {
       job.polledByAgent = true;
       job.pendingFollowUp = false;
     }
@@ -176,7 +176,12 @@ class BackgroundJobManager {
           },
         });
 
-        job.status = "completed";
+        if (result.escalation) {
+          job.status = "escalated";
+          job.escalation = result.escalation;
+        } else {
+          job.status = "completed";
+        }
         job.result = result;
         job.endTime = Date.now();
         this.refreshWidget();
@@ -247,8 +252,9 @@ class BackgroundJobManager {
     if (!this.pi) return;
 
     const isCompleted = job.status === "completed";
+    const isEscalated = job.status === "escalated";
     const durationSec = (((job.endTime ?? Date.now()) - job.startTime) / 1000).toFixed(1);
-    const rawOutput = isCompleted ? (job.result?.output ?? "") : (job.error ?? "Unknown error");
+    const rawOutput = (isCompleted || isEscalated) ? (job.result?.output ?? "") : (job.error ?? "Unknown error");
 
     // Context budgeting: truncate excessively large outputs injected into LLM conversation
     const MAX_REPORT_OUTPUT_CHARS = 12000;
@@ -259,7 +265,13 @@ class BackgroundJobManager {
         `\n\n... [Output truncated (${rawOutput.length} characters total). Full output is saved in job record [${job.id}]] ...`;
     }
 
-    const bannerTextForLLM = `[Background Subagent "${job.description}" (${job.id}) ${isCompleted ? "Completed" : "Failed"} in ${durationSec}s, ${job.turns} turns]:\n\n${budgetedOutput}`;
+    const statusBanner = isEscalated
+      ? "ESCALATED to Main Agent"
+      : isCompleted
+      ? "Completed"
+      : "Failed";
+
+    const bannerTextForLLM = `[Background Subagent "${job.description}" (${job.id}) ${statusBanner} in ${durationSec}s, ${job.turns} turns]:\n\n${budgetedOutput}`;
 
     try {
       await this.pi.sendMessage<SubagentReportDetails>(
@@ -274,8 +286,9 @@ class BackgroundJobManager {
             durationMs: (job.endTime ?? Date.now()) - job.startTime,
             turns: job.turns,
             tokens: job.tokens,
-            output: isCompleted ? job.result?.output : undefined,
-            error: !isCompleted ? job.error : undefined,
+            output: (isCompleted || isEscalated) ? job.result?.output : undefined,
+            error: (!isCompleted && !isEscalated) ? job.error : undefined,
+            escalation: job.escalation,
             modelName: job.modelName,
           },
         },
@@ -299,8 +312,9 @@ class BackgroundJobManager {
               durationMs: (job.endTime ?? Date.now()) - job.startTime,
               turns: job.turns,
               tokens: job.tokens,
-              output: isCompleted ? job.result?.output : undefined,
-              error: !isCompleted ? job.error : undefined,
+              output: (isCompleted || isEscalated) ? job.result?.output : undefined,
+              error: (!isCompleted && !isEscalated) ? job.error : undefined,
+              escalation: job.escalation,
               modelName: job.modelName,
             },
           },
@@ -362,22 +376,28 @@ export function renderSubagentReportMessage(
 ): any {
   const details = message.details as SubagentReportDetails | undefined;
   const isCompleted = details?.status === "completed";
-  const icon = isCompleted ? "⚡" : "✖";
-  const statusColor = isCompleted ? "success" : "error";
+  const isEscalated = details?.status === "escalated";
+  const icon = isEscalated ? "⚠️" : isCompleted ? "⚡" : "✖";
+  const statusColor = isEscalated ? "warning" : isCompleted ? "success" : "error";
+  const titlePrefix = isEscalated ? "Subagent Escalation: " : "Subagent Report: ";
   const title = details?.description || details?.jobId || "Subagent Task";
   const durationSec = details ? (details.durationMs / 1000).toFixed(1) : "0.0";
   const turns = details?.turns ?? 0;
   const tokens = details?.tokens ?? 0;
 
-  let text = `${theme.fg(statusColor, icon)} ${theme.bold(theme.fg("toolTitle", "Subagent Report: "))}${theme.fg("accent", `"${title}"`)}`;
+  let text = `${theme.fg(statusColor, icon)} ${theme.bold(theme.fg("toolTitle", titlePrefix))}${theme.fg("accent", `"${title}"`)}`;
   text += ` ${theme.fg("dim", `(${details?.jobId || "sub"})`)}`;
   text += `\n${theme.fg("dim", `  ${durationSec}s • ${turns} turn${turns === 1 ? "" : "s"} • ${tokens} tokens • `)}`;
+
+  if (isEscalated && details?.escalation) {
+    text += `${theme.fg("warning", `[${details.escalation.reason}]`)} • `;
+  }
 
   if (options.expanded) {
     text += `${theme.fg("dim", "[Press Enter to collapse]")}\n`;
     const pad = Math.max(30, Math.min(options.outputPad || 50, 70));
     text += `\n${theme.fg("dim", "─".repeat(pad))}\n`;
-    if (isCompleted && details?.output) {
+    if ((isCompleted || isEscalated) && details?.output) {
       text += details.output;
     } else if (details?.error) {
       text += theme.fg("error", `Error: ${details.error}`);

@@ -4,7 +4,9 @@ import {
   getAgentDir,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import {
   createFindToolDefinition,
   createGrepToolDefinition,
@@ -14,13 +16,26 @@ import {
   createWebFetchToolDefinition,
   createWebSearchToolDefinition,
 } from "../web/tools.js";
-import type { SubagentProgress, SubagentResult, SubagentRunOptions, SubagentTokenUsage } from "./types.js";
+import type {
+  EscalationPayload,
+  SubagentProgress,
+  SubagentResult,
+  SubagentRunOptions,
+  SubagentTokenUsage,
+} from "./types.js";
 
 const DEFAULT_SUBAGENT_SYSTEM_PROMPT = `You are a focused, autonomous subagent running in an isolated execution sandbox.
 Your role is to accomplish the delegated task directly, thoroughly, and concisely.
 Work independently, inspect what you need, make necessary edits if tasked, and provide a clear, synthesized final response.
-Use dedicated search tools ('find', 'grep', 'multi_grep') and web tools ('web_search', 'web_fetch') whenever appropriate instead of running verbose shell commands.
-Keep your final output informative but concise so it integrates cleanly back into the parent conversation.`;
+
+AUTONOMY & HEADLESS ENVIRONMENT:
+- There is NO interactive human user in this sandbox session. Do not ask conversational questions or request confirmation in normal chat.
+- Make reasonable engineering decisions and proceed autonomously to completion whenever feasible.
+- If you encounter a fundamental blocker, missing permission, dangerous/destructive action (e.g. git reset --hard, database drops), or a major architectural fork that genuinely requires higher-level decision-making from the main agent, call the 'escalate' tool to cleanly hand off control with your partial findings and recommended options.
+
+TOOL USAGE:
+- Use dedicated search tools ('find', 'grep', 'multi_grep') and web tools ('web_search', 'web_fetch') whenever appropriate instead of running verbose shell commands.
+- Keep your final output informative but concise so it integrates cleanly back into the parent conversation.`;
 
 const READONLY_ADDENDUM = `\n\nREAD-ONLY MODE: You are operating in read-only mode. Workspace editing tools ('edit', 'write') are disabled. Do not attempt to modify, create, or delete workspace files or execute mutating shell commands. Focus purely on inspection, search, analysis, and synthesis.`;
 
@@ -34,10 +49,91 @@ const ALL_SUBAGENT_TOOL_NAMES = [
   "multi_grep",
   "web_search",
   "web_fetch",
+  "escalate",
 ];
+
+const EscalateParametersSchema = Type.Object({
+  reason: Type.Union(
+    [
+      Type.Literal("permission_needed"),
+      Type.Literal("ambiguity"),
+      Type.Literal("destructive_action"),
+      Type.Literal("out_of_scope"),
+      Type.Literal("blocker"),
+    ],
+    {
+      description:
+        "The primary reason why you cannot complete the delegated task autonomously without the main agent.",
+    }
+  ),
+  questionOrDecision: Type.String({
+    description:
+      "The specific question, clarification, or critical decision required from the main agent.",
+  }),
+  partialFindings: Type.String({
+    description:
+      "Summary of what you investigated, discovered, or accomplished before escalating.",
+  }),
+  recommendedAction: Type.Optional(
+    Type.String({
+      description:
+        "Your recommended option or course of action for the main agent, if any.",
+    })
+  ),
+});
+
+function createEscalateToolDefinition(
+  onEscalate: (payload: EscalationPayload) => void
+): ToolDefinition<typeof EscalateParametersSchema, any> {
+  return {
+    name: "escalate",
+    label: "escalate",
+    description:
+      "Escalate the task back to the main agent when you hit an irresolvable blocker, missing permission, destructive action, or architectural fork requiring higher-level authority. Halts subagent execution cleanly.",
+    parameters: EscalateParametersSchema,
+    async execute(_toolCallId, params) {
+      onEscalate(params as EscalationPayload);
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Task escalated to main agent. Halting subagent execution.",
+          },
+        ],
+        details: params,
+      };
+    },
+  };
+}
 
 const DEFAULT_MAX_TURNS = 25;
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
+
+function buildEscalationResult(
+  escalation: EscalationPayload,
+  turns: number,
+  usage: SubagentTokenUsage,
+  durationMs: number,
+  model: string,
+  thinkingLevel: any
+): SubagentResult {
+  let output = `[SUBAGENT ESCALATION: ${escalation.reason.toUpperCase()}]\n\n`;
+  output += `Question / Decision Required:\n${escalation.questionOrDecision}\n\n`;
+  output += `Partial Findings:\n${escalation.partialFindings}`;
+  if (escalation.recommendedAction) {
+    output += `\n\nRecommended Action:\n${escalation.recommendedAction}`;
+  }
+
+  return {
+    output,
+    turns,
+    usage,
+    durationMs,
+    model,
+    thinkingLevel,
+    escalation,
+  };
+}
 
 /**
  * Executes a task in an isolated in-process subagent session.
@@ -69,6 +165,9 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
     selectedTools = baseToolNames;
   }
 
+  let capturedEscalation: EscalationPayload | undefined;
+  const ESCALATE_SIGNAL = "__SUBAGENT_ESCALATED__";
+
   // Provide enhanced custom tool definitions to the isolated session
   const customTools = [
     createFindToolDefinition("find"),
@@ -76,6 +175,12 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
     createMultiGrepToolDefinition("multi_grep"),
     createWebSearchToolDefinition(),
     createWebFetchToolDefinition(),
+    createEscalateToolDefinition((payload) => {
+      capturedEscalation = payload;
+      queueMicrotask(() => {
+        internalAbortController.abort(new Error(ESCALATE_SIGNAL));
+      });
+    }),
   ];
 
   const basePrompt = options.systemPrompt || DEFAULT_SUBAGENT_SYSTEM_PROMPT;
@@ -141,6 +246,8 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
         summary += `: "${String(args.query)}"`;
       } else if (args.url) {
         summary += `: ${String(args.url)}`;
+      } else if (args.reason) {
+        summary += `: [${String(args.reason)}] ${args.questionOrDecision ? `"${String(args.questionOrDecision).slice(0, 35)}..."` : ""}`;
       }
     }
     return summary;
@@ -245,6 +352,17 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
   try {
     await Promise.race([session.prompt(options.task), abortPromise]);
 
+    if (capturedEscalation) {
+      return buildEscalationResult(
+        capturedEscalation,
+        turns,
+        usage,
+        Date.now() - startTime,
+        `${options.model.provider}/${options.model.id}`,
+        options.thinkingLevel
+      );
+    }
+
     // Inspect assistant messages for errors that Pi does not throw as JS exceptions
     const assistantMessages = session.messages.filter((m) => m.role === "assistant");
     const lastAssistant = assistantMessages[assistantMessages.length - 1];
@@ -280,6 +398,19 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
       thinkingLevel: options.thinkingLevel,
     };
   } catch (err: any) {
+    if (capturedEscalation || err?.message === ESCALATE_SIGNAL) {
+      if (capturedEscalation) {
+        return buildEscalationResult(
+          capturedEscalation,
+          turns,
+          usage,
+          Date.now() - startTime,
+          `${options.model.provider}/${options.model.id}`,
+          options.thinkingLevel
+        );
+      }
+    }
+
     executionError = err instanceof Error ? err : new Error(String(err));
     throw executionError;
   } finally {

@@ -192,9 +192,9 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
 
       const elapsedSec = (( (job.endTime ?? Date.now()) - job.startTime) / 1000).toFixed(1);
 
-      // GATING 1: If the main agent polls a completed or failed job, mark it as polled
+      // GATING 1: If the main agent polls a completed, failed, or escalated job, mark it as polled
       // so the planned follow-up message is cancelled.
-      if (job.status === "completed" || job.status === "failed") {
+      if (job.status === "completed" || job.status === "failed" || job.status === "escalated") {
         jobManager.markJobPolledByAgent(params.jobId);
       }
 
@@ -202,7 +202,15 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
       text += `Task: "${job.description}"\n`;
       text += `Duration: ${elapsedSec}s | Turns: ${job.turns} | Model: ${job.modelName}\n`;
 
-      if (job.status === "completed" && job.result) {
+      if (job.status === "escalated" && job.escalation) {
+        text += `\n--- ESCALATION DETAILS ---\n`;
+        text += `Reason: ${job.escalation.reason}\n`;
+        text += `Question / Decision Required: ${job.escalation.questionOrDecision}\n`;
+        text += `Partial Findings: ${job.escalation.partialFindings}\n`;
+        if (job.escalation.recommendedAction) {
+          text += `Recommended Action: ${job.escalation.recommendedAction}\n`;
+        }
+      } else if (job.status === "completed" && job.result) {
         text += `\n--- Output ---\n${job.result.output}`;
       } else if (job.status === "failed") {
         text += `\nError: ${job.error || "Unknown error"}`;
@@ -287,12 +295,13 @@ const SubagentListParametersSchema = Type.Object({
         Type.Literal("all"),
         Type.Literal("running"),
         Type.Literal("completed"),
+        Type.Literal("escalated"),
         Type.Literal("failed"),
         Type.Literal("cancelled"),
       ],
       {
         description:
-          "Filter jobs by status ('running', 'completed', 'failed', 'cancelled', or 'all'). Defaults to 'all'.",
+          "Filter jobs by status ('running', 'completed', 'escalated', 'failed', 'cancelled', or 'all'). Defaults to 'all'.",
       }
     )
   ),
@@ -328,6 +337,8 @@ export function createSubagentListToolDefinition(): ToolDefinition<typeof Subage
           if (j.currentTool) {
             info += ` (executing: ${j.currentTool})`;
           }
+        } else if (j.status === "escalated" && j.escalation) {
+          info += `\n    Escalation [${j.escalation.reason}]: ${j.escalation.questionOrDecision.slice(0, 75)}...`;
         } else if (j.status === "failed" && j.error) {
           const errPreview = j.error.length > 80 ? `${j.error.slice(0, 77)}...` : j.error;
           info += `\n    Error: ${errPreview}`;

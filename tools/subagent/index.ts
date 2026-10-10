@@ -139,6 +139,17 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
       },
     });
 
+    if (result.escalation) {
+      if (ctx.hasUI) {
+        const summaryMsg = `Subagent ESCALATED [${result.escalation.reason}] in ${(result.durationMs / 1000).toFixed(1)}s (${result.turns} turns).`;
+        ctx.ui.notify(summaryMsg, "warning");
+        await ctx.ui.editor(`Subagent Escalation [${result.escalation.reason}]`, result.output);
+      } else {
+        process.stdout.write(`\n=== Subagent Escalation [${result.escalation.reason}] ===\n${result.output}\n`);
+      }
+      return;
+    }
+
     if (ctx.hasUI) {
       const summaryMsg = `Subagent finished in ${(result.durationMs / 1000).toFixed(1)}s (${result.turns} turn${result.turns > 1 ? "s" : ""}, ${result.usage.totalTokens} tokens).`;
       ctx.ui.notify(summaryMsg, "info");
@@ -176,8 +187,12 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
 
   const items = jobs.map((j) => {
     const elapsed = (((j.endTime ?? Date.now()) - j.startTime) / 1000).toFixed(1);
-    const icon = j.status === "running" ? "⚡" : j.status === "completed" ? "✔" : "✖";
-    return `${icon} [${j.id}] ${j.status.toUpperCase()} (${elapsed}s, ${j.turns} turns) - ${j.description}`;
+    const icon = j.status === "running" ? "⚡" : j.status === "escalated" ? "⚠️" : j.status === "completed" ? "✔" : "✖";
+    let desc = j.description;
+    if (j.status === "escalated" && j.escalation) {
+      desc = `[${j.escalation.reason}] ${desc}`;
+    }
+    return `${icon} [${j.id}] ${j.status.toUpperCase()} (${elapsed}s, ${j.turns} turns) - ${desc}`;
   });
 
   if (ctx.hasUI) {
@@ -199,7 +214,8 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
     if (match) {
       const job = jobManager.getJob(match[1]);
       if (job && job.result) {
-        await ctx.ui.editor(`Subagent [${job.id}] Output`, job.result.output);
+        const title = job.status === "escalated" ? `Subagent [${job.id}] Escalation` : `Subagent [${job.id}] Output`;
+        await ctx.ui.editor(title, job.result.output);
       } else if (job && job.status === "running") {
         const action = await ctx.ui.select(`Subagent [${job.id}] is running`, [
           "Cancel this subagent",
