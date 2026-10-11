@@ -416,7 +416,7 @@ class BackgroundJobManager {
       const titleText = theme?.fg ? theme.fg("muted", title) : title;
       const statusText = theme?.fg ? theme.fg("dim", `: ${j.lastStatus}`) : `: ${j.lastStatus}`;
       const elapsedText = theme?.fg ? theme.fg("dim", `(${elapsed}s)`) : `(${elapsed}s)`;
-      return `  ${icon} ${idText} ${titleText}${statusText} ${elapsedText}`;
+      return `  ${icon}${idText} ${titleText}${statusText} ${elapsedText}`;
     });
 
     this.uiContext.setWidget("subagents", lines);
@@ -538,7 +538,7 @@ export function renderSubagentReportMessage(
   const details = message.details as SubagentReportDetails | undefined;
   const isCompleted = details?.status === "completed";
   const isEscalated = details?.status === "escalated";
-  const icon = isEscalated ? "⚠️" : isCompleted ? "⚡" : "✖";
+  const icon = isEscalated ? "▲" : isCompleted ? "✓" : "✗";
   const statusColor = isEscalated ? "warning" : isCompleted ? "muted" : "error";
   const titlePrefix = isEscalated ? "Subagent Escalation: " : "Subagent Report: ";
   const title = details?.description || details?.jobId || "Subagent Task";

@@ -172,13 +172,13 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
 
       if (result.isError) {
         const errText = result.content[0]?.type === "text" ? result.content[0].text : "Subagent failed";
-        return new Text(theme.fg("error", `✖ ${errText}`), 0, 0);
+        return new Text(theme.fg("error", `✗ ${errText}`), 0, 0);
       }
 
       const details = result.details as SubagentResult | { jobId: string; status: string } | undefined;
       if (details && "jobId" in details && details.status === "running") {
         return new Text(
-          `${theme.fg("accent", "⚡")} ${theme.fg("muted", `Background subagent [${details.jobId}] active`)}`,
+          `${theme.fg("accent", "⚡")}${theme.fg("dim", `[${details.jobId}]`)} ${theme.fg("muted", "spawned (background)")}`,
           0,
           0
         );
@@ -189,10 +189,16 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       const turns = subResult?.turns ?? 1;
       const tokens = subResult?.usage?.totalTokens ?? 0;
       const isEscalated = !!subResult?.escalation;
-      const icon = isEscalated ? "⚠️" : "✔";
+      const icon = isEscalated ? "▲" : "✓";
       const statusColor = isEscalated ? "warning" : "muted";
+      const tag = theme.fg("dim", "[sync]");
+      const statusText = theme.fg("muted", isEscalated ? "escalated" : "completed");
+      const metricsText = theme.fg(
+        "dim",
+        `(${durationSec}s, ${turns} turn${turns === 1 ? "" : "s"}, ${tokens.toLocaleString()} tokens)`
+      );
 
-      let summary = `${theme.fg(statusColor, icon)} ${theme.fg("muted", `Completed in ${durationSec}s (${turns} turns, ${tokens.toLocaleString()} tokens)`)}`;
+      let summary = `${theme.fg(statusColor, icon)} ${tag} ${statusText} ${metricsText}`;
       if (isEscalated && subResult?.escalation) {
         summary += ` ${theme.fg("warning", `[${subResult.escalation.reason}]`)}`;
       }
@@ -480,10 +486,10 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
         details.status === "running"
           ? "⚡"
           : details.status === "escalated"
-            ? "⚠️"
+            ? "▲"
             : details.status === "completed"
-              ? "✔"
-              : "✖";
+              ? "✓"
+              : "✗";
       const statusColor =
         details.status === "running"
           ? "accent"
@@ -492,7 +498,8 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
             : details.status === "completed"
               ? "muted"
               : "error";
-      const line = `${theme.fg(statusColor, icon)} ${theme.fg("dim", `[${details.jobId}]`)} ${theme.fg("muted", details.status)}${metricsStr}`;
+      const iconSpace = icon === "⚡" ? "" : " ";
+      const line = `${theme.fg(statusColor, icon)}${iconSpace}${theme.fg("dim", `[${details.jobId}]`)} ${theme.fg("muted", details.status)}${metricsStr}`;
       return new Text(line, 0, 0);
     },
   };
@@ -544,7 +551,12 @@ export function createSubagentCancelToolDefinition(): ToolDefinition<typeof Suba
         return new Text(theme.fg("error", firstText || "Cancel failed"), 0, 0);
       }
       const details = result.details as any;
-      return new Text(theme.fg("muted", `Cancelled [${details?.jobId || ""}]`), 0, 0);
+      const jobId = details?.jobId ? `[${details.jobId}]` : "";
+      return new Text(
+        `${theme.fg("error", "✗")} ${theme.fg("dim", jobId)} ${theme.fg("muted", "cancelled")}`,
+        0,
+        0
+      );
     },
   };
 }
