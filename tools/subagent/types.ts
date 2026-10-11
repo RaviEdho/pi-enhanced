@@ -1,6 +1,8 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 
+export const MAX_SUBAGENT_OUTPUT_CHARS = 12000;
+
 export interface SubagentTokenUsage {
   input: number;
   output: number;

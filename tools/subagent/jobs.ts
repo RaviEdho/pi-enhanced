@@ -1,7 +1,12 @@
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { runSubagent } from "./runner.js";
-import type { BackgroundJob, SubagentReportDetails, SubagentRunOptions } from "./types.js";
+import {
+  type BackgroundJob,
+  MAX_SUBAGENT_OUTPUT_CHARS,
+  type SubagentReportDetails,
+  type SubagentRunOptions,
+} from "./types.js";
 
 const MAX_CONCURRENT_JOBS = 3;
 const MAX_STORED_JOBS = 20;
@@ -257,11 +262,10 @@ class BackgroundJobManager {
     const rawOutput = (isCompleted || isEscalated) ? (job.result?.output ?? "") : (job.error ?? "Unknown error");
 
     // Context budgeting: truncate excessively large outputs injected into LLM conversation
-    const MAX_REPORT_OUTPUT_CHARS = 12000;
     let budgetedOutput = rawOutput;
-    if (budgetedOutput.length > MAX_REPORT_OUTPUT_CHARS) {
+    if (budgetedOutput.length > MAX_SUBAGENT_OUTPUT_CHARS) {
       budgetedOutput =
-        budgetedOutput.slice(0, MAX_REPORT_OUTPUT_CHARS) +
+        budgetedOutput.slice(0, MAX_SUBAGENT_OUTPUT_CHARS) +
         `\n\n... [Output truncated (${rawOutput.length} characters total). Full output is saved in job record [${job.id}]] ...`;
     }
 

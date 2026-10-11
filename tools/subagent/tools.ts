@@ -3,6 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { jobManager } from "./jobs.js";
 import { runSubagent } from "./runner.js";
+import { MAX_SUBAGENT_OUTPUT_CHARS } from "./types.js";
 
 const SubagentParametersSchema = Type.Object({
   task: Type.String({
@@ -130,8 +131,15 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           },
         });
 
+        let output = result.output;
+        if (output.length > MAX_SUBAGENT_OUTPUT_CHARS) {
+          output =
+            output.slice(0, MAX_SUBAGENT_OUTPUT_CHARS) +
+            `\n\n... [Output truncated (${result.output.length} characters total)] ...`;
+        }
+
         return {
-          content: [{ type: "text", text: result.output }],
+          content: [{ type: "text", text: output }],
           details: result,
         };
       } catch (err: any) {
@@ -206,14 +214,32 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
         text += `\n--- ESCALATION DETAILS ---\n`;
         text += `Reason: ${job.escalation.reason}\n`;
         text += `Question / Decision Required: ${job.escalation.questionOrDecision}\n`;
-        text += `Partial Findings: ${job.escalation.partialFindings}\n`;
+        let findings = job.escalation.partialFindings;
+        if (findings.length > MAX_SUBAGENT_OUTPUT_CHARS) {
+          findings =
+            findings.slice(0, MAX_SUBAGENT_OUTPUT_CHARS) +
+            `\n\n... [Findings truncated (${job.escalation.partialFindings.length} characters total). Full findings visible via /jobs] ...`;
+        }
+        text += `Partial Findings: ${findings}\n`;
         if (job.escalation.recommendedAction) {
           text += `Recommended Action: ${job.escalation.recommendedAction}\n`;
         }
       } else if (job.status === "completed" && job.result) {
-        text += `\n--- Output ---\n${job.result.output}`;
+        let output = job.result.output;
+        if (output.length > MAX_SUBAGENT_OUTPUT_CHARS) {
+          output =
+            output.slice(0, MAX_SUBAGENT_OUTPUT_CHARS) +
+            `\n\n... [Output truncated (${job.result.output.length} characters total). Full output visible via /jobs] ...`;
+        }
+        text += `\n--- Output ---\n${output}`;
       } else if (job.status === "failed") {
-        text += `\nError: ${job.error || "Unknown error"}`;
+        let err = job.error || "Unknown error";
+        if (err.length > MAX_SUBAGENT_OUTPUT_CHARS) {
+          err =
+            err.slice(0, MAX_SUBAGENT_OUTPUT_CHARS) +
+            `\n\n... [Error truncated (${job.error!.length} characters total)] ...`;
+        }
+        text += `\nError: ${err}`;
       } else if (job.status === "running") {
         text += `Current status: ${job.lastStatus}`;
         if (job.currentTool) {
