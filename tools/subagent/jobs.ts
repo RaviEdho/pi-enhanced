@@ -16,6 +16,8 @@ class BackgroundJobManager {
   private pi?: ExtensionAPI;
   private uiContext?: ExtensionUIContext;
   private jobs = new Map<string, BackgroundJob>();
+  private completionWaiters = new Map<string, Set<(job: BackgroundJob) => void>>();
+  private progressWaiters = new Map<string, Set<(job: BackgroundJob) => void>>();
   private widgetTimer?: ReturnType<typeof setInterval>;
   private isStreaming = false;
 
@@ -53,8 +55,39 @@ class BackgroundJobManager {
   }
 
   public setUIContext(ui: ExtensionUIContext | undefined): void {
+    if (this.uiContext && this.uiContext !== ui) {
+      if (typeof this.uiContext.setWidget === "function") {
+        this.uiContext.setWidget("subagents", undefined);
+      }
+      if (typeof this.uiContext.setStatus === "function") {
+        this.uiContext.setStatus("subagents", undefined);
+      }
+    }
     this.uiContext = ui;
     this.refreshWidget();
+  }
+
+  public dispose(): void {
+    if (this.widgetTimer) {
+      clearInterval(this.widgetTimer);
+      this.widgetTimer = undefined;
+    }
+    for (const [jobId, cSet] of this.completionWaiters.entries()) {
+      const job = this.jobs.get(jobId);
+      for (const listener of cSet) {
+        if (job) listener(job);
+      }
+    }
+    this.completionWaiters.clear();
+    this.progressWaiters.clear();
+    if (this.uiContext) {
+      if (typeof this.uiContext.setWidget === "function") {
+        this.uiContext.setWidget("subagents", undefined);
+      }
+      if (typeof this.uiContext.setStatus === "function") {
+        this.uiContext.setStatus("subagents", undefined);
+      }
+    }
   }
 
   public getJob(id: string): BackgroundJob | undefined {
@@ -89,6 +122,7 @@ class BackgroundJobManager {
     job.endTime = Date.now();
     job.pendingFollowUp = false;
     this.refreshWidget();
+    this.notifyCompletion(job);
     return true;
   }
 
@@ -99,6 +133,7 @@ class BackgroundJobManager {
         job.status = "cancelled";
         job.endTime = Date.now();
         job.pendingFollowUp = false;
+        this.notifyCompletion(job);
       }
     }
     this.refreshWidget();
@@ -177,6 +212,7 @@ class BackgroundJobManager {
               job.recentSteps = prog.recentSteps;
             }
             this.refreshWidget();
+            this.notifyProgress(job);
           },
         });
 
@@ -189,6 +225,7 @@ class BackgroundJobManager {
         job.result = result;
         job.endTime = Date.now();
         this.refreshWidget();
+        this.notifyCompletion(job);
 
         // Gating 1 check: if the main model already polled for subagent_status,
         // cancel the planned subagent follow-up
@@ -208,6 +245,7 @@ class BackgroundJobManager {
           }
         }
         this.refreshWidget();
+        this.notifyCompletion(job);
       } finally {
         this.checkWidgetTimer();
       }
@@ -349,19 +387,31 @@ class BackgroundJobManager {
   }
 
   private refreshWidget(): void {
-    if (!this.uiContext || typeof this.uiContext.setWidget !== "function") return;
+    if (!this.uiContext) return;
 
     const running = this.getRunningJobs();
     if (running.length === 0) {
-      this.uiContext.setWidget("subagents", undefined);
+      if (typeof this.uiContext.setWidget === "function") {
+        this.uiContext.setWidget("subagents", undefined);
+      }
+      if (typeof this.uiContext.setStatus === "function") {
+        this.uiContext.setStatus("subagents", undefined);
+      }
       return;
     }
+
+    if (typeof this.uiContext.setStatus === "function") {
+      const count = running.length;
+      this.uiContext.setStatus("subagents", count === 1 ? "⚡ 1 subagent" : `⚡ ${count} subagents`);
+    }
+
+    if (typeof this.uiContext.setWidget !== "function") return;
 
     const theme = (this.uiContext as any)?.theme;
     const lines: string[] = running.map((j) => {
       const elapsed = ((Date.now() - j.startTime) / 1000).toFixed(0);
       const title = j.description.length > 35 ? `${j.description.slice(0, 32)}…` : j.description;
-      const icon = theme?.fg ? theme.fg("muted", "⚡") : "⚡";
+      const icon = theme?.fg ? theme.fg("accent", "⚡") : "⚡";
       const idText = theme?.fg ? theme.fg("dim", `[${j.id}]`) : `[${j.id}]`;
       const titleText = theme?.fg ? theme.fg("muted", title) : title;
       const statusText = theme?.fg ? theme.fg("dim", `: ${j.lastStatus}`) : `: ${j.lastStatus}`;
@@ -370,6 +420,108 @@ class BackgroundJobManager {
     });
 
     this.uiContext.setWidget("subagents", lines);
+  }
+
+  private notifyProgress(job: BackgroundJob): void {
+    const pSet = this.progressWaiters.get(job.id);
+    if (pSet) {
+      for (const listener of pSet) {
+        try {
+          listener(job);
+        } catch {}
+      }
+    }
+  }
+
+  private notifyCompletion(job: BackgroundJob): void {
+    const cSet = this.completionWaiters.get(job.id);
+    if (cSet) {
+      for (const listener of cSet) {
+        try {
+          listener(job);
+        } catch {}
+      }
+      this.completionWaiters.delete(job.id);
+    }
+    this.progressWaiters.delete(job.id);
+  }
+
+  /**
+   * Waits for a running background job to finish, or until timeoutMs expires,
+   * or until the abort signal fires.
+   * If the job is already finished, returns immediately (0ms).
+   * If the job finishes while waiting, resolves instantly without waiting for timeoutMs.
+   */
+  public waitForJobOrTimeout(
+    jobId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onProgress?: (job: BackgroundJob) => void
+  ): Promise<BackgroundJob | undefined> {
+    const job = this.jobs.get(jobId);
+    if (!job) return Promise.resolve(undefined);
+    if (job.status !== "running") return Promise.resolve(job);
+    if (signal?.aborted) return Promise.reject(signal.reason || new Error("Subagent wait aborted."));
+    if (timeoutMs <= 0) return Promise.resolve(job);
+
+    return new Promise<BackgroundJob>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        const cSet = this.completionWaiters.get(jobId);
+        if (cSet) {
+          cSet.delete(onComplete);
+          if (cSet.size === 0) this.completionWaiters.delete(jobId);
+        }
+        if (onProgress) {
+          const pSet = this.progressWaiters.get(jobId);
+          if (pSet) {
+            pSet.delete(onProgress);
+            if (pSet.size === 0) this.progressWaiters.delete(jobId);
+          }
+        }
+        signal?.removeEventListener("abort", onAbort);
+      };
+
+      const onComplete = (finishedJob: BackgroundJob) => {
+        cleanup();
+        resolve(finishedJob);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        reject(signal?.reason || new Error("Subagent wait aborted by user."));
+      };
+
+      // Register completion waiter
+      let cSet = this.completionWaiters.get(jobId);
+      if (!cSet) {
+        cSet = new Set();
+        this.completionWaiters.set(jobId, cSet);
+      }
+      cSet.add(onComplete);
+
+      // Register progress waiter if callback provided
+      if (onProgress) {
+        let pSet = this.progressWaiters.get(jobId);
+        if (!pSet) {
+          pSet = new Set();
+          this.progressWaiters.set(jobId, pSet);
+        }
+        pSet.add(onProgress);
+      }
+
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      timer = setTimeout(() => {
+        cleanup();
+        resolve(this.jobs.get(jobId) || job);
+      }, timeoutMs);
+    });
   }
 }
 

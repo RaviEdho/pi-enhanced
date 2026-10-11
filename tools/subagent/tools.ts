@@ -3,7 +3,11 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { jobManager } from "./jobs.js";
 import { runSubagent } from "./runner.js";
-import { MAX_SUBAGENT_OUTPUT_CHARS } from "./types.js";
+import {
+  type BackgroundJob,
+  MAX_SUBAGENT_OUTPUT_CHARS,
+  type SubagentResult,
+} from "./types.js";
 
 const SubagentParametersSchema = Type.Object({
   task: Type.String({
@@ -95,7 +99,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           content: [
             {
               type: "text",
-              text: `Background subagent spawned successfully.\nJob ID: ${job.id}\nTask: "${job.description}"\n\nYou can continue working immediately. Once the subagent finishes, its results will be delivered automatically as a follow-up message into this session. You can also inspect its status at any time with 'subagent_status'.`,
+              text: `Background subagent spawned successfully.\nJob ID: ${job.id}\nTask: "${job.description}"\n\nYou can continue working immediately on other tasks. Once the subagent finishes, its results will be delivered automatically as a follow-up message into this session. Avoid polling 'subagent_status' rapidly in a tight loop—consecutive polls incur escalating wait cooldowns.`,
             },
           ],
           details: { jobId: job.id, status: "running" },
@@ -159,7 +163,87 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       textComponent.setText(text);
       return textComponent;
     },
+    renderResult(result, { expanded, isPartial }, theme, _context) {
+      if (isPartial) {
+        const prog = result.details as any;
+        const status = prog?.status || "Executing…";
+        return new Text(theme.fg("accent", `⠋ ${status}`), 0, 0);
+      }
+
+      if (result.isError) {
+        const errText = result.content[0]?.type === "text" ? result.content[0].text : "Subagent failed";
+        return new Text(theme.fg("error", `✖ ${errText}`), 0, 0);
+      }
+
+      const details = result.details as SubagentResult | { jobId: string; status: string } | undefined;
+      if (details && "jobId" in details && details.status === "running") {
+        return new Text(
+          `${theme.fg("accent", "⚡")} ${theme.fg("muted", `Background subagent [${details.jobId}] active`)}`,
+          0,
+          0
+        );
+      }
+
+      const subResult = details as SubagentResult | undefined;
+      const durationSec = subResult ? (subResult.durationMs / 1000).toFixed(1) : "0.0";
+      const turns = subResult?.turns ?? 1;
+      const tokens = subResult?.usage?.totalTokens ?? 0;
+      const isEscalated = !!subResult?.escalation;
+      const icon = isEscalated ? "⚠️" : "✔";
+      const statusColor = isEscalated ? "warning" : "muted";
+
+      let summary = `${theme.fg(statusColor, icon)} ${theme.fg("muted", `Completed in ${durationSec}s (${turns} turns, ${tokens.toLocaleString()} tokens)`)}`;
+      if (isEscalated && subResult?.escalation) {
+        summary += ` ${theme.fg("warning", `[${subResult.escalation.reason}]`)}`;
+      }
+
+      if (expanded) {
+        const outputText = result.content[0]?.type === "text" ? result.content[0].text : "";
+        summary += `\n${theme.fg("dim", "─".repeat(40))}\n${outputText}`;
+      }
+
+      return new Text(summary, 0, 0);
+    },
   };
+}
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+let consecutiveStatusPollCount = 0;
+let lastPolledJobId: string | undefined;
+
+/**
+ * Records tool execution to reset consecutive status poll counter when other tools run.
+ */
+export function recordToolExecution(toolName: string): void {
+  if (toolName !== "subagent_status") {
+    consecutiveStatusPollCount = 0;
+    lastPolledJobId = undefined;
+  }
+}
+
+/**
+ * Resets the consecutive status poll counter.
+ */
+export function resetConsecutiveStatusPolls(): void {
+  consecutiveStatusPollCount = 0;
+  lastPolledJobId = undefined;
+}
+
+/**
+ * Adaptive backoff schedule for consecutive status checks:
+ * 1st poll: 3s
+ * 2nd poll: 7s
+ * 3rd poll: 12s
+ * 4th poll: 18s
+ * 5th+ poll: 25s
+ */
+export function getBackoffWaitMs(consecutiveCount: number): number {
+  if (consecutiveCount <= 1) return 3000;
+  if (consecutiveCount === 2) return 7000;
+  if (consecutiveCount === 3) return 12000;
+  if (consecutiveCount === 4) return 18000;
+  return 25000;
 }
 
 const SubagentStatusParametersSchema = Type.Object({
@@ -174,9 +258,10 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
     label: "subagent_status",
     description: "Check the progress or output of a running or completed background subagent by its jobId.",
     parameters: SubagentStatusParametersSchema,
-    async execute(_toolCallId, params) {
-      const job = jobManager.getJob(params.jobId);
+    async execute(_toolCallId, params, signal, onUpdate) {
+      let job = jobManager.getJob(params.jobId);
       if (!job) {
+        resetConsecutiveStatusPolls();
         const allJobs = jobManager.listJobs().map((j) => `${j.id} (${j.status})`).join(", ") || "none";
         return {
           content: [
@@ -190,13 +275,98 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
         };
       }
 
-      const elapsedSec = (( (job.endTime ?? Date.now()) - job.startTime) / 1000).toFixed(1);
+      // If the job is still running, apply adaptive backoff cooldown
+      if (job.status === "running") {
+        if (lastPolledJobId === params.jobId) {
+          consecutiveStatusPollCount++;
+        } else {
+          consecutiveStatusPollCount = 1;
+          lastPolledJobId = params.jobId;
+        }
+
+        const waitMs = getBackoffWaitMs(consecutiveStatusPollCount);
+        const totalSec = Math.ceil(waitMs / 1000);
+        const cooldownStartTime = Date.now();
+        let frameIndex = 0;
+        let activeJob = job;
+
+        const emitTick = () => {
+          const currentJob = activeJob;
+          const elapsedCooldownMs = Date.now() - cooldownStartTime;
+          const remainingSec = Math.max(1, totalSec - Math.floor(elapsedCooldownMs / 1000));
+          const elapsedSec = parseFloat(((Date.now() - currentJob.startTime) / 1000).toFixed(1));
+          const spinnerFrame = SPINNER_FRAMES[frameIndex];
+          frameIndex = (frameIndex + 1) % SPINNER_FRAMES.length;
+
+          onUpdate?.({
+            content: [
+              {
+                type: "text",
+                text: `[subagent ${currentJob.id}] ${currentJob.lastStatus}${currentJob.currentTool ? ` (${currentJob.currentTool})` : ""}`,
+              },
+            ],
+            details: {
+              jobId: currentJob.id,
+              status: currentJob.status,
+              turns: currentJob.turns,
+              durationSec: elapsedSec,
+              currentTool: currentJob.currentTool,
+              remainingSec,
+              spinnerFrame,
+              consecutivePolls: consecutiveStatusPollCount,
+            },
+          });
+        };
+
+        // Emit initial tick immediately
+        emitTick();
+
+        // 100ms interval for smooth braille animation and consistent 1-second countdown steps
+        const tickTimer = setInterval(() => {
+          emitTick();
+        }, 100);
+        tickTimer.unref?.();
+
+        try {
+          const waitedJob = await jobManager.waitForJobOrTimeout(
+            params.jobId,
+            waitMs,
+            signal,
+            (progJob) => {
+              // Smoothly update reference without double-ticking or jumping spinner frames
+              activeJob = progJob;
+            }
+          );
+          if (waitedJob) {
+            job = waitedJob;
+          }
+        } catch (err: any) {
+          if (signal?.aborted) {
+            throw signal.reason || new Error("Subagent status poll was aborted by user.");
+          }
+          throw err;
+        } finally {
+          clearInterval(tickTimer);
+        }
+      }
+
+      const isTerminal =
+        job.status === "completed" ||
+        job.status === "failed" ||
+        job.status === "escalated" ||
+        job.status === "cancelled";
+
+      if (isTerminal) {
+        resetConsecutiveStatusPolls();
+      }
 
       // GATING 1: If the main agent polls a completed, failed, or escalated job, mark it as polled
       // so the planned follow-up message is cancelled.
       if (job.status === "completed" || job.status === "failed" || job.status === "escalated") {
         jobManager.markJobPolledByAgent(params.jobId);
       }
+
+      const elapsedSec = (((job.endTime ?? Date.now()) - job.startTime) / 1000).toFixed(1);
 
       let text = `Subagent ${job.id} Status: ${job.status.toUpperCase()}\n`;
       text += `Task: "${job.description}"\n`;
@@ -240,6 +410,9 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
         if (job.recentSteps && job.recentSteps.length > 0) {
           text += `\nRecent actions:\n${job.recentSteps.map((s) => `  - ${s}`).join("\n")}`;
         }
+
+        const nextWaitSec = (getBackoffWaitMs(consecutiveStatusPollCount + 1) / 1000).toFixed(0);
+        text += `\n\n[Cooldown Policy: Subagent is actively running. Consecutive status checks incur increasing wait cooldowns (next wait: ~${nextWaitSec}s). Any cooldown is waived immediately as soon as the subagent finishes. You can perform other tasks in the meantime or allow the background result to be delivered automatically.]`;
       }
 
       return {
@@ -251,6 +424,7 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
           durationSec: parseFloat(elapsedSec),
           currentTool: job.currentTool,
           recentSteps: job.recentSteps,
+          consecutivePolls: consecutiveStatusPollCount,
         },
       };
     },
@@ -260,6 +434,66 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
       textComponent.setText(text);
       return textComponent;
+    },
+    renderResult(result, { isPartial }, theme) {
+      const first = result.content[0];
+      const firstText = first && first.type === "text" ? first.text : "";
+      if (result.isError) {
+        return new Text(theme.fg("error", firstText || "Job not found"), 0, 0);
+      }
+      const details = result.details as any;
+      if (!details) {
+        return new Text(firstText, 0, 0);
+      }
+
+      const duration =
+        typeof details.durationSec === "number"
+          ? `${details.durationSec.toFixed(1)}s`
+          : details.durationSec !== undefined
+            ? `${details.durationSec}s`
+            : undefined;
+      const turns =
+        details.turns !== undefined
+          ? `${details.turns} turn${details.turns === 1 ? "" : "s"}`
+          : undefined;
+      const metrics = [duration, turns].filter(Boolean).join(", ");
+      const metricsStr = metrics ? ` (${metrics})` : "";
+
+      if (isPartial) {
+        const frame = details.spinnerFrame || "⠋";
+        const cooldown =
+          details.remainingSec !== undefined && details.remainingSec > 0
+            ? ` [cooldown: ${details.remainingSec}s]`
+            : "";
+        const toolRaw = details.currentTool;
+        const toolText = toolRaw ? (toolRaw.length > 40 ? `${toolRaw.slice(0, 37)}…` : toolRaw) : "";
+        const tool = toolText ? ` • ${toolText}` : "";
+
+        return new Text(
+          `${theme.fg("accent", frame)} ${theme.fg("dim", `[${details.jobId}]`)} ${theme.fg("muted", "running")}${theme.fg("warning", cooldown)}${metricsStr}${theme.fg("dim", tool)}`,
+          0,
+          0
+        );
+      }
+
+      const icon =
+        details.status === "running"
+          ? "⚡"
+          : details.status === "escalated"
+            ? "⚠️"
+            : details.status === "completed"
+              ? "✔"
+              : "✖";
+      const statusColor =
+        details.status === "running"
+          ? "accent"
+          : details.status === "escalated"
+            ? "warning"
+            : details.status === "completed"
+              ? "muted"
+              : "error";
+      const line = `${theme.fg(statusColor, icon)} ${theme.fg("dim", `[${details.jobId}]`)} ${theme.fg("muted", details.status)}${metricsStr}`;
+      return new Text(line, 0, 0);
     },
   };
 }
@@ -302,6 +536,15 @@ export function createSubagentCancelToolDefinition(): ToolDefinition<typeof Suba
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
       textComponent.setText(text);
       return textComponent;
+    },
+    renderResult(result, _options, theme) {
+      const first = result.content[0];
+      const firstText = first && first.type === "text" ? first.text : "";
+      if (result.isError) {
+        return new Text(theme.fg("error", firstText || "Cancel failed"), 0, 0);
+      }
+      const details = result.details as any;
+      return new Text(theme.fg("muted", `Cancelled [${details?.jobId || ""}]`), 0, 0);
     },
   };
 }
@@ -387,6 +630,11 @@ export function createSubagentListToolDefinition(): ToolDefinition<typeof Subage
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
       textComponent.setText(text);
       return textComponent;
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details as any;
+      const count = details?.totalCount ?? 0;
+      return new Text(theme.fg("muted", `${count} subagent job${count === 1 ? "" : "s"}`), 0, 0);
     },
   };
 }
