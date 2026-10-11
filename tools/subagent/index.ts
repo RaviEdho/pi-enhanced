@@ -77,10 +77,10 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
     if (!ctx.hasUI) return;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const spinner = ctx.ui.theme?.fg
-      ? ctx.ui.theme.fg("accent", SPINNER_FRAMES[frameIndex])
+      ? ctx.ui.theme.fg("muted", SPINNER_FRAMES[frameIndex])
       : SPINNER_FRAMES[frameIndex];
     const text = ctx.ui.theme?.fg
-      ? ctx.ui.theme.fg("text", statusText)
+      ? ctx.ui.theme.fg("muted", statusText)
       : statusText;
     const elapsedText = ctx.ui.theme?.fg
       ? ctx.ui.theme.fg("dim", `(${elapsed}s)`)

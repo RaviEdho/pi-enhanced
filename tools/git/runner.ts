@@ -386,10 +386,10 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         } else {
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           const spinner = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("accent", SPINNER_FRAMES[frameIndex])
+            ? ctx.ui.theme.fg("muted", SPINNER_FRAMES[frameIndex])
             : SPINNER_FRAMES[frameIndex];
           const statusText = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("text", broadcaster.status)
+            ? ctx.ui.theme.fg("muted", broadcaster.status)
             : broadcaster.status;
           const elapsedText = ctx.ui.theme?.fg
             ? ctx.ui.theme.fg("dim", `(${elapsed}s)`)
