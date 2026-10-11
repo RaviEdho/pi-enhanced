@@ -152,7 +152,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       }
       const label = args?.description || (args?.task ? args.task.slice(0, 60).replace(/\n/g, " ") : "");
       if (label) {
-        text += theme.fg("accent", `"${label}"`);
+        text += theme.fg("muted", `"${label}"`);
       }
       const textComponent =
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
@@ -255,7 +255,7 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
       };
     },
     renderCall(args, theme, context) {
-      const text = theme.fg("toolTitle", theme.bold("subagent_status ")) + theme.fg("accent", args?.jobId || "");
+      const text = theme.fg("toolTitle", theme.bold("subagent_status ")) + theme.fg("muted", args?.jobId || "");
       const textComponent =
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
       textComponent.setText(text);
@@ -297,7 +297,7 @@ export function createSubagentCancelToolDefinition(): ToolDefinition<typeof Suba
       };
     },
     renderCall(args, theme, context) {
-      const text = theme.fg("toolTitle", theme.bold("subagent_cancel ")) + theme.fg("accent", args?.jobId || "");
+      const text = theme.fg("toolTitle", theme.bold("subagent_cancel ")) + theme.fg("muted", args?.jobId || "");
       const textComponent =
         (context?.lastComponent instanceof Text ? context.lastComponent : undefined) ?? new Text("", 0, 0);
       textComponent.setText(text);

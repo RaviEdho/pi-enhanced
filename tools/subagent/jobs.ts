@@ -357,10 +357,16 @@ class BackgroundJobManager {
       return;
     }
 
+    const theme = (this.uiContext as any)?.theme;
     const lines: string[] = running.map((j) => {
       const elapsed = ((Date.now() - j.startTime) / 1000).toFixed(0);
       const title = j.description.length > 35 ? `${j.description.slice(0, 32)}…` : j.description;
-      return `  ⚡ [${j.id}] ${title}: ${j.lastStatus} (${elapsed}s)`;
+      const icon = theme?.fg ? theme.fg("muted", "⚡") : "⚡";
+      const idText = theme?.fg ? theme.fg("dim", `[${j.id}]`) : `[${j.id}]`;
+      const titleText = theme?.fg ? theme.fg("muted", title) : title;
+      const statusText = theme?.fg ? theme.fg("dim", `: ${j.lastStatus}`) : `: ${j.lastStatus}`;
+      const elapsedText = theme?.fg ? theme.fg("dim", `(${elapsed}s)`) : `(${elapsed}s)`;
+      return `  ${icon} ${idText} ${titleText}${statusText} ${elapsedText}`;
     });
 
     this.uiContext.setWidget("subagents", lines);
@@ -381,14 +387,14 @@ export function renderSubagentReportMessage(
   const isCompleted = details?.status === "completed";
   const isEscalated = details?.status === "escalated";
   const icon = isEscalated ? "⚠️" : isCompleted ? "⚡" : "✖";
-  const statusColor = isEscalated ? "warning" : isCompleted ? "success" : "error";
+  const statusColor = isEscalated ? "warning" : isCompleted ? "muted" : "error";
   const titlePrefix = isEscalated ? "Subagent Escalation: " : "Subagent Report: ";
   const title = details?.description || details?.jobId || "Subagent Task";
   const durationSec = details ? (details.durationMs / 1000).toFixed(1) : "0.0";
   const turns = details?.turns ?? 0;
   const tokens = details?.tokens ?? 0;
 
-  let text = `${theme.fg(statusColor, icon)} ${theme.bold(theme.fg("toolTitle", titlePrefix))}${theme.fg("accent", `"${title}"`)}`;
+  let text = `${theme.fg(statusColor, icon)} ${theme.bold(theme.fg("toolTitle", titlePrefix))}${theme.fg("muted", `"${title}"`)}`;
   text += ` ${theme.fg("dim", `(${details?.jobId || "sub"})`)}`;
   text += `\n${theme.fg("dim", `  ${durationSec}s • ${turns} turn${turns === 1 ? "" : "s"} • ${tokens} tokens • `)}`;
 
@@ -408,7 +414,7 @@ export function renderSubagentReportMessage(
       text += "(No content)";
     }
   } else {
-    text += `${theme.fg("warning", "[Press Enter to expand full output]")}`;
+    text += `${theme.fg("dim", "[Press Enter to expand full output]")}`;
   }
 
   const box = new Box(options.outputPad ?? 0, 1, (t) => theme.bg("customMessageBg", t));
