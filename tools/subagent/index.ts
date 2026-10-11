@@ -12,25 +12,23 @@ import {
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /**
- * Handles the `/subagent [--sync|--fg] [--readonly] <task>` slash command.
+ * Handles the `/subagent [--sync|--fg] <task>` slash command.
  * Defaults to background execution unless `--sync`, `--fg`, or `--foreground` is specified.
  */
 async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
   const isForeground = /\b(--sync|-s|--fg|-f|--foreground)\b/i.test(args);
-  const isReadOnly = /\b(--readonly|-r|--ro)\b/i.test(args);
   const task = args
     .replace(/\b(--sync|-s|--fg|-f|--foreground|--bg|-b|--background)\b/gi, "")
-    .replace(/\b(--readonly|-r|--ro)\b/gi, "")
     .trim();
 
   if (!task) {
     if (ctx.hasUI) {
       ctx.ui.notify(
-        "Usage: /subagent [--sync] [--readonly] <task>",
+        "Usage: /subagent [--sync] <task>",
         "warning"
       );
     } else {
-      process.stderr.write("Usage: /subagent [--sync] [--readonly] <task>\n");
+      process.stderr.write("Usage: /subagent [--sync] <task>\n");
     }
     return;
   }
@@ -52,7 +50,6 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   if (isBackground) {
     const startResult = jobManager.startJob({
       task,
-      readOnly: isReadOnly,
       cwd: ctx.cwd,
       model,
       thinkingLevel: ctx.thinkingLevel ?? "off",
@@ -128,7 +125,6 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   try {
     const result = await runSubagent({
       task,
-      readOnly: isReadOnly,
       cwd: ctx.cwd,
       model,
       thinkingLevel: ctx.thinkingLevel ?? "off",
@@ -258,7 +254,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
   // Slash commands
   pi.registerCommand("subagent", {
-    description: "Run an isolated subagent (defaults to background, use --sync or --fg for blocking, optional --readonly): /subagent [--sync] [--readonly] <task>",
+    description: "Run an isolated subagent (defaults to background, use --sync or --fg for blocking): /subagent [--sync] <task>",
     handler: async (args, ctx) => {
       await handleSubagentCommand(args, ctx);
     },

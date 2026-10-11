@@ -37,8 +37,6 @@ TOOL USAGE:
 - Use dedicated search tools ('find', 'grep', 'multi_grep') and web tools ('web_search', 'web_fetch') whenever appropriate instead of running verbose shell commands.
 - Keep your final output informative but concise so it integrates cleanly back into the parent conversation.`;
 
-const READONLY_ADDENDUM = `\n\nREAD-ONLY MODE: You are operating in read-only mode. Workspace editing tools ('edit', 'write') are disabled. Do not attempt to modify, create, or delete workspace files or execute mutating shell commands. Focus purely on inspection, search, analysis, and synthesis.`;
-
 const ALL_SUBAGENT_TOOL_NAMES = [
   "read",
   "bash",
@@ -144,20 +142,17 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
   const cwd = options.cwd;
   const agentDir = getAgentDir();
 
-  const isReadOnly = Boolean(options.readOnly);
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   // Determine allowed tool names
-  const baseToolNames = isReadOnly
-    ? ALL_SUBAGENT_TOOL_NAMES.filter((t) => t !== "edit" && t !== "write")
-    : [...ALL_SUBAGENT_TOOL_NAMES];
+  const baseToolNames = [...ALL_SUBAGENT_TOOL_NAMES];
 
   let selectedTools: string[];
   if (options.tools && options.tools.length > 0) {
     selectedTools = options.tools
       .map((t) => t.trim())
-      .filter((t) => Boolean(t) && t !== "subagent" && (!isReadOnly || (t !== "edit" && t !== "write")));
+      .filter((t) => Boolean(t) && t !== "subagent");
     if (selectedTools.length === 0) {
       selectedTools = baseToolNames;
     }
@@ -183,8 +178,7 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
     }),
   ];
 
-  const basePrompt = options.systemPrompt || DEFAULT_SUBAGENT_SYSTEM_PROMPT;
-  const systemPrompt = isReadOnly ? `${basePrompt}${READONLY_ADDENDUM}` : basePrompt;
+  const systemPrompt = options.systemPrompt || DEFAULT_SUBAGENT_SYSTEM_PROMPT;
 
   const settingsManager = SettingsManager.create(cwd, agentDir);
   const resourceLoader = new DefaultResourceLoader({

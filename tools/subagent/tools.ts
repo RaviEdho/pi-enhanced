@@ -20,12 +20,6 @@ const SubagentParametersSchema = Type.Object({
         "Optional list of tools the subagent is allowed to use. Available tools include 'read', 'bash', 'edit', 'write', 'find', 'grep', 'multi_grep', 'web_search', 'web_fetch'. Defaults to all available tools.",
     })
   ),
-  readOnly: Type.Optional(
-    Type.Boolean({
-      description:
-        "If true, runs in read-only mode disabling workspace modification tools ('edit', 'write'). Recommended for analysis, search, and inspection.",
-    })
-  ),
   maxTurns: Type.Optional(
     Type.Number({
       description:
@@ -79,7 +73,6 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           task: params.task,
           description: params.description,
           tools: params.tools,
-          readOnly: params.readOnly,
           maxTurns: params.maxTurns,
           timeoutMs: params.timeoutMs,
           cwd: ctx.cwd,
@@ -115,7 +108,6 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
           task: params.task,
           description: params.description,
           tools: params.tools,
-          readOnly: params.readOnly,
           maxTurns: params.maxTurns,
           timeoutMs: params.timeoutMs,
           cwd: ctx.cwd,

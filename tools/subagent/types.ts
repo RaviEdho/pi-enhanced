@@ -24,7 +24,6 @@ export interface SubagentRunOptions {
   task: string;
   description?: string;
   tools?: string[];
-  readOnly?: boolean;
   maxTurns?: number;
   timeoutMs?: number;
   systemPrompt?: string;

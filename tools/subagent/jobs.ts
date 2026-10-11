@@ -160,7 +160,6 @@ class BackgroundJobManager {
           task: options.task,
           description: options.description,
           tools: options.tools,
-          readOnly: options.readOnly,
           maxTurns: options.maxTurns,
           timeoutMs: options.timeoutMs,
           systemPrompt: options.systemPrompt,
