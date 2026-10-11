@@ -294,7 +294,7 @@ export function createFindToolDefinition(name = "find"): ToolDefinition<typeof f
     },
     renderCall(args, theme, context) {
       const rawPattern = args?.pattern?.trim();
-      const patternText = rawPattern ? `"${rawPattern}"` : "*";
+      const patternText = rawPattern || "*";
       const rawPath = args?.path?.trim();
 
       let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", patternText);
@@ -333,7 +333,7 @@ export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof g
     renderCall(args, theme, context) {
       const pattern = args?.pattern || "";
       const rawPath = args?.path?.trim();
-      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", `"${pattern}"`);
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", `/${pattern}/`);
       if (rawPath) {
         text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
       }
@@ -364,10 +364,10 @@ export function createMultiGrepToolDefinition(name = "multi_grep"): ToolDefiniti
     renderCall(args, theme, context) {
       const patterns = Array.isArray(args?.patterns) ? args.patterns : [];
       const summary =
-        patterns.slice(0, 3).map((p: string) => `"${p}"`).join(" | ") +
+        patterns.slice(0, 3).map((p: string) => `/${p}/`).join(" | ") +
         (patterns.length > 3 ? ` (+${patterns.length - 3} more)` : "");
       const rawPath = args?.path?.trim();
-      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", summary || `""`);
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", summary || `//`);
       if (rawPath) {
         text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
       }

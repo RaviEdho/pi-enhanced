@@ -139,7 +139,7 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       let text = theme.fg("toolTitle", theme.bold("web_search "));
       if (args?.query) {
         const queryStr = args.query.length > 80 ? `${args.query.slice(0, 77)}...` : args.query;
-        text += theme.fg("accent", `"${queryStr}"`);
+        text += theme.fg("accent", queryStr);
       }
       const providerId = activeSearchProviders.get(context.toolCallId) || args?.provider;
       if (providerId && providerId !== "none") {
@@ -285,7 +285,7 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
       let text = theme.fg("toolTitle", theme.bold("web_fetch "));
       if (args?.url) {
         const urlStr = args.url.length > 70 ? `${args.url.slice(0, 67)}...` : args.url;
-        text += theme.fg("accent", `"${urlStr}"`);
+        text += theme.fg("accent", urlStr);
       }
       const providerId = activeFetchProviders.get(context.toolCallId) || args?.provider;
       if (providerId && providerId !== "none") {
