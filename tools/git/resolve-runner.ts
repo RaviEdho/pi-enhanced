@@ -22,7 +22,7 @@ export async function handleResolveCommand(args: string, ctx: ExtensionCommandCo
   const cwd = ctx.cwd;
 
   if (!(await isGitRepository(cwd))) {
-    ctx.ui.notify("Current directory is not inside a git repository.", "error");
+    ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' first.", "error");
     return;
   }
 

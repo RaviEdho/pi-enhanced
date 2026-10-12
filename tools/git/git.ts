@@ -40,10 +40,21 @@ export async function isGitRepository(cwd: string): Promise<boolean> {
 export async function getCurrentBranch(cwd: string): Promise<string> {
   try {
     const res = await execGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
-    return res.trim();
+    const branch = res.trim();
+    if (branch && branch !== "HEAD") return branch;
   } catch {
-    return "";
+    // ignore
   }
+
+  // Fallback for unborn HEAD (e.g. freshly initialized repository)
+  try {
+    const ref = (await execGit(["symbolic-ref", "--short", "HEAD"], cwd)).trim();
+    if (ref) return ref;
+  } catch {
+    // ignore
+  }
+
+  return "";
 }
 
 export async function getDefaultBranch(cwd: string): Promise<string> {

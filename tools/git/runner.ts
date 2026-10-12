@@ -53,8 +53,28 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       // 1. Verify git repository
       const isRepo = await isGitRepository(cwd);
       if (!isRepo) {
-        ctx.ui.notify("Current directory is not inside a git repository.", "error");
-        return;
+        if (ctx.hasUI) {
+          const shouldInit = await ctx.ui.confirm(
+            "Git Repository Required",
+            "Current directory is not a git repository. Initialize git now (git init)?"
+          );
+          if (!shouldInit) {
+            ctx.ui.notify("Commit aborted: not a git repository.", "info");
+            return;
+          }
+
+          try {
+            const out = (await execGit(["init"], cwd)).trim();
+            ctx.ui.notify(out || "Initialized empty Git repository.", "info");
+          } catch (err: any) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Failed to initialize git repository: ${msg}`, "error");
+            return;
+          }
+        } else {
+          ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' or 'git init' first.", "error");
+          return;
+        }
       }
 
       // 2. Ensure an active model is available

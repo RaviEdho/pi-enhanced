@@ -28,7 +28,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
 
   // Comprehensive /git command suite
   pi.registerCommand("git", {
-    description: "Intelligent Git assistant: commit, pr, branch, worktree, resolve, release, sync, undo, status",
+    description: "Intelligent Git assistant: init, commit, pr, branch, worktree, resolve, release, sync, undo, status",
     handler: async (args, ctx) => {
       if (isGitBusy) {
         ctx.ui.notify("A git operation is already in progress.", "warning");
@@ -43,6 +43,11 @@ export function registerGitCommands(pi: ExtensionAPI): void {
       isGitBusy = true;
       try {
         switch (sub) {
+          case "init": {
+            const { handleInitCommand } = await import("./routine-runner.js");
+            await handleInitCommand(ctx, subArgs);
+            break;
+          }
           case "commit": {
             const { handleCommitCommand } = await import("./runner.js");
             await handleCommitCommand(subArgs, ctx);
@@ -93,7 +98,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           default: {
             ctx.ui.notify(
-              `Unknown git subcommand '${sub}'. Valid: commit, pr, branch, worktree, resolve, release, sync, undo, status`,
+              `Unknown git subcommand '${sub}'. Valid: init, commit, pr, branch, worktree, resolve, release, sync, undo, status`,
               "warning"
             );
             break;

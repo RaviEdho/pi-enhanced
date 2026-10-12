@@ -12,7 +12,7 @@ import {
 export async function handleSyncCommand(ctx: ExtensionCommandContext): Promise<void> {
   const cwd = ctx.cwd;
   if (!(await isGitRepository(cwd))) {
-    ctx.ui.notify("Current directory is not inside a git repository.", "error");
+    ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' first.", "error");
     return;
   }
 
@@ -31,7 +31,7 @@ export async function handleSyncCommand(ctx: ExtensionCommandContext): Promise<v
 export async function handleUndoCommand(ctx: ExtensionCommandContext): Promise<void> {
   const cwd = ctx.cwd;
   if (!(await isGitRepository(cwd))) {
-    ctx.ui.notify("Current directory is not inside a git repository.", "error");
+    ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' first.", "error");
     return;
   }
 
@@ -52,29 +52,59 @@ export async function handleUndoCommand(ctx: ExtensionCommandContext): Promise<v
   }
 }
 
+/**
+ * Initializes a new git repository in the current working directory.
+ */
+export async function handleInitCommand(ctx: ExtensionCommandContext, args?: string): Promise<void> {
+  const cwd = ctx.cwd;
+  if (await isGitRepository(cwd)) {
+    ctx.ui.notify("Git repository is already initialized.", "info");
+    return;
+  }
+
+  ctx.ui.setWorkingMessage?.("Initializing git repository…");
+  try {
+    const extraArgs = args ? args.trim().split(/\s+/).filter(Boolean) : [];
+    const out = (await execGit(["init", ...extraArgs], cwd)).trim();
+    ctx.ui.notify(out || "Initialized empty Git repository.", "info");
+  } catch (err: any) {
+    ctx.ui.notify(`Failed to initialize git repository: ${err?.message}`, "error");
+  } finally {
+    ctx.ui.setWorkingMessage?.();
+  }
+}
+
 export async function handleStatusCommand(ctx: ExtensionCommandContext): Promise<void> {
   const cwd = ctx.cwd;
   if (!(await isGitRepository(cwd))) {
-    ctx.ui.notify("Current directory is not inside a git repository.", "error");
+    if (ctx.hasUI) {
+      const choice = await ctx.ui.select("Git (Not Initialized)", [
+        "Initialize Git repository (/git init)",
+      ]);
+      if (choice?.includes("Initialize")) {
+        await handleInitCommand(ctx);
+      }
+    } else {
+      process.stdout.write("Current directory is not inside a git repository. Run '/git init' or 'git init' first.\n");
+    }
     return;
   }
 
   const [branch, statusRaw, lastCommits] = await Promise.all([
     getCurrentBranch(cwd),
     execGit(["status", "-sb"], cwd),
-    execGit(["log", "-3", "--oneline"], cwd),
+    execGit(["log", "-3", "--oneline"], cwd).catch(() => "(No commits yet)"),
   ]);
 
-  const summary = `Branch: ${branch}\n\n${statusRaw.trim()}\n\nRecent Commits:\n${lastCommits.trim()}`;
+  const summary = `Branch: ${branch || "unborn"}\n\n${statusRaw.trim()}\n\nRecent Commits:\n${lastCommits.trim()}`;
 
   if (ctx.hasUI) {
-    const choice = await ctx.ui.select(`Git Status (${branch})`, [
+    const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
       "Commit changes (/git commit)",
       "Sync with remote (/git sync)",
       "Create Pull Request (/git pr)",
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
-      "Close",
     ]);
 
     if (choice?.includes("Commit")) {
