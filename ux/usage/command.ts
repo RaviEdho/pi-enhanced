@@ -17,6 +17,7 @@ import { QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
+import { fetchCommandCodeUsage } from "./commandcode.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import { fetchHyperUsage } from "./hyper.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
@@ -102,6 +103,7 @@ export async function collectUsageReports(
   const antigravityAccounts = store.list("google-antigravity");
   const codexAccounts = store.list("openai-codex");
   const hyperAccounts = store.list("hyper");
+  const commandcodeAccounts = store.list("commandcode");
 
   // 1. Google Antigravity multi-account fetch in parallel
   const isAntigravityActive = options?.currentProvider === "google-antigravity";
@@ -498,12 +500,107 @@ export async function collectUsageReports(
     }
   }
 
+  // 5. Command Code multi-account fetch in parallel
+  const isCommandCodeActive = options?.currentProvider === "commandcode";
+  const commandcodePromises: Promise<ProviderUsageReport>[] = [];
+  if (commandcodeAccounts.length > 0) {
+    const sessionAccount = isCommandCodeActive
+      ? balancer.getSessionAccount(
+          "commandcode",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
+    for (const acc of commandcodeAccounts) {
+      if (signal?.aborted) break;
+      const isSession = isCommandCodeActive && sessionAccount?.id === acc.id;
+      const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
+      const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
+      const label = acc.email || acc.orgName || acc.id;
+
+      if (acc.disabledCause) {
+        commandcodePromises.push(
+          Promise.resolve({
+            providerId: "commandcode",
+            providerName: "Command Code",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
+      commandcodePromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          try {
+            const token = acc.apiKey || (await balancer.ensureFreshToken(acc));
+            const report = await fetchCommandCodeUsage(
+              token,
+              label,
+              signal,
+              acc.planType
+            );
+            report.isSessionAccount = isSession;
+            report.accountId = acc.id;
+            report.accountEmail = label;
+            report.cooldownMinutes = isCooldown ? mins : undefined;
+            if (report.planType && report.planType !== acc.planType) {
+              acc.planType = report.planType;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+            }
+            QuotaManager.getInstance().setReport(acc.id, report);
+            return report;
+          } catch (err) {
+            return {
+              providerId: "commandcode",
+              providerName: "Command Code",
+              accountEmail: label,
+              accountId: acc.id,
+              isSessionAccount: isSession,
+              planType: acc.planType,
+              cooldownMinutes: isCooldown ? mins : undefined,
+              fetchedAt: Date.now(),
+              groups: [],
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        })()
+      );
+    }
+  } else {
+    // Fallback to auth.json or COMMANDCODE_API_KEY
+    const authMap = loadConfiguredAuth();
+    const ccAuth = authMap["commandcode"];
+    const fallbackToken = ccAuth?.key || ccAuth?.access || (ccAuth as any)?.apiKey || process.env.COMMANDCODE_API_KEY;
+    if (fallbackToken) {
+      commandcodePromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          const report = await fetchCommandCodeUsage(
+            fallbackToken,
+            ccAuth?.email || "default",
+            signal
+          );
+          report.isSessionAccount = isCommandCodeActive;
+          return report;
+        })()
+      );
+    }
+  }
+
   // Await all provider account queries concurrently
   const settled = await Promise.allSettled([
     ...antigravityPromises,
     ...codexPromises,
     ...openaiPromises,
     ...hyperPromises,
+    ...commandcodePromises,
   ]);
   for (const s of settled) {
     if (s.status === "fulfilled") {

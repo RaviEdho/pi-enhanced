@@ -5,6 +5,7 @@ import { fetchAntigravityUsage } from "../ux/usage/antigravity.js";
 import { fetchCodexUsage } from "../ux/usage/codex.js";
 import { computeTimeElapsedFraction } from "../ux/usage/format.js";
 import { fetchHyperUsage } from "../ux/usage/hyper.js";
+import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
@@ -193,6 +194,13 @@ export class QuotaManager {
           });
         } else if (account.provider === "hyper") {
           report = await fetchHyperUsage(
+            token,
+            account.email || account.id,
+            signal,
+            account.planType
+          );
+        } else if (account.provider === "commandcode") {
+          report = await fetchCommandCodeUsage(
             token,
             account.email || account.id,
             signal,

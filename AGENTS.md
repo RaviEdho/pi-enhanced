@@ -10,6 +10,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Multi-Account Manager & Balancer (`accounts/`)**: Multi-account store (`accounts.json`), session affinity hashing, weekly reset pace optimization, automatic sync from Pi (`auth.json`), automatic token refresh, and transparent 429 rate limit failover across accounts during streaming turns.
 - **Google Antigravity Provider (`providers/antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
 - **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
+- **Command Code Provider (`providers/commandcode/`)**: Custom provider connecting to Command Code (`https://api.commandcode.ai/provider/v1`) with browser loopback OAuth flow (`/login commandcode`), API key authentication (`COMMANDCODE_API_KEY`), live dynamic model discovery (`/provider/v1/models` across 89 models), dual Anthropic Messages & OpenAI Completions protocol routing, subscription plan gating & credit bypass model projection, and rolling window quota monitoring (`/alpha/billing/credits`).
 - **OpenAI & ChatGPT Subscription Balancer (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Unifies both ChatGPT login flows—the official Responses API (`/login openai` -> Sign in with ChatGPT) and the legacy Codex backend (`/login openai-codex`)—with multi-account failover, auto-switching, plan-based model filtering, quota scraping, and rate limit resilience.
 - **Provider Quota & Usage Monitor (`ux/usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command and status footer.
 - **Context Window Usage & Breakdown (`ux/context/`)**: Interactive `/context` slash command and clean single-screen TUI modal featuring native Pi styling conventions, a compact horizontal usage progress bar, available headroom with auto-compaction thresholds, concise category breakdown (`System`, `Messages` with user/assistant/thinking details, `Tools` with call counts and top tools, `Compacted`), and one-key compaction (`c`), refresh (`r`), and close (`esc`).
@@ -48,6 +49,14 @@ pi-enhanced/
 │   │   ├── index.ts            # Provider wrapper with filterModels hook
 │   │   ├── plan.ts             # JWT claim parsing for chatgpt_plan_type & chatgpt_account_id
 │   │   └── types.ts            # Catalog & cache types
+│   ├── commandcode/
+│   │   ├── constants.ts        # API endpoints, wire URLs, user agent
+│   │   ├── index.ts            # Command Code provider registration & multi-account failover
+│   │   ├── models.ts           # Dynamic 89-model catalog discovery & protocol transformation
+│   │   ├── oauth.ts            # Loopback HTTP server login flow & API key validation
+│   │   ├── plan.ts             # Subscription tier gating (GOAT, Pro, Max) & credit bypass rules
+│   │   ├── stream.ts           # Dynamic router between Anthropic Messages & OpenAI Completions
+│   │   └── types.ts            # API protocol & billing schemas
 │   ├── hyper/
 │   │   ├── constants.ts        # Base URLs, API endpoints, User-Agent, timeouts
 │   │   ├── index.ts            # Charm Hyper provider registration & streaming adapter
@@ -148,6 +157,7 @@ pi-enhanced/
 │   ├── usage/
 │   │   ├── antigravity.ts      # Cloud Code Assist quota bucket scraper
 │   │   ├── codex.ts            # OpenAI Codex /wham/usage quota scraper
+│   │   ├── commandcode.ts      # Command Code credits, monthly pool & 5h/weekly burst scraper
 │   │   ├── footer.ts           # Status footer showing quota consumption & time progress
 │   │   ├── format.ts           # Terminal & ASCII progress bar formatting
 │   │   ├── hyper.ts            # Charm Hyper /v1/credits quota scraper
@@ -180,6 +190,7 @@ pi-enhanced/
    - Model discovery must be dynamic whenever possible.
    - For Antigravity: query Google's `fetchAvailableModels` endpoint.
    - For Charm Hyper: query `https://hyper.charm.land/v1/provider`.
+   - For Command Code: query `https://api.commandcode.ai/provider/v1/models`.
    - For OpenAI Codex: query `https://chatgpt.com/backend-api/codex/models?client_version=1.0.0` and cross-reference `available_in_plans`.
 
 5. **Type Safety**:

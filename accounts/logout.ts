@@ -5,6 +5,7 @@ import type { AccountCredential } from "./types.js";
 const PROVIDER_NAMES: Record<string, string> = {
   "google-antigravity": "Google Antigravity",
   hyper: "Charm Hyper",
+  commandcode: "Command Code",
   "openai-codex": "OpenAI Codex",
   openai: "OpenAI",
 };

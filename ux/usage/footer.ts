@@ -67,6 +67,16 @@ function extractKeyBuckets(
     if (hyperBucket) {
       return { primary: hyperBucket };
     }
+  } else if (report.providerId === "commandcode") {
+    const fiveHourBucket = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
+    if (fiveHourBucket) {
+      const weeklyBucket = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
+      return { primary: fiveHourBucket, secondary: weeklyBucket };
+    }
+    const creditsBucket = allBuckets.find((b) => b.bucketId === "commandcode-credits");
+    if (creditsBucket) {
+      return { primary: creditsBucket };
+    }
   } else if (report.providerId === "google-antigravity") {
     const isClaudeOrGpt = cleanModel.includes("claude") || cleanModel.includes("gpt");
     const targetPrefix = isClaudeOrGpt ? "3p" : "gemini";
@@ -218,7 +228,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
   }
 
   let summarySegment = "";
-  if (report.providerId === "hyper" && report.capacitySummary) {
+  if ((report.providerId === "hyper" || report.providerId === "commandcode") && report.capacitySummary) {
     summarySegment = ` · ${report.capacitySummary}`;
   }
 

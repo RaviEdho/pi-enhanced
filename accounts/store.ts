@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 1;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode"]);
 
 export class AccountStore {
   private static instance?: AccountStore;
@@ -233,6 +233,8 @@ export class AccountStore {
     const envVal =
       provider === "hyper"
         ? process.env.HYPER_API_KEY?.trim()
+        : provider === "commandcode"
+        ? process.env.COMMANDCODE_API_KEY?.trim()
         : undefined;
     if (!existingAuth && !envVal) {
       return;
@@ -391,6 +393,7 @@ export class AccountStore {
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
               (provider === "openai-codex" || provider === "openai" ? extractPlanTypeFromJwt(access) : undefined) ||
               (provider === "hyper" ? "free" : undefined) ||
+              (provider === "commandcode" ? "individual-provider" : undefined) ||
               (provider === "google-antigravity" ? "free-tier" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
             const existing = findExisting(provider, email, accountId, id, refresh, key);
@@ -400,6 +403,8 @@ export class AccountStore {
               const envKeyVal =
                 provider === "hyper"
                   ? process.env.HYPER_API_KEY?.trim()
+                  : provider === "commandcode"
+                  ? process.env.COMMANDCODE_API_KEY?.trim()
                   : undefined;
               const priorCount = this.data.accounts.length;
               this.data.accounts = this.data.accounts.filter((a) => {
@@ -488,6 +493,38 @@ export class AccountStore {
           });
           if (!this.data.activeAccounts["hyper"]) {
             this.data.activeAccounts["hyper"] = id;
+          }
+          modified = true;
+        } else if (existing.apiKey !== envKey) {
+          existing.apiKey = envKey;
+          existing.access = envKey;
+          existing.updatedAt = Date.now();
+          modified = true;
+        }
+      }
+    }
+
+    // Check process.env.COMMANDCODE_API_KEY
+    if (process.env.COMMANDCODE_API_KEY) {
+      const envKey = process.env.COMMANDCODE_API_KEY.trim();
+      if (envKey) {
+        authProviders.add("commandcode");
+        const id = AccountStore.generateAccountId("commandcode", "env-key");
+        const existing = findExisting("commandcode", undefined, undefined, id, undefined, envKey);
+        if (!existing) {
+          this.data.accounts.push({
+            id,
+            provider: "commandcode",
+            type: "api_key",
+            apiKey: envKey,
+            access: envKey,
+            email: "env-key",
+            planType: "individual-provider",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          if (!this.data.activeAccounts["commandcode"]) {
+            this.data.activeAccounts["commandcode"] = id;
           }
           modified = true;
         } else if (existing.apiKey !== envKey) {

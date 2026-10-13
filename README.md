@@ -1,9 +1,16 @@
 # pi-enhanced
 
-Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
+Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, **Command Code** provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
 
 ## Features
 
+- **Command Code Provider**:
+  - Direct connection to Command Code's Provider API (`https://api.commandcode.ai/provider/v1`) with access to 80+ open & closed frontier models.
+  - Dual authentication: Browser loopback redirect flow (`/login commandcode`) and API key via `COMMANDCODE_API_KEY`.
+  - Dynamic live model discovery (`/provider/v1/models`) with dual-protocol routing (Anthropic Messages API for Claude Sonnet/Opus/Haiku, and OpenAI Completions API for DeepSeek V4/4.1, Gemini, GPT-6/5, Qwen, Kimi, GLM, MiniMax, etc.).
+  - Subscription plan gating (GOAT, Pro, Max) and automatic credit bypass rules when on-demand credits exist.
+  - Multi-account pooling with transparent 429 rate limit failover.
+  - Live quota, monthly pool, and 5-hour/weekly burst window tracking via `/usage` and interactive footer status bar.
 - **Charm Hyper Inference Provider**:
   - Fast, cost-effective inference for coding agents via Charm Hyper (`https://hyper.charm.land`).
   - Dual authentication: OAuth 2.0 Device Code Flow (`/login hyper`) and API key via `HYPER_API_KEY`.
@@ -25,7 +32,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Tool Calling**: Full support for tool calling with schema normalization for Claude models.
 - **Thinking & Reasoning Support**: Discrete effort-tier routing and thinking budget configuration.
 - **Dynamic OpenAI Codex Plan Filtering**: Automatically detects your ChatGPT plan tier (`free`, `plus`, `pro`) from your OAuth token, queries OpenAI's live model endpoint, and filters out unavailable models from `/model` and `pi --list-models`.
-- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI / ChatGPT subscriptions, OpenAI Codex, Charm Hyper) with deterministic session affinity for optimal prompt caching, automatic OAuth token refresh, weekly reset-pace balancing, and transparent failover on 429 / quota exhaustion.
+- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI / ChatGPT subscriptions, OpenAI Codex, Charm Hyper, Command Code) with deterministic session affinity for optimal prompt caching, automatic OAuth token refresh, weekly reset-pace balancing, and transparent failover on 429 / quota exhaustion.
 - **Provider Quotas with Reset Pace Markers**: Live multi-account quota monitoring via `/usage` showing usage percentage, plan tier, reset countdowns, and real-time reset progress markers (`┃`) on the usage bar.
 - **Autonomous Git Assistant (`/git`, `/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), supports atomic multi-stage commits, PR generation (`/git pr`), smart branching (`/git branch`), merge conflict resolution (`/git resolve`), release drafting (`/git release`), and instant zero-token helpers (`/git sync`, `/git undo`).
 - **Terminal Output Compressor (`tools/compressor/`, `/gain`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, compressing 60–90% of raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Stores full uncompressed outputs in an LRU buffer accessible via `/recall <id>` and provides token reduction statistics via `/gain`.
@@ -57,15 +64,23 @@ pi list
 # In an interactive Pi session:
 /login google-antigravity
 
+# Or login to Command Code:
+/login commandcode
+
 # Or login to Charm Hyper:
 /login hyper
 ```
 
-Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `HYPER_API_KEY="sk-hyper-..."` directly.
+Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."` or `HYPER_API_KEY="sk-hyper-..."` directly.
 
 ### 3. Running with Models
 
 ```bash
+# Interactive mode with Command Code
+pi --model commandcode/claude-sonnet-5-5
+pi --model commandcode/deepseek/deepseek-v4.1-flash
+pi --model commandcode/google/gemini-3.7-flash
+
 # Interactive mode with Charm Hyper
 pi --model hyper/deepseek-v4.1-flash
 pi --model hyper/qwen3.8-max
