@@ -25,6 +25,7 @@ import {
   COMMANDCODE_API_BASE_URL,
   COMMANDCODE_USER_AGENT,
 } from "./constants.js";
+import { resolveModelCost } from "./models.js";
 
 function toWireMessages(messages: TranscriptContext["messages"]): any[] {
   const wire: any[] = [];
@@ -352,7 +353,10 @@ export function streamCommandCodeInternalGateway(
             output.usage.cacheRead = event.totalUsage.inputTokenDetails?.cacheReadTokens || 0;
             output.usage.cacheWrite = event.totalUsage.inputTokenDetails?.cacheWriteTokens || 0;
             output.usage.totalTokens = output.usage.input + output.usage.output;
-            output.usage.cost = calculateCost(model, output.usage);
+            output.usage.cost = calculateCost(
+              { ...model, cost: resolveModelCost(model.id) },
+              output.usage
+            );
           }
           output.stopReason = event.finishReason === "tool_calls" ? "toolUse" : "stop";
         } else if (event.type === "error") {

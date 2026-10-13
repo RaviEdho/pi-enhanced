@@ -1120,6 +1120,44 @@ export const COMMANDCODE_MODEL_METADATA: Record<string, ModelMetadata> = {
   }
 };
 
+/**
+ * Checks whether current UTC time falls within DeepSeek peak rate hours:
+ * 01:00-04:00 & 06:00-10:00 UTC, Mon-Fri (7h/day).
+ * Rates double during peak hours on Command Code.
+ */
+export function isDeepSeekPeakHours(now = new Date()): boolean {
+  const day = now.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const hour = now.getUTCHours();
+  return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10);
+}
+
+/**
+ * Returns model pricing, dynamically applying peak/off-peak rates for DeepSeek models.
+ */
+export function resolveModelCost(modelId: string, now = new Date()): ModelPricing {
+  const meta = COMMANDCODE_MODEL_METADATA[modelId];
+  if (!meta) {
+    return { input: 0.5, output: 2.0, cacheRead: 0.05, cacheWrite: 0 };
+  }
+  const base = { ...meta.cost };
+  if (
+    (modelId === "deepseek/deepseek-v4-pro" ||
+      modelId === "deepseek/deepseek-v4-flash" ||
+      modelId === "deepseek/deepseek-v4.1-flash" ||
+      modelId === "deepseek/deepseek-v4.1-flash-fast") &&
+    isDeepSeekPeakHours(now)
+  ) {
+    return {
+      input: base.input * 2,
+      output: base.output * 2,
+      cacheRead: base.cacheRead * 2,
+      cacheWrite: base.cacheWrite * 2,
+    };
+  }
+  return base;
+}
+
 export function buildThinkingLevelMap(efforts?: string[]): ThinkingLevelMap | undefined {
   if (!efforts || efforts.length === 0) return undefined;
   const set = new Set(efforts);
@@ -1370,12 +1408,7 @@ export function transformCommandCodeModel(raw: CommandCodeRawModel): Model<any> 
   const thinkingMap = buildThinkingLevelMap(meta?.efforts);
   const reasoning = Boolean(thinkingMap || meta?.efforts?.length);
 
-  const cost: ModelPricing = meta?.cost || {
-    input: 0.5,
-    output: 2.0,
-    cacheRead: 0.05,
-    cacheWrite: 0,
-  };
+  const cost: ModelPricing = resolveModelCost(raw.id);
 
   if (isAnthropic) {
     return {
