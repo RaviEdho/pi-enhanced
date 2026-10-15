@@ -16,6 +16,21 @@ import type {
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
 
 /**
+ * Normalizes a Command Code reset timestamp into an ISO 8601 string.
+ * The API returns epoch milliseconds, but older payloads may use seconds or strings.
+ */
+function toIsoResetTime(value?: number | string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") {
+    return value;
+  }
+  // Treat sub-1e12 values as seconds for defensive compatibility.
+  const ms = value < 1e12 ? value * 1000 : value;
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/**
  * Fetches the credit balance, subscription plan, and rolling window rate limits from Command Code.
  */
 export async function fetchCommandCodeUsage(
@@ -103,7 +118,7 @@ export async function fetchCommandCodeUsage(
       },
     ];
 
-    const windowLimits = credData?.credits?.windowLimits;
+    const windowLimits = credData?.windowLimits;
     const limitBuckets: QuotaBucket[] = [];
 
     if (windowLimits?.fiveHour && windowLimits.fiveHour.cap > 0) {
@@ -116,7 +131,7 @@ export async function fetchCommandCodeUsage(
         windowSeconds: 5 * 3600,
         usedFraction: uFrac,
         remainingFraction: Math.max(0, 1 - uFrac),
-        resetTime: resetAt,
+        resetTime: toIsoResetTime(resetAt),
         description: `$${used.toFixed(2)} of $${cap.toFixed(2)} used`,
       });
     }
@@ -131,7 +146,7 @@ export async function fetchCommandCodeUsage(
         windowSeconds: 7 * 86400,
         usedFraction: uFrac,
         remainingFraction: Math.max(0, 1 - uFrac),
-        resetTime: resetAt,
+        resetTime: toIsoResetTime(resetAt),
         description: `$${used.toFixed(2)} of $${cap.toFixed(2)} used`,
       });
     }

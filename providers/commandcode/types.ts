@@ -47,7 +47,9 @@ export interface CommandCodeSubscriptionsResponse {
 export interface CommandCodeWindowLimit {
   used: number;
   cap: number;
-  resetAt: string;
+  /** Epoch milliseconds at which the window resets. */
+  resetAt: number;
+  exceeded?: boolean;
 }
 
 export interface CommandCodeCreditsResponse {
@@ -56,18 +58,25 @@ export interface CommandCodeCreditsResponse {
     monthlyCredits?: number;
     purchasedCredits?: number;
     freeCredits?: number;
-    windowLimits?: {
-      limited?: boolean;
-      fiveHour?: CommandCodeWindowLimit;
-      weekly?: CommandCodeWindowLimit;
-    };
-    sandboxMinutes?: {
-      usedMinutes: number;
-      limitMinutes: number;
-      resetAt?: string;
-    };
-    sandboxAccess?: boolean;
+    belowThreshold?: boolean;
+    creditThreshold?: number;
   };
+  /**
+   * Rolling rate-limit windows. Returned at the TOP LEVEL of the credits
+   * response (not nested under `credits`).
+   */
+  windowLimits?: {
+    limited?: boolean;
+    exceeded?: boolean | null;
+    fiveHour?: CommandCodeWindowLimit;
+    weekly?: CommandCodeWindowLimit;
+  };
+  sandboxMinutes?: {
+    usedMinutes: number;
+    limitMinutes: number;
+    resetAt?: number;
+  } | null;
+  sandboxAccess?: boolean;
   error?: string;
 }
 

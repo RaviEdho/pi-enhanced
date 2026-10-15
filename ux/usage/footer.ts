@@ -203,6 +203,39 @@ function buildUsageBar(ctx: ExtensionContext): string {
     return `${prefix}  No quota limits reported`;
   }
 
+  // Command Code: show the monthly credit-pool bar, followed by the 5-hour and
+  // weekly rolling rate-limit windows.
+  if (report.providerId === "commandcode") {
+    const allBuckets = report.groups.flatMap((g) => g.buckets);
+    const creditsBucket = allBuckets.find((b) => b.bucketId === "commandcode-credits");
+    const base = creditsBucket ?? primary;
+    const fiveHour = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
+    const weekly = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
+
+    const basePct = Math.round(base.usedFraction * 100);
+    const baseTimeElapsed = computeTimeElapsedFraction(
+      base.resetTime,
+      base.windowSeconds,
+      now,
+      base.usedFraction
+    );
+    const progressBar = makeProgressBar(base.usedFraction, 10, baseTimeElapsed, false);
+    const baseReady =
+      base.usedFraction <= 0 && (baseTimeElapsed === 0 || baseTimeElapsed === undefined);
+    const resetSegment = base.resetTime
+      ? ` (${baseReady ? "ready" : formatRelativeTime(base.resetTime, now)})`
+      : "";
+
+    const segments = [`[${progressBar}] ${basePct}%${resetSegment}`];
+    if (fiveHour) {
+      segments.push(`5h: ${Math.round(fiveHour.usedFraction * 100)}%`);
+    }
+    if (weekly) {
+      segments.push(`weekly: ${Math.round(weekly.usedFraction * 100)}%`);
+    }
+    return `${prefix}  ${segments.join(" · ")}`;
+  }
+
   const usedPct = Math.round(primary.usedFraction * 100);
   const timeElapsed = computeTimeElapsedFraction(
     primary.resetTime,
