@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { AccountStore } from "../../accounts/store.js";
+import { oauthErrorHtml, oauthSuccessHtml } from "../oauth-page.js";
 import {
   API_TIMEOUT_MS,
   CALLBACK_TIMEOUT_MS,
@@ -15,50 +16,6 @@ import {
 } from "./constants.js";
 import { fetchBillingInfo } from "./plan.js";
 import type { CommandCodeWhoamiResponse } from "./types.js";
-
-function successHtml(message: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Command Code Authorization</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0c0d0e; color: #f4f4f5; }
-    .card { background: #18181b; padding: 2.5rem; border-radius: 12px; border: 1px solid #27272a; text-align: center; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem; color: #22c55e; }
-    p { font-size: 0.95rem; color: #a1a1aa; line-height: 1.5; margin: 0; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>✓ Authenticated</h1>
-    <p>${message}</p>
-  </div>
-</body>
-</html>`;
-}
-
-function errorHtml(heading: string, message: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Command Code Authorization</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0c0d0e; color: #f4f4f5; }
-    .card { background: #18181b; padding: 2.5rem; border-radius: 12px; border: 1px solid #27272a; text-align: center; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.75rem; color: #ef4444; }
-    p { font-size: 0.95rem; color: #a1a1aa; line-height: 1.5; margin: 0; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>${heading}</h1>
-    <p>${message}</p>
-  </div>
-</body>
-</html>`;
-}
 
 /**
  * Validates a Command Code API key by calling /alpha/whoami.
@@ -130,79 +87,340 @@ export async function refreshCommandCodeToken(
 }
 
 /**
+ * Resolves allowed CORS origin for browser loopback callback requests.
+ */
+function getAllowedCorsOrigin(origin?: string): string {
+  if (!origin) return "https://commandcode.ai";
+  if (
+    origin === "https://commandcode.ai" ||
+    origin === "https://staging.commandcode.ai" ||
+    origin === "http://localhost:3000" ||
+    origin.endsWith(".commandcode.ai") ||
+    origin.startsWith("http://localhost:")
+  ) {
+    return origin;
+  }
+  return "https://commandcode.ai";
+}
+
+/**
+ * Extracts an API key from user prompt input, handling raw keys or full redirect URLs.
+ */
+function extractApiKeyFromInput(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.includes("apiKey=")) {
+    try {
+      const parsed = new URL(trimmed.startsWith("http") ? trimmed : `http://localhost?${trimmed}`);
+      const key = parsed.searchParams.get("apiKey");
+      if (key) return key;
+    } catch {
+      const match = trimmed.match(/[?&]apiKey=([^&]+)/);
+      if (match?.[1]) return decodeURIComponent(match[1]);
+    }
+  }
+  return trimmed;
+}
+
+/**
  * Authenticates with Command Code via browser redirect loopback or manual API key prompt.
  */
 export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   const store = AccountStore.getInstance();
-  const stateToken = randomBytes(24).toString("hex");
+  const stateToken = randomBytes(32).toString("base64url");
 
   let server: Server | undefined;
   let serverPort = DEFAULT_CALLBACK_PORT;
+  let pendingAuth: { apiKey: string; userId?: string; userName?: string; keyName?: string } | null = null;
+  let graceTimer: NodeJS.Timeout | null = null;
 
   const { promise: callbackPromise, resolve: callbackResolve, reject: callbackReject } =
     Promise.withResolvers<string>();
+
+  const shutdownServer = () => {
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    if (server) {
+      try {
+        server.closeIdleConnections?.();
+        server.close();
+      } catch {}
+      server = undefined;
+    }
+  };
 
   // Attempt to start loopback server for automatic browser OAuth redirection
   try {
     server = createServer((req, res) => {
       try {
+        const allowedOrigin = getAllowedCorsOrigin(req.headers.origin);
+        res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+        // Handle Private Network Access (PNA) preflights from modern browsers
+        if (req.method === "OPTIONS") {
+          if (req.headers["access-control-request-private-network"] === "true") {
+            res.setHeader("Access-Control-Allow-Private-Network", "true");
+          }
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+
         const reqUrl = new URL(req.url ?? "/", `http://127.0.0.1:${serverPort}`);
-        const path = reqUrl.pathname;
+        const pathname = reqUrl.pathname;
 
-        if (!path.startsWith("/callback")) {
+        // 1. Completion landing page (followed via 303 See Other redirect from browser form submission)
+        if (pathname === "/callback/complete") {
+          const state = reqUrl.searchParams.get("state");
+          if (state !== stateToken) {
+            res.writeHead(403, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+            res.end(
+              oauthErrorHtml(
+                "Invalid state token",
+                "The state token did not match this login attempt. Return to Pi and retry."
+              )
+            );
+            return;
+          }
+
+          if (!pendingAuth) {
+            res.writeHead(404, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+            res.end(
+              oauthErrorHtml(
+                "Session expired",
+                "This authorization has already been processed or expired. Return to Pi."
+              )
+            );
+            return;
+          }
+
+          const auth = pendingAuth;
+          pendingAuth = null;
+          if (graceTimer) {
+            clearTimeout(graceTimer);
+            graceTimer = null;
+          }
+
+          res.writeHead(200, {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+            Connection: "close",
+          });
+          const welcomeMsg = auth.userName
+            ? `Signed in as ${auth.userName}. You may now close this page and return to Pi.`
+            : "Signed in to Command Code. You may now close this page and return to Pi.";
+
+          res.end(oauthSuccessHtml(welcomeMsg), () => {
+            callbackResolve(auth.apiKey);
+            setTimeout(shutdownServer, 500);
+          });
+          return;
+        }
+
+        // 2. Not the callback endpoint
+        if (pathname !== "/callback") {
           res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(errorHtml("Not Found", "Callback path not recognized."));
+          res.end(oauthErrorHtml("Not Found", "Callback route not recognized."));
           return;
         }
 
-        const stateParam = reqUrl.searchParams.get("state");
-        if (stateParam && stateParam !== stateToken) {
-          res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(errorHtml("Invalid State", "State parameter mismatch. Return to Pi and retry."));
+        // 3. GET /callback (Direct query parameter callback or manual navigation)
+        if (req.method === "GET") {
+          const state = reqUrl.searchParams.get("state");
+          const err = reqUrl.searchParams.get("error");
+          if (err) {
+            if (state !== stateToken) {
+              res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+              res.end(oauthErrorHtml("Invalid state token", "State parameter mismatch. Return to Pi and retry."));
+              return;
+            }
+            const errDesc = reqUrl.searchParams.get("error_description") || err;
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(oauthErrorHtml("Authorization denied", errDesc));
+            callbackReject(new Error(`Command Code authorization error: ${errDesc}`));
+            setTimeout(shutdownServer, 500);
+            return;
+          }
+
+          const apiKey = reqUrl.searchParams.get("apiKey");
+          if (apiKey) {
+            if (state !== stateToken) {
+              res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+              res.end(oauthErrorHtml("Invalid state token", "State parameter mismatch. Return to Pi and retry."));
+              return;
+            }
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+            res.end(
+              oauthSuccessHtml("Signed in to Command Code. You may now close this page and return to Pi."),
+              () => {
+                callbackResolve(apiKey);
+                setTimeout(shutdownServer, 500);
+              }
+            );
+            return;
+          }
+
+          // GET /callback without params -> informative 405 error
+          res.writeHead(405, {
+            Allow: "POST, OPTIONS",
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+          });
+          res.end(
+            oauthErrorHtml(
+              "Return to your terminal",
+              "This page completes login automatically during sign-in. Restart login from your terminal if you reached it directly."
+            )
+          );
           return;
         }
 
-        const error = reqUrl.searchParams.get("error");
-        if (error) {
-          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(errorHtml("Authorization Denied", reqUrl.searchParams.get("error_description") || error));
-          callbackReject(new Error(`Command Code authorization error: ${error}`));
+        // 4. POST /callback (Standard Command Code browser OAuth completion)
+        if (req.method === "POST") {
+          const contentType = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+          let rawBody = "";
+          req.setEncoding("utf8");
+          req.on("data", (chunk) => {
+            rawBody += chunk;
+            if (rawBody.length > 65536) {
+              req.destroy();
+            }
+          });
+
+          req.on("end", () => {
+            try {
+              if (contentType === "application/x-www-form-urlencoded") {
+                const params = new URLSearchParams(rawBody);
+                const err = params.get("error");
+                if (err) {
+                  if (params.get("state") !== stateToken) {
+                    res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+                    res.end(
+                      oauthErrorHtml(
+                        "Invalid state token",
+                        "The state token did not match this login attempt. Return to your terminal and restart login."
+                      )
+                    );
+                    return;
+                  }
+                  const errDesc = params.get("error_description") || err;
+                  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+                  res.end(oauthErrorHtml("Authorization denied", errDesc));
+                  callbackReject(new Error(errDesc));
+                  setTimeout(shutdownServer, 500);
+                  return;
+                }
+
+                const apiKey = params.get("apiKey");
+                const state = params.get("state");
+                const userId = params.get("userId") || undefined;
+                const userName = params.get("userName") || undefined;
+                const keyName = params.get("keyName") || undefined;
+
+                if (!apiKey || state !== stateToken) {
+                  res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+                  res.end(oauthErrorHtml("Invalid request", "State token mismatch or missing API key."));
+                  return;
+                }
+
+                pendingAuth = { apiKey, userId, userName, keyName };
+
+                // Grace timer in case the browser does not follow the 303 redirect
+                graceTimer = setTimeout(() => {
+                  if (pendingAuth) {
+                    const k = pendingAuth.apiKey;
+                    pendingAuth = null;
+                    callbackResolve(k);
+                    shutdownServer();
+                  }
+                }, 10000);
+                graceTimer.unref();
+
+                // 303 See Other redirect to /callback/complete
+                res.writeHead(303, {
+                  Location: `/callback/complete?state=${encodeURIComponent(state)}`,
+                  "Cache-Control": "no-store",
+                  "Content-Length": "0",
+                });
+                res.end();
+                return;
+              }
+
+              if (contentType === "application/json") {
+                let json: any;
+                try {
+                  json = JSON.parse(rawBody);
+                } catch {
+                  res.writeHead(400, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ success: false, error: "Invalid JSON" }));
+                  return;
+                }
+
+                if (json.error) {
+                  if (json.state !== stateToken) {
+                    res.writeHead(403, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ success: false, error: "Invalid state token" }));
+                    return;
+                  }
+                  res.writeHead(200, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ success: true }));
+                  callbackReject(new Error(json.error_description || json.error));
+                  setTimeout(shutdownServer, 500);
+                  return;
+                }
+
+                if (json.apiKey && json.state === stateToken) {
+                  res.writeHead(200, { "Content-Type": "application/json" });
+                  res.end(JSON.stringify({ success: true }));
+                  callbackResolve(json.apiKey);
+                  setTimeout(shutdownServer, 500);
+                  return;
+                }
+
+                res.writeHead(400, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success: false, error: "Missing or invalid parameters" }));
+                return;
+              }
+
+              res.writeHead(415, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ success: false, error: "Unsupported content type" }));
+            } catch (postErr) {
+              callbackReject(postErr instanceof Error ? postErr : new Error(String(postErr)));
+            }
+          });
           return;
         }
 
-        const apiKey = reqUrl.searchParams.get("apiKey");
-        if (!apiKey) {
-          // Could be the intermediate 303 redirect landing page
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(successHtml("Authorization received. You may now return to Pi."));
-          return;
-        }
-
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(successHtml("Signed in to Command Code. You may now return to Pi."));
-        callbackResolve(apiKey);
+        res.writeHead(405, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(oauthErrorHtml("Method Not Allowed", "Method not allowed."));
       } catch (err) {
         callbackReject(err instanceof Error ? err : new Error(String(err)));
       }
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server!.listen(serverPort, "127.0.0.1", () => resolve());
-      server!.on("error", (err: any) => {
-        if (err.code === "EADDRINUSE") {
-          // If default port is taken, try dynamic port 0
-          serverPort = 0;
-          server!.listen(0, "127.0.0.1", () => {
-            const addr = server!.address();
-            if (addr && typeof addr === "object") {
-              serverPort = addr.port;
-            }
-            resolve();
-          });
-        } else {
-          reject(err);
-        }
-      });
+    serverPort = await new Promise<number>((resolve, reject) => {
+      const tryListen = (port: number) => {
+        const onError = (err: any) => {
+          server!.off("listening", onListening);
+          if (err.code === "EADDRINUSE" && port !== 0) {
+            tryListen(0);
+          } else {
+            reject(err);
+          }
+        };
+        const onListening = () => {
+          server!.off("error", onError);
+          const addr = server!.address();
+          resolve(addr && typeof addr === "object" ? addr.port : port);
+        };
+        server!.once("error", onError);
+        server!.once("listening", onListening);
+        server!.listen(port, "127.0.0.1");
+      };
+      tryListen(DEFAULT_CALLBACK_PORT);
     });
   } catch {
     // If local server fails to start, rely on prompt fallback
@@ -217,18 +435,18 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
     instructions: "Opening browser for Command Code authorization...",
   });
 
-  const promptPromise = (
-    callbacks.onPrompt({
+  const promptPromise = callbacks
+    .onPrompt({
       message:
         "Authorize via browser, or enter your Command Code API key from https://commandcode.ai/studio/billing:",
       placeholder: "Paste Command Code API key...",
     } as any)
-  ).then((val: string) => {
-    if (!val || !val.trim()) {
-      throw new Error("Login cancelled: no API key provided");
-    }
-    return val.trim();
-  });
+    .then((val: string) => {
+      if (!val || !val.trim()) {
+        throw new Error("Login cancelled: no API key provided");
+      }
+      return extractApiKeyFromInput(val);
+    });
 
   // Timeout guard
   const timeoutPromise = new Promise<string>((_, reject) => {
@@ -242,9 +460,7 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
   try {
     apiKey = await Promise.race([callbackPromise, promptPromise, timeoutPromise]);
   } finally {
-    if (server) {
-      server.close();
-    }
+    shutdownServer();
   }
 
   callbacks.onProgress?.("Validating Command Code credentials...");
@@ -274,5 +490,8 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
   return {
     type: "api_key",
     key: apiKey,
+    access: apiKey,
+    refresh: "",
+    expires: 0,
   } as unknown as OAuthCredentials;
 }

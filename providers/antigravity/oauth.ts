@@ -27,7 +27,7 @@ import type {
   LoadCodeAssistResponse,
   OnboardOperation,
 } from "./types.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
+import { oauthErrorHtml, oauthSuccessHtml } from "../oauth-page.js";
 
 async function postLoadCodeAssist(
   body: Record<string, unknown>,
