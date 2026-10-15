@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager } from "./jobs.js";
 import { runSubagent } from "./runner.js";
 import {
@@ -68,8 +69,9 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
 
       jobManager.setUIContext(ctx.ui);
 
-      // Determine execution mode (defaults to background unless explicitly set to false)
-      const isBackground = params.background !== false;
+      // Determine execution mode (defaults to configured subagent.defaultMode unless explicitly set)
+      const configuredMode = EnhancedSettingsStore.getInstance().get("subagent.defaultMode");
+      const isBackground = params.background !== undefined ? params.background : configuredMode === "background";
 
       // Non-blocking background execution
       if (isBackground) {

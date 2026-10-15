@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerContextCommand } from "./context/index.js";
 import { registerContinueShortcut } from "./continue/index.js";
+import { registerSettingsEnhancedCommand } from "./settings/index.js";
 import { registerWorkingTimer } from "./timer/index.js";
 import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
 
@@ -10,6 +11,7 @@ import { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
  * - "." continue shortcut (bubble-free prompt resume)
  * - Provider quota & usage monitor (/usage and live footer bar)
  * - Context window usage & category breakdown (/context)
+ * - Extension suite configuration (/settings-enhanced)
  */
 export function registerUX(pi: ExtensionAPI): void {
   registerWorkingTimer(pi);
@@ -17,6 +19,7 @@ export function registerUX(pi: ExtensionAPI): void {
   registerUsageCommand(pi);
   registerUsageFooter(pi);
   registerContextCommand(pi);
+  registerSettingsEnhancedCommand(pi);
 }
 
 export {
@@ -49,3 +52,16 @@ export {
   type TurnSummary,
 } from "./timer/index.js";
 export { registerUsageCommand, registerUsageFooter } from "./usage/index.js";
+export {
+  EnhancedSettingsComponent,
+  EnhancedSettingsStore,
+  formatEnhancedSettings,
+  formatSettingValue,
+  handleSettingsEnhancedCommand,
+  registerSettingsEnhancedCommand,
+  type ContextUsageFormat,
+  type EnhancedSettingKey,
+  type EnhancedSettings,
+  type SettingDefinition,
+  type SubagentExecutionMode,
+} from "./settings/index.js";

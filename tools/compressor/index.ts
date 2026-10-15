@@ -1,10 +1,15 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 
 export function registerOutputCompressor(pi: ExtensionAPI): void {
   // Intercept tool results from bash/powershell to filter noisy output before LLM context
   pi.on("tool_result", async (event: ToolResultEvent) => {
     try {
-      if (process.env.PI_COMPRESSOR_DISABLED === "1" || process.env.PI_FILTER_DISABLED === "1") {
+      if (
+        process.env.PI_COMPRESSOR_DISABLED === "1" ||
+        process.env.PI_FILTER_DISABLED === "1" ||
+        !EnhancedSettingsStore.getInstance().get("compressor.enabled")
+      ) {
         return;
       }
 

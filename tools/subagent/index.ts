@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager, renderSubagentReportMessage } from "./jobs.js";
 import { SubagentBorderedLoader } from "./loader.js";
 import { runSubagent } from "./runner.js";
@@ -46,8 +47,9 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
 
   jobManager.setUIContext(ctx.ui);
 
-  // Background execution is the default unless foreground is explicitly requested
-  const isBackground = !isForeground;
+  // Background execution is determined by explicit flag or default setting
+  const defaultMode = EnhancedSettingsStore.getInstance().get("subagent.defaultMode");
+  const isBackground = isForeground ? false : defaultMode === "background";
   if (isBackground) {
     const startResult = jobManager.startJob({
       task,

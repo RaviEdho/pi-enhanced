@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { EnhancedSettingsStore } from "../settings/store.js";
 
 /**
  * Formats elapsed seconds into concise duration string:
@@ -513,7 +514,10 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     if (run) {
       const summary = buildTurnSummary(run, Date.now());
       // Only report runs that actually produced model output.
-      if (summary.calls > 0 || summary.output > 0 || summary.input > 0) {
+      if (
+        (summary.calls > 0 || summary.output > 0 || summary.input > 0) &&
+        EnhancedSettingsStore.getInstance().get("timer.showSummary")
+      ) {
         pi.appendEntry<TurnSummary>(TURN_SUMMARY_ENTRY_TYPE, summary);
       }
     }

@@ -3,11 +3,13 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balancer.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
+import { EnhancedSettingsStore } from "../settings/store.js";
 import {
   computeTimeElapsedFraction,
   formatRelativeTime,
@@ -269,14 +271,12 @@ function buildUsageBar(ctx: ExtensionContext): string {
 }
 
 /**
- * Builds Line 2:
- * - Left: ↑input ↓output Rcache Wcache $cost context%/contextWindow
- * - Far Right (under model name): ⚡ account [████████░░░┃░░░] 52% (2d14h)
+ * Builds the left statistics string (tokens, cache hits, cost, context window)
+ * respecting the configured usage.contextFormat ("pi", "pi-enhanced", or "off").
  */
-function renderFooterLine2(
+function buildStatsLeft(
   ctx: ExtensionContext,
-  theme: ExtensionContext["ui"]["theme"],
-  width: number
+  theme: ExtensionContext["ui"]["theme"]
 ): string {
   // Compute session token usage, cache hit rate, and cost
   let input = 0;
@@ -284,6 +284,8 @@ function renderFooterLine2(
   let cacheRead = 0;
   let cacheWrite = 0;
   let cost = 0;
+  let latestCacheHitRate: number | undefined;
+
   const entries = ctx.sessionManager?.getBranch?.() || [];
   for (const e of entries) {
     if (e.type === "message" && e.message.role === "assistant") {
@@ -294,6 +296,10 @@ function renderFooterLine2(
         cacheRead += m.usage.cacheRead || 0;
         cacheWrite += m.usage.cacheWrite || 0;
         cost += m.usage.cost?.total || 0;
+
+        const latestPromptTokens = (m.usage.input || 0) + (m.usage.cacheRead || 0) + (m.usage.cacheWrite || 0);
+        latestCacheHitRate =
+          latestPromptTokens > 0 ? ((m.usage.cacheRead || 0) / latestPromptTokens) * 100 : undefined;
       }
     }
   }
@@ -303,25 +309,127 @@ function renderFooterLine2(
   if (output > 0) statParts.push(`↓${formatTokens(output)}`);
   if (cacheRead > 0) statParts.push(`R${formatTokens(cacheRead)}`);
   if (cacheWrite > 0) statParts.push(`W${formatTokens(cacheWrite)}`);
-  if (cacheRead > 0 || cacheWrite > 0) {
-    const totalPrompt = input + cacheRead + cacheWrite;
-    if (totalPrompt > 0) {
-      const hitRate = ((cacheRead / totalPrompt) * 100).toFixed(0);
-      statParts.push(`CH${hitRate}%`);
-    }
+  if ((cacheRead > 0 || cacheWrite > 0) && latestCacheHitRate !== undefined) {
+    statParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
   }
   if (cost > 0) {
     statParts.push(formatCost(cost));
   }
 
-  const contextUsage = ctx.getContextUsage?.();
-  if (contextUsage && contextUsage.contextWindow > 0) {
-    const tokensStr =
-      contextUsage.tokens != null ? formatTokens(contextUsage.tokens) : "?";
-    statParts.push(`${tokensStr}/${formatTokens(contextUsage.contextWindow)}`);
+  const contextFormat = EnhancedSettingsStore.getInstance().get("usage.contextFormat");
+  if (contextFormat !== "off") {
+    const contextUsage = ctx.getContextUsage?.();
+    if (contextUsage && contextUsage.contextWindow > 0) {
+      const contextPercentValue = contextUsage.percent ?? 0;
+      let displayStr: string;
+
+      if (contextFormat === "pi") {
+        // Native Pi format: percentage / capacity (e.g. 23.5%/200k)
+        const pct =
+          contextUsage.percent != null ? contextPercentValue.toFixed(1) : "?";
+        displayStr = `${pct}%/${formatTokens(contextUsage.contextWindow)}`;
+      } else {
+        // pi-enhanced format: raw token count / capacity (e.g. 45k/200k)
+        const tokensStr =
+          contextUsage.tokens != null ? formatTokens(contextUsage.tokens) : "?";
+        displayStr = `${tokensStr}/${formatTokens(contextUsage.contextWindow)}`;
+      }
+
+      // Colorize based on usage threshold (matching Pi native conventions)
+      if (contextPercentValue > 90) {
+        statParts.push(theme.fg("error", displayStr));
+      } else if (contextPercentValue > 70) {
+        statParts.push(theme.fg("warning", displayStr));
+      } else {
+        statParts.push(displayStr);
+      }
+    }
   }
 
-  const leftText = statParts.join(" ");
+  return statParts.join(" ");
+}
+
+/**
+ * Builds the standard directory line (matching Pi native layout Line 1):
+ * - pwd (branch) • sessionName
+ */
+function renderStandardPwdLine(
+  ctx: ExtensionContext,
+  branch: string | null,
+  theme: ExtensionContext["ui"]["theme"],
+  width: number
+): string {
+  const cwd = formatCwd(
+    ctx.sessionManager?.getCwd?.() || process.cwd(),
+    process.env.HOME || process.env.USERPROFILE
+  );
+  const branchStr = branch ? ` (${branch})` : "";
+  const sessionName = ctx.sessionManager?.getSessionName?.();
+  const sessionStr = sessionName ? ` • ${sessionName}` : "";
+  const pwd = `${cwd}${branchStr}${sessionStr}`;
+  return truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+}
+
+/**
+ * Builds the standard single-line status footer (matching Pi native layout),
+ * displaying statistics on the left and active model/reasoning on the right.
+ */
+function renderStandardFooterLine(
+  ctx: ExtensionContext,
+  footerData: ReadonlyFooterDataProvider | undefined,
+  theme: ExtensionContext["ui"]["theme"],
+  width: number
+): string {
+  const statsLeft = buildStatsLeft(ctx, theme);
+  const statsLeftWidth = visibleWidth(statsLeft);
+
+  const model = ctx.model;
+  const modelName = model?.id || "no-model";
+  let rightSideWithoutProvider = modelName;
+
+  if (model?.reasoning) {
+    const thinkingLevel = ctx.thinkingLevel || "off";
+    rightSideWithoutProvider =
+      thinkingLevel === "off" ? `${modelName} • thinking off` : `${modelName} • ${thinkingLevel}`;
+  }
+
+  let rightSide = rightSideWithoutProvider;
+  if (footerData && footerData.getAvailableProviderCount() > 1 && model) {
+    const candidate = `(${model.provider}) ${rightSideWithoutProvider}`;
+    if (statsLeftWidth + 2 + visibleWidth(candidate) <= width) {
+      rightSide = candidate;
+    }
+  }
+
+  const rightSideWidth = visibleWidth(rightSide);
+  const minPadding = 2;
+
+  if (statsLeftWidth + minPadding + rightSideWidth <= width) {
+    const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
+    return theme.fg("dim", statsLeft) + padding + theme.fg("dim", rightSide);
+  }
+
+  const availRight = width - statsLeftWidth - minPadding;
+  if (availRight > 10) {
+    const truncatedRight = truncateToWidth(rightSide, availRight, "");
+    const padding = " ".repeat(Math.max(1, width - statsLeftWidth - visibleWidth(truncatedRight)));
+    return theme.fg("dim", statsLeft) + padding + theme.fg("dim", truncatedRight);
+  }
+
+  return theme.fg("dim", truncateToWidth(statsLeft, width));
+}
+
+/**
+ * Builds Line 2:
+ * - Left: ↑input ↓output Rcache Wcache $cost context%/contextWindow
+ * - Far Right (under model name): ⚡ account [████████░░░┃░░░] 52% (2d14h)
+ */
+function renderFooterLine2(
+  ctx: ExtensionContext,
+  theme: ExtensionContext["ui"]["theme"],
+  width: number
+): string {
+  const leftText = buildStatsLeft(ctx, theme);
   const rightText = buildUsageBar(ctx);
 
   const leftW = visibleWidth(leftText);
@@ -441,9 +549,17 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   let currentCtx: ExtensionContext | undefined;
   let lastToolCheckAt = 0;
 
-  // Re-render UI immediately whenever QuotaManager stores fresh quota reports
+  // Re-render UI immediately whenever QuotaManager stores fresh quota reports or settings change
   QuotaManager.getInstance().onQuotaUpdate(() => {
-    activeTui?.requestRender();
+    if (EnhancedSettingsStore.getInstance().get("usage.showFooter")) {
+      activeTui?.requestRender();
+    }
+  });
+
+  EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
+    if (!changedKey || changedKey === "usage.showFooter" || changedKey === "usage.contextFormat") {
+      activeTui?.requestRender();
+    }
   });
 
   function applyFooter(ctx: ExtensionContext): void {
@@ -462,13 +578,21 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
         },
         invalidate() {},
         render(width: number): string[] {
+          const showQuotaFooter = EnhancedSettingsStore.getInstance().get("usage.showFooter");
           const branch = footerData?.getGitBranch?.() ?? null;
-          const line1 = renderFooterLine1(ctx, branch, theme, width);
-          const line2 = renderFooterLine2(ctx, theme, width);
+          const lines: string[] = [];
 
-          const lines: string[] = [line1, line2];
+          if (showQuotaFooter) {
+            const line1 = renderFooterLine1(ctx, branch, theme, width);
+            const line2 = renderFooterLine2(ctx, theme, width);
+            lines.push(line1, line2);
+          } else {
+            const line1 = renderStandardPwdLine(ctx, branch, theme, width);
+            const line2 = renderStandardFooterLine(ctx, footerData, theme, width);
+            lines.push(line1, line2);
+          }
 
-          // Include other extension statuses on Line 3 if present
+          // Include other extension statuses if present
           const extensionStatuses = footerData?.getExtensionStatuses?.();
           if (extensionStatuses && extensionStatuses.size > 0) {
             const sorted = Array.from(extensionStatuses.entries())
@@ -498,6 +622,10 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
       }
     }, IDLE_POLL_INTERVAL_MS);
     idleTimer.unref?.();
+  });
+
+  pi.on("before_agent_start", (_event, ctx) => {
+    currentCtx = ctx;
   });
 
   pi.on("tool_call", (_event, ctx) => {

@@ -17,6 +17,7 @@ import {
 import { QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";
 import type { ResolvedAccountAuth } from "./types.js";
+import { EnhancedSettingsStore } from "../ux/settings/store.js";
 
 export type StreamSimpleExecutor = (
   model: Model<Api>,
@@ -149,7 +150,8 @@ export function executeWithMultiAccountFailover(
       try {
         innerStream = executor(model, context, options, resolvedAuth);
       } catch (initErr) {
-        if (hasConfiguredAccounts && isRateLimitError(initErr)) {
+        const failoverAllowed = EnhancedSettingsStore.getInstance().get("balancer.failoverOn429");
+        if (failoverAllowed && hasConfiguredAccounts && isRateLimitError(initErr)) {
           const cooldown = extractCooldownMs(initErr);
           balancer.markRateLimited(account.id, cooldown, String(initErr));
           continue; // Try next account
@@ -229,7 +231,8 @@ export function executeWithMultiAccountFailover(
           pushAborted();
           return;
         }
-        if (!emittedTokens && isRateLimitError(streamErr) && hasConfiguredAccounts) {
+        const failoverAllowed = EnhancedSettingsStore.getInstance().get("balancer.failoverOn429");
+        if (failoverAllowed && !emittedTokens && isRateLimitError(streamErr) && hasConfiguredAccounts) {
           bufferedEvents.length = 0;
           const cooldown = extractCooldownMs(streamErr);
           balancer.markRateLimited(account.id, cooldown, String(streamErr));

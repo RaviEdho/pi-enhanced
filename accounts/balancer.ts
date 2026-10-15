@@ -8,6 +8,7 @@ import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { AccountStore, SUPPORTED_PROVIDERS } from "./store.js";
 import type { AccountCredential, ResolvedAccountAuth } from "./types.js";
+import { EnhancedSettingsStore } from "../ux/settings/store.js";
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes default cooldown on 429
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000; // Refresh if within 5 minutes of expiring
@@ -512,10 +513,14 @@ export class AccountBalancer {
     } else {
       // Pick unstarted accounts first (0 usage, unstarted timer) so their reset window begins,
       // otherwise pick the account with the lowest composite weight (under budget + perishable burn urgency discount).
+      const usePaceBalancing = EnhancedSettingsStore.getInstance().get("balancer.paceBalancing");
       available.sort((a, b) => {
-        if (a.health.isUnstarted && !b.health.isUnstarted) return -1;
-        if (!a.health.isUnstarted && b.health.isUnstarted) return 1;
-        return a.health.weight - b.health.weight;
+        if (usePaceBalancing) {
+          if (a.health.isUnstarted && !b.health.isUnstarted) return -1;
+          if (!a.health.isUnstarted && b.health.isUnstarted) return 1;
+          return a.health.weight - b.health.weight;
+        }
+        return a.health.usedFraction - b.health.usedFraction;
       });
       chosen = available[0].account;
       if (sessionId) {

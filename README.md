@@ -127,7 +127,32 @@ pi -p "/context"
   - **Compacted**: Compaction run history and summary tokens (if any).
 - **Interactive TUI Controls**: Re-analyze in real time with `r`, trigger manual compaction with `c`, and close cleanly with `esc` or `Enter`. Fits on any terminal without scrolling.
 
-### 6. Autonomous Git Assistant (`/git`, `/commit`)
+### 6. Enhanced Settings (`/settings-enhanced`)
+
+Configure `pi-enhanced` subsystems interactively or via CLI commands:
+
+```text
+/settings-enhanced            # Open interactive SettingsList modal in TUI mode
+/settings-enhanced list       # Print all current settings and disk config path
+/settings-enhanced get <key>  # Inspect single setting value
+/settings-enhanced set <key> <value>  # Set setting (e.g. set compressor.enabled false)
+/settings-enhanced reset      # Reset all settings to defaults
+```
+
+Configurable options include:
+- `compressor.enabled`: Terminal output compressor for bash/powershell (`enabled` / `disabled`)
+- `scout.interceptShell`: Transparent shell grep/find/rg interception & scout steering (`enabled` / `disabled`)
+- `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
+- `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
+- `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
+- `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
+- `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
+- `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
+- `subagent.defaultMode`: Default execution mode for `/subagent` (`background` / `sync`)
+
+Settings persist to `~/.pi/agent/enhanced-settings.json`.
+
+### 7. Autonomous Git Assistant (`/git`, `/commit`)
 
 Run `/git` or `/commit` to autonomously inspect changes and manage git workflows:
 
@@ -159,7 +184,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 - Full token usage and cost accounting displayed in the confirmation dialog, CLI output, and completion notification.
 - Interactive proposal review with full message preview (header & body), detailed file diff metrics, direct commit (`c`), commit & push (`p`), edit (`e`), or cancel (`Esc`).
 
-### 7. Web Search & Web Fetch
+### 8. Web Search & Web Fetch
 
 The `web_search` and `web_fetch` tools are automatically available to LLMs during conversations.
 

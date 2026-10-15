@@ -16,6 +16,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Context Window Usage & Breakdown (`ux/context/`)**: Interactive `/context` slash command and clean single-screen TUI modal featuring native Pi styling conventions, a compact horizontal usage progress bar, available headroom with auto-compaction thresholds, concise category breakdown (`System`, `Messages` with user/assistant/thinking details, `Tools` with call counts and top tools, `Compacted`), and one-key compaction (`c`), refresh (`r`), and close (`esc`).
 - **Autonomous Git Assistant (`/git`, `/commit`)**: Lightweight, autonomous `/commit` and `/git` slash commands that spin up an isolated in-memory sub-agent with specialized git inspection tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`, `git_branch_overview`, `propose_pr`), intelligent single vs. multi-stage atomic commit planning, PR drafting, branch recommendations, merge conflict resolution, release drafting, and zero conversation context bloat.
 - **Continue Shortcut (`ux/continue/`)**: Seamless, invisible continuation turn triggered by sending `.` (literal dot only). Injects a directive instructing the model to resume unfinished work without pausing or summarizing, while completely suppressing any user message bubble from appearing in the chat transcript.
+- **Enhanced Settings Manager (`ux/settings/`, `/settings-enhanced`)**: Interactive configuration modal powered by Pi's native `SettingsList` component, with persistent storage (`~/.pi/agent/enhanced-settings.json`), headless CLI commands (`get`, `set`, `list`, `reset`), and live toggles for compressor, scout interceptor, quota status footer, footer context usage, turn telemetry, dot continue shortcut, 429 failover, pace balancing, and subagent default execution mode.
 - **Terminal Output Compressor (`tools/compressor/`)**: In-process port of RTK (Rust Token Killer) features without requiring external binaries. Intercepts bash and PowerShell `tool_result` events, collapsing verbose terminal noise (passing tests, git push/status boilerplate, linter carets, repeated log loops, progress bars) by 60–90% before reaching LLM context. Includes an in-memory `/recall` ring buffer and a `/gain` token savings dashboard.
 - **Codebase Scout Search Engine (`tools/scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
 - **Unified Web Search & Fetch Tools (`tools/web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
@@ -152,6 +153,13 @@ pi-enhanced/
 │   ├── continue/
 │   │   ├── index.ts            # Input handler registering "." continue shortcut
 │   │   └── prompt.ts           # System directive instructing model to resume unfinished work
+│   ├── settings/               # Enhanced settings configuration subsystem & /settings-enhanced
+│   │   ├── command.ts          # /settings-enhanced command dispatcher (TUI vs non-TUI)
+│   │   ├── component.ts        # EnhancedSettingsComponent: SettingsList with live toggles
+│   │   ├── format.ts           # ANSI terminal settings formatter
+│   │   ├── index.ts            # /settings-enhanced registration
+│   │   ├── store.ts            # EnhancedSettingsStore (persisted in ~/.pi/agent/enhanced-settings.json)
+│   │   └── types.ts            # Settings definitions & schemas
 │   ├── timer/
 │   │   └── index.ts            # Working status telemetry timer & settled turn summary entry
 │   ├── usage/

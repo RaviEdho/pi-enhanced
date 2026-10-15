@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { executeFind, executeGrep } from "./tools.js";
 
 export type ParsedSearchCommand =
@@ -749,6 +750,10 @@ function prunePendingSearches(now: number): void {
 export function registerSearchInterceptor(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event) => {
     if (event.toolName !== "bash" && event.toolName !== "powershell") {
+      return;
+    }
+
+    if (!EnhancedSettingsStore.getInstance().get("scout.interceptShell")) {
       return;
     }
 

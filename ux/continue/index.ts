@@ -4,6 +4,7 @@ import type {
   InputEvent,
   InputEventResult,
 } from "@earendil-works/pi-coding-agent";
+import { EnhancedSettingsStore } from "../settings/store.js";
 import { MANUAL_CONTINUE_PROMPT } from "./prompt.js";
 
 /**
@@ -16,6 +17,11 @@ import { MANUAL_CONTINUE_PROMPT } from "./prompt.js";
  */
 export function registerContinueShortcut(pi: ExtensionAPI): void {
   pi.on("input", async (event: InputEvent, ctx: ExtensionContext): Promise<InputEventResult> => {
+    // Check if continue dot shortcut is enabled
+    if (!EnhancedSettingsStore.getInstance().get("continue.dotShortcut")) {
+      return { action: "continue" };
+    }
+
     // Only intercept literal dot "." submissions
     const text = event.text.trim();
     if (text !== ".") {
