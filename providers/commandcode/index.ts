@@ -46,7 +46,7 @@ export async function registerCommandCodeProvider(pi: ExtensionAPI): Promise<voi
   pi.registerProvider(COMMANDCODE_PROVIDER_ID, {
     name: COMMANDCODE_PROVIDER_NAME,
     baseUrl: COMMANDCODE_PROVIDER_V1_URL,
-    apiKey: process.env.COMMANDCODE_API_KEY ? "$COMMANDCODE_API_KEY" : undefined,
+    apiKey: "$COMMANDCODE_API_KEY",
     api: "openai-completions",
 
     models: commandCodeModels,

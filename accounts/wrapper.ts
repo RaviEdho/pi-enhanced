@@ -8,7 +8,12 @@ import type {
   TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { AccountBalancer, extractCooldownMs, isRateLimitError } from "./balancer.js";
+import {
+  AccountBalancer,
+  extractCooldownMs,
+  isAccountEligibleForModel,
+  isRateLimitError,
+} from "./balancer.js";
 import { QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";
 import type { ResolvedAccountAuth } from "./types.js";
@@ -266,24 +271,41 @@ export function executeWithMultiAccountFailover(
       if (hasConfiguredAccounts) {
         const remainingAccounts = store.list(providerId);
         const quotaManager = QuotaManager.getInstance();
+        const anyRateLimitedOrExhausted = remainingAccounts.some((a) => {
+          const health = quotaManager.evaluateAccountHealth(a, model.id);
+          return (a.blockedUntil && a.blockedUntil > Date.now()) || health.isExhausted;
+        });
+
         const cooldownList = remainingAccounts
           .map((a) => {
             const name = a.email || a.accountId || a.id;
+            const isEligible = isAccountEligibleForModel(a, model.id);
             const health = quotaManager.evaluateAccountHealth(a, model.id);
             const resetMs = a.blockedUntil || health.resetTimeMs;
             const mins = resetMs && resetMs > Date.now()
               ? Math.max(1, Math.ceil((resetMs - Date.now()) / 60000))
               : 0;
-            const reason =
-              a.blockedReason ||
-              health.reason ||
-              (health.isExhausted ? "Quota exhausted" : "Rate limited");
-            return `  - ${name}: cooldown ~${mins}m (${reason})`;
+            let reason = a.blockedReason || health.reason;
+            if (!reason) {
+              if (!isEligible) {
+                reason = a.planType ? `Not available on ${a.planType} plan` : "Model not supported";
+              } else if (health.isExhausted) {
+                reason = "Quota exhausted";
+              } else {
+                reason = "Rate limited";
+              }
+            }
+            const cooldownStr = mins > 0 ? `cooldown ~${mins}m ` : "";
+            return `  - ${name}: ${cooldownStr}(${reason})`;
           })
           .join("\n");
 
+        const header = anyRateLimitedOrExhausted
+          ? `All ${remainingAccounts.length} account(s) for provider "${providerId}" are currently rate-limited or exhausted:`
+          : `All ${remainingAccounts.length} account(s) for provider "${providerId}" are unavailable for "${model.id}":`;
+
         exhaustionMessage =
-          `All ${remainingAccounts.length} account(s) for provider "${providerId}" are currently rate-limited or exhausted:\n` +
+          `${header}\n` +
           cooldownList +
           (lastError?.errorMessage ? `\n\nLast error: ${lastError.errorMessage}` : "");
       } else {

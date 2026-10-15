@@ -231,7 +231,16 @@ export function streamCommandCodeInternalGateway(
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Command Code CLI Gateway error (${response.status}): ${errorText}`);
+        let parsedMessage = errorText;
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed?.error?.message) {
+            parsedMessage = parsed.error.message;
+          }
+        } catch {
+          // Ignore JSON parse error
+        }
+        throw new Error(`Command Code CLI Gateway error (${response.status}): ${parsedMessage}`);
       }
 
       if (!response.body) {
@@ -358,7 +367,10 @@ export function streamCommandCodeInternalGateway(
               output.usage
             );
           }
-          output.stopReason = event.finishReason === "tool_calls" ? "toolUse" : "stop";
+          output.stopReason =
+            event.finishReason === "tool_calls" || event.finishReason === "tool-calls"
+              ? "toolUse"
+              : "stop";
         } else if (event.type === "error") {
           throw new Error(`Command Code stream error: ${event.message || JSON.stringify(event)}`);
         }
@@ -394,6 +406,15 @@ export function streamCommandCodeInternalGateway(
 }
 
 /**
+ * Helper to identify whether an account plan represents an entry $1/mo "Go" subscription.
+ */
+export function isCommandCodeGoPlan(planType?: string): boolean {
+  if (!planType) return false;
+  const p = planType.toLowerCase();
+  return p.includes("go") && !p.includes("goat");
+}
+
+/**
  * Streams completion requests to Command Code dynamically routing between:
  * 1. Internal CLI Gateway (/alpha/generate) for Go $1/mo subscriptions or when configured.
  * 2. Provider API (/provider/v1/messages) for Anthropic Claude models.
@@ -405,9 +426,7 @@ export function streamCommandCode(
   options: SimpleStreamOptions | undefined,
   auth: ResolvedAccountAuth
 ): AssistantMessageEventStream {
-  const isGoPlan =
-    auth.account.planType === "individual-go" ||
-    auth.account.planType === "individual-go-v1";
+  const isGoPlan = isCommandCodeGoPlan(auth.account.planType);
   const forceInternal =
     process.env.COMMANDCODE_USE_GATEWAY === "1" ||
     process.env.COMMANDCODE_INTERNAL === "1";

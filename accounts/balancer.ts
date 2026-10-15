@@ -2,10 +2,11 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { discoverProject, refreshAntigravityToken } from "../providers/antigravity/oauth.js";
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
+import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
 import { refreshHyperToken } from "../providers/hyper/oauth.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
-import { AccountStore } from "./store.js";
+import { AccountStore, SUPPORTED_PROVIDERS } from "./store.js";
 import type { AccountCredential, ResolvedAccountAuth } from "./types.js";
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes default cooldown on 429
@@ -19,38 +20,47 @@ export function isAccountEligibleForModel(account: AccountCredential, modelId?: 
     return true;
   }
 
-  // If modelId contains a provider prefix (e.g. "google-antigravity/gemini-2.5-flash")
-  // ensure it matches this account's provider.
-  if (modelId.includes("/")) {
-    const [modelProvider] = modelId.split("/");
-    if (modelProvider && modelProvider !== account.provider) {
-      return false;
+  let unwrappedModelId = modelId;
+  for (const prov of SUPPORTED_PROVIDERS) {
+    if (modelId.startsWith(prov + "/")) {
+      if (prov !== account.provider) {
+        return false;
+      }
+      unwrappedModelId = modelId.slice(prov.length + 1);
+      break;
     }
   }
 
-  if (account.provider !== "openai-codex") {
-    return true;
-  }
-
-  const slug = modelId.startsWith("openai-codex/")
-    ? modelId.slice("openai-codex/".length)
-    : modelId;
-
-  const plan = getCodexPlanType(account.access);
-  if (!plan) {
-    return true;
-  }
-
-  const catalog = loadCachedCatalog();
-  if (catalog && catalog.length > 0) {
-    const found = catalog.find((m) => m.slug === slug);
-    if (found) {
-      return found.availableInPlans.includes(plan);
+  if (account.provider === "openai-codex") {
+    const slug = unwrappedModelId;
+    const plan = getCodexPlanType(account.access);
+    if (!plan) {
+      return true;
     }
+
+    const catalog = loadCachedCatalog();
+    if (catalog && catalog.length > 0) {
+      const found = catalog.find((m) => m.slug === slug);
+      if (found) {
+        return found.availableInPlans.includes(plan);
+      }
+    }
+
+    if (plan === "free") {
+      return DEFAULT_FALLBACK_FREE_MODELS.includes(slug);
+    }
+
+    return true;
   }
 
-  if (plan === "free") {
-    return DEFAULT_FALLBACK_FREE_MODELS.includes(slug);
+  if (account.provider === "commandcode") {
+    return isModelAllowedForBilling(unwrappedModelId, {
+      planId: account.planType,
+      purchasedCredits: 0,
+      freeCredits: 0,
+      monthlyCredits: 0,
+      fetchedAt: account.updatedAt,
+    });
   }
 
   return true;
