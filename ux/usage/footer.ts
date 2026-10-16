@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balancer.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
+import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import {
   computeTimeElapsedFraction,
@@ -124,6 +125,7 @@ function renderFooterLine1(
   theme: ExtensionContext["ui"]["theme"],
   width: number
 ): string {
+  const modeIndicator = PlanModeManager.getInstance().getModeIndicator(theme, ctx.thinkingLevel);
   const cwd = formatCwd(
     ctx.sessionManager?.getCwd?.() || process.cwd(),
     process.env.HOME || process.env.USERPROFILE
@@ -131,7 +133,8 @@ function renderFooterLine1(
   const branchStr = branch ? ` (${branch})` : "";
   const sessionName = ctx.sessionManager?.getSessionName?.();
   const sessionStr = sessionName ? ` • ${sessionName}` : "";
-  const leftText = `${cwd}${branchStr}${sessionStr}`;
+  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}${sessionStr}`);
+  const leftText = `${modeIndicator}${leftDetails}`;
 
   // Right-side: Model and thinking effort
   const model = ctx.model;
@@ -143,7 +146,7 @@ function renderFooterLine1(
     const modelDisplay = model.id;
     const thinkingDisplay = hasThinking ? ` • ${thinkingLevel}` : "";
 
-    rightText = `${modelDisplay}${thinkingDisplay}`;
+    rightText = theme.fg("dim", `${modelDisplay}${thinkingDisplay}`);
   }
 
   const leftW = visibleWidth(leftText);
@@ -165,7 +168,7 @@ function renderFooterLine1(
     }
   }
 
-  return theme.fg("dim", line);
+  return line;
 }
 
 /**
@@ -359,6 +362,7 @@ function renderStandardPwdLine(
   theme: ExtensionContext["ui"]["theme"],
   width: number
 ): string {
+  const modeIndicator = PlanModeManager.getInstance().getModeIndicator(theme, ctx.thinkingLevel);
   const cwd = formatCwd(
     ctx.sessionManager?.getCwd?.() || process.cwd(),
     process.env.HOME || process.env.USERPROFILE
@@ -366,8 +370,9 @@ function renderStandardPwdLine(
   const branchStr = branch ? ` (${branch})` : "";
   const sessionName = ctx.sessionManager?.getSessionName?.();
   const sessionStr = sessionName ? ` • ${sessionName}` : "";
-  const pwd = `${cwd}${branchStr}${sessionStr}`;
-  return truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}${sessionStr}`);
+  const pwd = `${modeIndicator}${leftDetails}`;
+  return truncateToWidth(pwd, width, theme.fg("dim", "..."));
 }
 
 /**
@@ -562,6 +567,11 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     }
   });
 
+  // Re-render UI immediately whenever Plan Mode / Implement Mode changes
+  PlanModeManager.getInstance().onModeChange(() => {
+    activeTui?.requestRender();
+  });
+
   function applyFooter(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
 
@@ -576,7 +586,9 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
             activeTui = undefined;
           }
         },
-        invalidate() {},
+        invalidate() {
+          tui.requestRender();
+        },
         render(width: number): string[] {
           const showQuotaFooter = EnhancedSettingsStore.getInstance().get("usage.showFooter");
           const branch = footerData?.getGitBranch?.() ?? null;
