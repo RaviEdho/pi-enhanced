@@ -7,9 +7,32 @@ export const PLAN_MODE_ENTRY_TYPE = "plan-mode";
 export const STATUS_KEY = "plan-mode";
 
 /**
- * Blueprint color palette for Plan Mode across thinking levels.
- * Provides a crisp architectural cyan/teal spectrum that visually balances
- * against Pi's native purple/coral thinking colors for Implement Mode.
+ * Golden Amber color palette for Plan Mode across thinking levels.
+ * Provides a warm drafting parchment / architectural gold gradient that
+ * intensifies as reasoning effort increases.
+ */
+const AMBER_DARK_COLORS: Record<string, string> = {
+  off: "\x1b[38;2;168;162;158m",     // Stone Slate (#a8a29e)
+  minimal: "\x1b[38;2;254;240;138m", // Light Cream (#fef08a)
+  low: "\x1b[38;2;253;224;71m",      // Soft Buttercup (#fde047)
+  medium: "\x1b[38;2;251;191;36m",   // Warm Amber (#fbbf24)
+  high: "\x1b[38;2;245;158;11m",     // Deep Goldenrod (#f59e0b)
+  xhigh: "\x1b[38;2;249;115;22m",    // Tangerine Gold (#f97316)
+  max: "\x1b[38;2;239;68;68m",       // Fiery Sun (#ef4444)
+};
+
+const AMBER_LIGHT_COLORS: Record<string, string> = {
+  off: "\x1b[38;2;87;83;78m",        // Stone-600 (#57534e)
+  minimal: "\x1b[38;2;161;98;7m",    // Yellow-700 (#a16207)
+  low: "\x1b[38;2;180;83;9m",        // Amber-700 (#b45309)
+  medium: "\x1b[38;2;146;64;14m",    // Amber-800 (#92400e)
+  high: "\x1b[38;2;194;65;12m",      // Orange-700 (#c2410c)
+  xhigh: "\x1b[38;2;154;52;18m",     // Orange-800 (#9a3412)
+  max: "\x1b[38;2;185;28;28m",       // Red-700 (#b91c1c)
+};
+
+/**
+ * Blueprint color palette (alternative).
  */
 const BLUEPRINT_DARK_COLORS: Record<string, string> = {
   off: "\x1b[38;2;148;163;184m",     // Steel Slate (#94a3b8)
@@ -81,7 +104,7 @@ export class PlanModeManager {
 
   /**
    * Returns styled mode indicator for status footer beside cwd:
-   * - Plan mode: ■ plan (dynamic Blueprint spectrum based on thinking level)
+   * - Plan mode: ■ plan (dynamic Golden Amber spectrum based on thinking level)
    * - Implement mode: ▶ implement (dynamic textbox border / thinking color)
    */
   public getModeIndicator(
@@ -93,7 +116,7 @@ export class PlanModeManager {
     if (this.enabled) {
       if (!theme) return "■ plan";
       const isLight = (theme as any)?.appearance === "light";
-      const palette = isLight ? BLUEPRINT_LIGHT_COLORS : BLUEPRINT_DARK_COLORS;
+      const palette = isLight ? AMBER_LIGHT_COLORS : AMBER_DARK_COLORS;
       const ansiColor = palette[level] || palette.off;
       return `${ansiColor}■ plan\x1b[39m`;
     }
@@ -123,14 +146,21 @@ export class PlanModeManager {
   }
 
   /**
-   * Formats arbitrary text (such as editor border glyphs) using the Blueprint
+   * Formats arbitrary text (such as editor border glyphs) using the Golden Amber
    * color spectrum for the specified thinking level.
    */
-  public formatBlueprintText(text: string, thinkingLevel?: string): string {
+  public formatPlanText(text: string, thinkingLevel?: string): string {
     const level = thinkingLevel || "off";
-    const palette = BLUEPRINT_DARK_COLORS;
+    const palette = AMBER_DARK_COLORS;
     const ansiColor = palette[level] || palette.off;
     return `${ansiColor}${text}\x1b[39m`;
+  }
+
+  /**
+   * Backwards-compatible alias.
+   */
+  public formatBlueprintText(text: string, thinkingLevel?: string): string {
+    return this.formatPlanText(text, thinkingLevel);
   }
 
   private getThinkingColorToken(level?: string): string {

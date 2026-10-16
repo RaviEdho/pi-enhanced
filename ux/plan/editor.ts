@@ -10,7 +10,7 @@ import { PlanModeManager } from "./manager.js";
  * Lightweight, non-invasive CustomEditor subclass.
  *
  * - In Implement Mode: renders native top and bottom borders untouched.
- * - In Plan Mode: colors top and bottom borders with the dynamic Blueprint
+ * - In Plan Mode: colors top and bottom borders with the dynamic Golden Amber
  *   color spectrum matching the active reasoning effort tier.
  */
 export class PlanModeEditor extends CustomEditor {
@@ -36,7 +36,7 @@ export class PlanModeEditor extends CustomEditor {
       const saved = this.borderColor;
       const thinking = this.ctx?.thinkingLevel || "off";
       this.borderColor = (s: string) =>
-        PlanModeManager.getInstance().formatBlueprintText(s, thinking);
+        PlanModeManager.getInstance().formatPlanText(s, thinking);
       try {
         return super.renderTopBorder(width, hiddenLineCount);
       } finally {
@@ -51,7 +51,7 @@ export class PlanModeEditor extends CustomEditor {
       const saved = this.borderColor;
       const thinking = this.ctx?.thinkingLevel || "off";
       this.borderColor = (s: string) =>
-        PlanModeManager.getInstance().formatBlueprintText(s, thinking);
+        PlanModeManager.getInstance().formatPlanText(s, thinking);
       try {
         return super.renderBottomBorder(width, hiddenLineCount);
       } finally {
