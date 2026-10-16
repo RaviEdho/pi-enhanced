@@ -7,6 +7,31 @@ export const PLAN_MODE_ENTRY_TYPE = "plan-mode";
 export const STATUS_KEY = "plan-mode";
 
 /**
+ * Blueprint color palette for Plan Mode across thinking levels.
+ * Provides a crisp architectural cyan/teal spectrum that visually balances
+ * against Pi's native purple/coral thinking colors for Implement Mode.
+ */
+const BLUEPRINT_DARK_COLORS: Record<string, string> = {
+  off: "\x1b[38;2;148;163;184m",     // Steel Slate (#94a3b8)
+  minimal: "\x1b[38;2;125;211;252m", // Ice Sky (#7dd3fc)
+  low: "\x1b[38;2;56;189;248m",      // Sky Cerulean (#38bdf8)
+  medium: "\x1b[38;2;6;182;212m",    // Electric Cyan (#06b6d4)
+  high: "\x1b[38;2;20;184;166m",     // Deep Teal (#14b8a6)
+  xhigh: "\x1b[38;2;16;185;129m",    // Vivid Emerald (#10b981)
+  max: "\x1b[38;2;52;211;153m",      // Neon Mint (#34d399)
+};
+
+const BLUEPRINT_LIGHT_COLORS: Record<string, string> = {
+  off: "\x1b[38;2;71;85;105m",       // Slate-600 (#475569)
+  minimal: "\x1b[38;2;3;105;161m",   // Sky-700 (#0369a1)
+  low: "\x1b[38;2;2;132;199m",       // Cerulean-600 (#0284c7)
+  medium: "\x1b[38;2;14;116;144m",   // Cyan-700 (#0e7490)
+  high: "\x1b[38;2;15;118;110m",     // Teal-700 (#0f766e)
+  xhigh: "\x1b[38;2;4;120;87m",      // Emerald-700 (#047857)
+  max: "\x1b[38;2;21;128;61m",       // Green-700 (#15803d)
+};
+
+/**
  * Manages Plan Mode vs Implement Mode state, safety sandboxing,
  * and status indicators.
  *
@@ -56,21 +81,27 @@ export class PlanModeManager {
 
   /**
    * Returns styled mode indicator for status footer beside cwd:
-   * - Plan mode: ■ plan (warning theme)
-   * - Implement mode: ▶ implement (matches textbox border / thinking color)
+   * - Plan mode: ■ plan (dynamic Blueprint spectrum based on thinking level)
+   * - Implement mode: ▶ implement (dynamic textbox border / thinking color)
    */
   public getModeIndicator(
     theme?: ExtensionContext["ui"]["theme"],
     thinkingLevel?: string
   ): string {
+    const level = thinkingLevel || "off";
+
     if (this.enabled) {
-      return theme?.fg ? theme.fg("warning", "■ plan") : "■ plan";
+      if (!theme) return "■ plan";
+      const isLight = (theme as any)?.appearance === "light";
+      const palette = isLight ? BLUEPRINT_LIGHT_COLORS : BLUEPRINT_DARK_COLORS;
+      const ansiColor = palette[level] || palette.off;
+      return `${ansiColor}■ plan\x1b[39m`;
     }
 
     if (theme) {
       if (typeof (theme as any).getThinkingBorderColor === "function") {
         try {
-          const colorFn = (theme as any).getThinkingBorderColor(thinkingLevel || "off");
+          const colorFn = (theme as any).getThinkingBorderColor(level);
           if (typeof colorFn === "function") {
             return colorFn("▶ implement");
           }
@@ -79,7 +110,7 @@ export class PlanModeManager {
         }
       }
 
-      const token = this.getThinkingColorToken(thinkingLevel);
+      const token = this.getThinkingColorToken(level);
       try {
         return theme.fg(token as any, "▶ implement");
       } catch {
@@ -89,6 +120,17 @@ export class PlanModeManager {
     }
 
     return "▶ implement";
+  }
+
+  /**
+   * Formats arbitrary text (such as editor border glyphs) using the Blueprint
+   * color spectrum for the specified thinking level.
+   */
+  public formatBlueprintText(text: string, thinkingLevel?: string): string {
+    const level = thinkingLevel || "off";
+    const palette = BLUEPRINT_DARK_COLORS;
+    const ansiColor = palette[level] || palette.off;
+    return `${ansiColor}${text}\x1b[39m`;
   }
 
   private getThinkingColorToken(level?: string): string {

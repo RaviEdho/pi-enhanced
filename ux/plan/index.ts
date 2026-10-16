@@ -8,8 +8,10 @@ import type {
   ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
+import { PlanModeEditor } from "./editor.js";
 import { PlanModeManager } from "./manager.js";
 
+export { PlanModeEditor } from "./editor.js";
 export { PlanModeManager } from "./manager.js";
 export { PLAN_MODE_DIRECTIVE, IMPLEMENT_MODE_DIRECTIVE } from "./prompt.js";
 export { isSafeBashCommand } from "./safe-bash.js";
@@ -99,8 +101,14 @@ export function registerPlanMode(pi: ExtensionAPI): void {
     }
   );
 
-  // Session lifecycle: restore state and flag
+  // Session lifecycle: install custom editor and restore state
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
+      ctx.ui.setEditorComponent(
+        (tui, theme, keybindings) => new PlanModeEditor(tui, theme, keybindings, ctx)
+      );
+    }
+
     if (pi.getFlag("plan") === true) {
       manager.enable(ctx, false);
     } else {
