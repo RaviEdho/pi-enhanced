@@ -392,7 +392,6 @@ export class AccountStore {
             const planType =
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
               (provider === "openai-codex" || provider === "openai" ? extractPlanTypeFromJwt(access) : undefined) ||
-              (provider === "hyper" ? "free" : undefined) ||
               (provider === "commandcode" ? "individual-provider" : undefined) ||
               (provider === "google-antigravity" ? "free-tier" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
@@ -487,7 +486,6 @@ export class AccountStore {
             apiKey: envKey,
             access: envKey,
             email: "env-key",
-            planType: "free",
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });

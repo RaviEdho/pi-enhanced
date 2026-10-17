@@ -208,7 +208,6 @@ export async function loginHyper(callbacks: OAuthLoginCallbacks): Promise<OAuthC
       email,
       orgId: pollResult.team_id,
       orgName: teamName,
-      planType: "free",
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,
