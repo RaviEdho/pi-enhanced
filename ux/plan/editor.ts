@@ -9,11 +9,14 @@ import { PlanModeManager } from "./manager.js";
 /**
  * Lightweight, non-invasive CustomEditor subclass.
  *
- * - In Implement Mode: renders native top and bottom borders untouched.
- * - In Plan Mode: colors top and bottom borders with the dynamic Golden Amber
- *   color spectrum matching the active reasoning effort tier.
+ * Intercepts `borderColor` dynamically on the editor instance so that:
+ * 1. Top and bottom horizontal borders use the Golden Amber spectrum in Plan Mode.
+ * 2. Embedded working status indicator ("⠏ Working (...)") inherits the exact same
+ *    Golden Amber spectrum in Plan Mode.
+ * 3. In Implement Mode, delegates 100% untouched to Pi's native border and thinking colors.
  */
 export class PlanModeEditor extends CustomEditor {
+  private _nativeBorderColor?: (s: string) => string;
   private ctx?: ExtensionContext;
 
   constructor(
@@ -25,39 +28,29 @@ export class PlanModeEditor extends CustomEditor {
     super(tui, theme, keybindings, { embedWorkingStatus: true });
     this.ctx = ctx;
 
+    // Cache initial border color function
+    this._nativeBorderColor = this.borderColor;
+
+    // Dynamically intercept borderColor property so both border drawing
+    // and working status indicator ("⠏ Working (...)") use Plan Mode colors
+    Object.defineProperty(this, "borderColor", {
+      get: () => {
+        if (PlanModeManager.getInstance().isEnabled()) {
+          const thinking = this.ctx?.thinkingLevel || "off";
+          return (s: string) => PlanModeManager.getInstance().formatPlanText(s, thinking);
+        }
+        return this._nativeBorderColor || ((s: string) => s);
+      },
+      set: (fn: (s: string) => string) => {
+        this._nativeBorderColor = fn;
+      },
+      configurable: true,
+      enumerable: true,
+    });
+
     // Immediately re-render when switching between Plan and Implement mode
     PlanModeManager.getInstance().onModeChange(() => {
       tui.requestRender();
     });
-  }
-
-  protected override renderTopBorder(width: number, hiddenLineCount: number): string {
-    if (PlanModeManager.getInstance().isEnabled()) {
-      const saved = this.borderColor;
-      const thinking = this.ctx?.thinkingLevel || "off";
-      this.borderColor = (s: string) =>
-        PlanModeManager.getInstance().formatPlanText(s, thinking);
-      try {
-        return super.renderTopBorder(width, hiddenLineCount);
-      } finally {
-        this.borderColor = saved;
-      }
-    }
-    return super.renderTopBorder(width, hiddenLineCount);
-  }
-
-  protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
-    if (PlanModeManager.getInstance().isEnabled()) {
-      const saved = this.borderColor;
-      const thinking = this.ctx?.thinkingLevel || "off";
-      this.borderColor = (s: string) =>
-        PlanModeManager.getInstance().formatPlanText(s, thinking);
-      try {
-        return super.renderBottomBorder(width, hiddenLineCount);
-      } finally {
-        this.borderColor = saved;
-      }
-    }
-    return super.renderBottomBorder(width, hiddenLineCount);
   }
 }
