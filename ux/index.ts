@@ -41,8 +41,11 @@ export {
 } from "./context/index.js";
 export { registerContinueShortcut } from "./continue/index.js";
 export {
+  PlanModeEditor,
   PlanModeManager,
   registerPlanMode,
+  handlePlanApprovalGate,
+  hasPlanArtifact,
   isSafeBashCommand,
   PLAN_MODE_DIRECTIVE,
   IMPLEMENT_MODE_DIRECTIVE,

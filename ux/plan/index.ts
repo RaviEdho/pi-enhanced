@@ -1,4 +1,5 @@
 import type {
+  AgentEndEvent,
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
   ExtensionAPI,
@@ -9,10 +10,20 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
 import { PlanModeEditor } from "./editor.js";
+import {
+  extractLastAssistantText,
+  handlePlanApprovalGate,
+  hasPlanArtifact,
+} from "./gate.js";
 import { PlanModeManager } from "./manager.js";
 
 export { PlanModeEditor } from "./editor.js";
 export { PlanModeManager } from "./manager.js";
+export {
+  extractLastAssistantText,
+  handlePlanApprovalGate,
+  hasPlanArtifact,
+} from "./gate.js";
 export { PLAN_MODE_DIRECTIVE, IMPLEMENT_MODE_DIRECTIVE } from "./prompt.js";
 export { isSafeBashCommand } from "./safe-bash.js";
 export type { PlanModeState } from "./types.js";
@@ -100,6 +111,11 @@ export function registerPlanMode(pi: ExtensionAPI): void {
       };
     }
   );
+
+  // Present human-in-the-loop approval gate when a plan is drafted
+  pi.on("agent_end", async (event: AgentEndEvent, ctx: ExtensionContext) => {
+    await handlePlanApprovalGate(event, ctx, pi);
+  });
 
   // Session lifecycle: install custom editor and restore state
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
