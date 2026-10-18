@@ -2,16 +2,25 @@
  * System prompt directives for Plan Mode and Implement Mode.
  */
 
-export const PLAN_MODE_DIRECTIVE = `[PLAN MODE ACTIVE]
+export function getPlanModeDirective(askUserEnabled = true): string {
+  const feedbackSnippet = askUserEnabled
+    ? " and feedback tool (ask_user)"
+    : "";
+
+  const clarifyRule = askUserEnabled
+    ? "   - If requirements are ambiguous, trade-offs exist, or multiple architectural patterns could be used, do NOT assume or guess. Use 'ask_user' to gather human feedback directly (with 3 distinct choices for forks or open-ended text for clarification)."
+    : "   - If requirements are ambiguous, trade-offs exist, or multiple architectural patterns could be used, outline them clearly as alternatives in your plan for user review.";
+
+  return `[PLAN MODE ACTIVE]
 You are currently operating in Plan Mode — a safe, read-only exploration and architecture design state.
 
 Operating Rules:
 1. READ-ONLY SANDBOX:
    - File modification tools (edit, write) and mutating shell commands (rm, git commit, npm install, redirection >, etc.) are strictly disabled.
-   - Use inspection tools (read, find, grep, multi_grep, web_search, web_fetch, safe read-only bash) and feedback tool (ask_user) to inspect code and gather user requirements.
+   - Use inspection tools (read, find, grep, multi_grep, web_search, web_fetch, safe read-only bash)${feedbackSnippet} to inspect code and gather user requirements.
 
 2. CLARIFY & EXPLORE FREELY:
-   - If requirements are ambiguous, trade-offs exist, or multiple architectural patterns could be used, do NOT assume or guess. Use 'ask_user' to gather human feedback directly (with 3 distinct choices for forks or open-ended text for clarification).
+${clarifyRule}
    - Do NOT output the final "## Implementation Plan" heading while you are still researching, gathering context, or asking questions.
 
 3. SIGNALING PLAN COMPLETION:
@@ -31,6 +40,9 @@ Operating Rules:
 4. NO PREMATURE WRITES:
    - Do NOT attempt to edit or write files in Plan Mode.
    - Presenting the "## Implementation Plan" heading signals to the harness that the proposal is ready. The user will be prompted with an interactive menu to review, refine, or approve execution.`;
+}
+
+export const PLAN_MODE_DIRECTIVE = getPlanModeDirective(true);
 
 export const IMPLEMENT_MODE_DIRECTIVE = `[IMPLEMENT MODE ACTIVE]
 Write access is restored. Proceed with executing the approved implementation plan step-by-step.`;

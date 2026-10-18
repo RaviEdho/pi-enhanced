@@ -83,9 +83,25 @@ export async function handleSettingsEnhancedCommand(
 
     const def = SETTING_DEFINITIONS[key];
     if (typeof def.defaultValue === "boolean") {
-      if (rawVal === "true" || rawVal === "enabled" || rawVal === "1" || rawVal === "on") {
+      const isEnabling = rawVal === "true" || rawVal === "enabled" || rawVal === "1" || rawVal === "on";
+      const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
+
+      if (isEnabling) {
         store.set(key, true as any);
-      } else if (rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off") {
+      } else if (isDisabling) {
+        if (key === "feedback.askUser") {
+          const usage = ctx.getContextUsage?.();
+          const tokens = usage?.tokens ?? 0;
+          if (tokens >= 10_000) {
+            const kTok = (tokens / 1000).toFixed(1);
+            const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling 'ask_user' mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
+            if (ctx.hasUI) {
+              ctx.ui.notify(warn, "warning");
+            } else {
+              console.warn(`\x1b[33m${warn}\x1b[0m`);
+            }
+          }
+        }
         store.set(key, false as any);
       } else {
         const msg = `Invalid value for ${key}. Expected 'enabled' or 'disabled'.`;
@@ -115,7 +131,7 @@ export async function handleSettingsEnhancedCommand(
   // Default interactive / TUI mode
   if (ctx.hasUI && ctx.mode === "tui") {
     await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-      return new EnhancedSettingsComponent(tui, theme, () => done(undefined));
+      return new EnhancedSettingsComponent(tui, theme, () => done(undefined), ctx);
     });
     return;
   }

@@ -233,6 +233,14 @@ The extension gives the LLM direct access to user input dialogs during execution
 - **3-Choice Decisions**: When called with `choices: ["Option 1...", "Option 2...", "Option 3..."]`, displays an interactive selector (`ctx.ui.select`). Automatically includes a `✎ Type custom answer...` option for typing an alternative choice. Dismissing with `Esc` cancels cleanly.
 - **Multi-Question Questionnaires**: When called with `questions: [{ question, choices?, placeholder? }, ...]`, prompts the user sequentially through each question in a single tool turn (e.g. `[1/3] Question...`). Preserves already answered questions even if the user cancels midway. Fully safe and functional in Plan Mode.
 
+#### Enabling / Disabling `ask_user`:
+The tool is enabled by default, but can be completely disabled via `/settings-enhanced`:
+```text
+/settings-enhanced set feedback.askUser disabled
+```
+- When disabled, the tool definition is completely removed from the model's active tool list and prompt instructions.
+- **Prompt Cache Protection**: If disabled mid-session when the active context has at least 10,000 tokens (`≥ 10k`), an explicit warning modal prompts for confirmation to prevent accidental prefix prompt cache invalidation and token cost spikes.
+
 ## Development
 
 ```bash

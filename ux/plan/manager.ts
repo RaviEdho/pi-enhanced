@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PLAN_MODE_DIRECTIVE } from "./prompt.js";
+import { getPlanModeDirective, PLAN_MODE_DIRECTIVE } from "./prompt.js";
+import { EnhancedSettingsStore } from "../settings/store.js";
 import { isSafeBashCommand } from "./safe-bash.js";
 import type { PlanModeState } from "./types.js";
 
@@ -275,7 +276,9 @@ export class PlanModeManager {
    * Returns directive to inject before agent prompt when Plan Mode is active.
    */
   public getDirective(): string | undefined {
-    return this.enabled ? PLAN_MODE_DIRECTIVE : undefined;
+    if (!this.enabled) return undefined;
+    const askUserEnabled = EnhancedSettingsStore.getInstance().get("feedback.askUser");
+    return getPlanModeDirective(askUserEnabled);
   }
 
   /**

@@ -1,3 +1,4 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
@@ -16,6 +17,11 @@ import {
   type SettingDefinition,
 } from "./types.js";
 
+interface CacheWarningState {
+  contextTokens: number;
+  selectedOption: number; // 0 = Keep enabled (recommended), 1 = Proceed and disable
+}
+
 /**
  * Interactive settings component for pi-enhanced.
  * Matches Pi's native `/settings` modal conventions:
@@ -27,14 +33,22 @@ export class EnhancedSettingsComponent implements Component {
   private tui: TUI;
   private theme: any;
   private onDone: () => void;
+  private ctx?: ExtensionCommandContext;
   private store: EnhancedSettingsStore;
   private settingsList: SettingsList;
   private items: SettingItem[];
+  private cacheWarning?: CacheWarningState;
 
-  constructor(tui: TUI, theme: any, onDone: () => void) {
+  constructor(
+    tui: TUI,
+    theme: any,
+    onDone: () => void,
+    ctx?: ExtensionCommandContext
+  ) {
     this.tui = tui;
     this.theme = theme;
     this.onDone = onDone;
+    this.ctx = ctx;
     this.store = EnhancedSettingsStore.getInstance();
 
     // Build setting items mapped from definitions
@@ -82,6 +96,63 @@ export class EnhancedSettingsComponent implements Component {
   public render(width: number): string[] {
     const lines: string[] = [];
 
+    // Cache warning dialog (if mid-session disable triggered on >= 10k context)
+    if (this.cacheWarning) {
+      const title = " Prompt Cache Invalidation Warning ";
+      const lineWidth = Math.max(0, width - visibleWidth(title) - 2);
+      const borderLine = "─".repeat(lineWidth);
+      const header =
+        this.theme.fg("warning", "──") +
+        this.theme.fg("warning", this.theme.bold(title)) +
+        this.theme.fg("warning", borderLine);
+      lines.push(header);
+      lines.push("");
+
+      const kTok = (this.cacheWarning.contextTokens / 1000).toFixed(1);
+      lines.push(
+        "  " +
+          this.theme.fg("warning", "⚠ ") +
+          this.theme.fg(
+            "text",
+            `Active context has ~${kTok}k tokens (≥ 10k threshold).`
+          )
+      );
+      lines.push(
+        "  " +
+          this.theme.fg(
+            "text",
+            "Disabling 'ask_user' mid-session removes its tool definition and busts your prefix prompt cache."
+          )
+      );
+      lines.push(
+        "  " +
+          this.theme.fg(
+            "dim",
+            "Subsequent requests will incur cache misses, increasing turnaround latency and token costs."
+          )
+      );
+      lines.push("");
+
+      const optKeep =
+        this.cacheWarning.selectedOption === 0
+          ? this.theme.fg("accent", "→ ") +
+            this.theme.fg("accent", this.theme.bold("Keep enabled (recommended)"))
+          : "  " + this.theme.fg("dim", "Keep enabled (recommended)");
+
+      const optDisable =
+        this.cacheWarning.selectedOption === 1
+          ? this.theme.fg("accent", "→ ") +
+            this.theme.fg("accent", this.theme.bold("Proceed and disable anyway"))
+          : "  " + this.theme.fg("dim", "Proceed and disable anyway");
+
+      lines.push("  " + optKeep);
+      lines.push("  " + optDisable);
+      lines.push("");
+      lines.push("  " + this.theme.fg("dim", "↑/↓ toggle  •  Enter confirm  •  Esc cancel"));
+      lines.push(this.theme.fg("warning", "─".repeat(Math.max(1, width))));
+      return lines;
+    }
+
     // 1. Top border with title header
     const title = " Enhanced Settings ";
     const lineWidth = Math.max(0, width - visibleWidth(title) - 2);
@@ -104,6 +175,51 @@ export class EnhancedSettingsComponent implements Component {
   }
 
   public handleInput(data: string): boolean {
+    // Intercept input during cache warning confirmation
+    if (this.cacheWarning) {
+      if (
+        matchesKey(data, "escape") ||
+        matchesKey(data, "esc") ||
+        data === "\x1b" ||
+        data === "\x03"
+      ) {
+        this.settingsList.updateValue("feedback.askUser", "enabled");
+        this.cacheWarning = undefined;
+        this.tui.requestRender();
+        return true;
+      }
+
+      if (
+        matchesKey(data, "up") ||
+        matchesKey(data, "down") ||
+        matchesKey(data, "left") ||
+        matchesKey(data, "right") ||
+        data === "\t" ||
+        data === "\x1b[Z" ||
+        data === "j" ||
+        data === "k"
+      ) {
+        this.cacheWarning.selectedOption = 1 - this.cacheWarning.selectedOption;
+        this.tui.requestRender();
+        return true;
+      }
+
+      if (matchesKey(data, "enter") || data === "\r" || data === "\n" || data === " ") {
+        if (this.cacheWarning.selectedOption === 0) {
+          // Revert to enabled
+          this.settingsList.updateValue("feedback.askUser", "enabled");
+        } else {
+          // Proceed with disabling
+          this.store.set("feedback.askUser", false);
+        }
+        this.cacheWarning = undefined;
+        this.tui.requestRender();
+        return true;
+      }
+
+      return true;
+    }
+
     const anyList = this.settingsList as any;
     const searchVal: string = anyList.searchInput?.getValue?.() ?? "";
 
@@ -238,10 +354,44 @@ export class EnhancedSettingsComponent implements Component {
 
   private handleSettingChange(id: string, newValue: string): void {
     const key = id as EnhancedSettingKey;
+
+    // Check mid-run prompt cache invalidation warning for ask_user
+    if (key === "feedback.askUser" && newValue === "disabled") {
+      const tokens = this.getContextTokens();
+      if (tokens >= 10_000) {
+        this.cacheWarning = {
+          contextTokens: tokens,
+          selectedOption: 0,
+        };
+        this.tui.requestRender();
+        return;
+      }
+    }
+
     if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
       this.store.set(key, (newValue === "enabled") as any);
+    }
+  }
+
+  private getContextTokens(): number {
+    if (!this.ctx) return 0;
+    try {
+      const usage = this.ctx.getContextUsage?.();
+      if (typeof usage?.tokens === "number" && usage.tokens > 0) {
+        return usage.tokens;
+      }
+      const branch = this.ctx.sessionManager?.getBranch?.() || [];
+      let chars = 0;
+      for (const entry of branch) {
+        if ((entry as any).content) {
+          chars += String((entry as any).content).length;
+        }
+      }
+      return Math.round(chars / 4);
+    } catch {
+      return 0;
     }
   }
 }

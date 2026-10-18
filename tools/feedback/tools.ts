@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { QuestionnaireComponent, type QuestionnaireResult } from "./component.js";
 import {
   AskUserParametersSchema,
@@ -39,6 +40,24 @@ export function createAskUserToolDefinition(): ToolDefinition<
     exposure: "model-only",
     parameters: AskUserParametersSchema,
     async execute(_toolCallId, params: AskUserParameters, signal, _onUpdate, ctx) {
+      // 0. Guard if tool is disabled in settings
+      const store = EnhancedSettingsStore.getInstance();
+      if (!store.get("feedback.askUser")) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Interactive user feedback is currently disabled in settings ('feedback.askUser': false). Please proceed autonomously without prompting the user.",
+            },
+          ],
+          details: {
+            answers: [],
+            cancelled: true,
+          },
+          isError: true,
+        };
+      }
+
       // 1. Normalize input into a list of questions
       const normalizedQuestions: QuestionItem[] = [];
       if (Array.isArray(params.questions) && params.questions.length > 0) {

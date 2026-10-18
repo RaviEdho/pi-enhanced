@@ -6,6 +6,8 @@ export interface EnhancedSettings {
   "compressor.enabled": boolean;
   /** Transparently intercept shell grep/find/rg commands and steer LLM to scout. */
   "scout.interceptShell": boolean;
+  /** Allow LLM to ask user clarification questions and 3 choices interactively. */
+  "feedback.askUser": boolean;
   /** Display live quota consumption and time progress bars in status footer. */
   "usage.showFooter": boolean;
   /** Format of context window usage in status footer (default, alternate, or off). */
@@ -49,6 +51,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     label: "Scout Shell Interceptor",
     category: "Tools & Filters",
     description: "Intercept shell grep/find/rg commands and steer LLM to fast in-memory scout tools",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "feedback.askUser": {
+    key: "feedback.askUser",
+    label: "Interactive Ask User",
+    category: "Tools & Filters",
+    description: "Allow LLM to prompt user for feedback and 3 choices. Disabling mid-session drops schema & busts cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -121,6 +131,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
 export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
   "scout.interceptShell": SETTING_DEFINITIONS["scout.interceptShell"].defaultValue,
+  "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,
   "usage.contextFormat": SETTING_DEFINITIONS["usage.contextFormat"].defaultValue,
   "timer.showSummary": SETTING_DEFINITIONS["timer.showSummary"].defaultValue,
