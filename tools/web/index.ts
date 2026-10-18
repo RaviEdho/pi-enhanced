@@ -3,6 +3,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { registerSearchLoginProviders } from "./login.js";
 import { createWebFetchToolDefinition, createWebSearchToolDefinition } from "./tools.js";
@@ -72,57 +73,12 @@ export function registerWebSearch(pi: ExtensionAPI): void {
     }
   }
 
-  // Initial sync
-  syncWebTools();
-
   // Session lifecycle: restore session-scoped state to protect prompt cache on resumed sessions
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     const entries = ctx.sessionManager?.getEntries?.() || [];
-
-    // 1. Look for explicit persisted session state
-    const lastSessionEntry = [...entries]
-      .reverse()
-      .find(
-        (e) =>
-          e.type === "custom" &&
-          ((e as any).customType === WEB_TOOL_SESSION_ENTRY ||
-            (e as any).name === WEB_TOOL_SESSION_ENTRY)
-      );
-
-    const customEntry = lastSessionEntry as any;
-    if (
-      customEntry?.data &&
-      typeof customEntry.data.enabled === "boolean"
-    ) {
-      activeSessionEnabled = customEntry.data.enabled;
-    } else {
-      // 2. Check if this is an existing session with past conversation history
-      const hasPriorConversation = entries.some(
-        (e: any) =>
-          e.type === "message" ||
-          e.type === "custom_message" ||
-          e.role === "user" ||
-          e.role === "assistant"
-      );
-
-      if (hasPriorConversation) {
-        // Existing session: keep enabled to preserve prefix prompt cache hits!
-        activeSessionEnabled = true;
-      } else {
-        // 3. New session: adopt user's global setting from enhanced-settings.json
-        activeSessionEnabled = store.get("web.enabled");
-        try {
-          pi.appendEntry(WEB_TOOL_SESSION_ENTRY, {
-            enabled: activeSessionEnabled,
-            timestamp: Date.now(),
-          } satisfies WebSessionState);
-        } catch {
-          // Ignore if session tree is not yet writable
-        }
-      }
-    }
-
-    syncWebTools(activeSessionEnabled);
+    const isEnabled = resolveSessionToolState(entries, "web_search", store.get("web.enabled"));
+    activeSessionEnabled = isEnabled;
+    syncWebTools(isEnabled);
   });
 
   // Dynamic setting toggles
@@ -131,15 +87,6 @@ export function registerWebSearch(pi: ExtensionAPI): void {
       const newEnabled = settings["web.enabled"];
       activeSessionEnabled = newEnabled;
       syncWebTools(newEnabled);
-
-      try {
-        pi.appendEntry(WEB_TOOL_SESSION_ENTRY, {
-          enabled: newEnabled,
-          timestamp: Date.now(),
-        } satisfies WebSessionState);
-      } catch {
-        // Non-fatal
-      }
     }
   });
 

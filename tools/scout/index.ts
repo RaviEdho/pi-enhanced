@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { registerSearchInterceptor } from "./interceptor.js";
 import {
@@ -69,60 +70,15 @@ export function registerScout(pi: ExtensionAPI): void {
     }
   }
 
-  // Initial sync
-  syncSearchTools();
-
   // Session lifecycle: restore session-scoped state to protect prompt cache on resumed sessions
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     const entries = ctx.sessionManager?.getEntries?.() || [];
-
-    // 1. Look for explicit persisted session state
-    const lastSessionEntry = [...entries]
-      .reverse()
-      .find(
-        (e) =>
-          e.type === "custom" &&
-          ((e as any).customType === SCOUT_TOOL_SESSION_ENTRY ||
-            (e as any).name === SCOUT_TOOL_SESSION_ENTRY)
-      );
-
-    const customEntry = lastSessionEntry as any;
-    if (
-      customEntry?.data &&
-      typeof customEntry.data.enabled === "boolean"
-    ) {
-      activeSessionEnabled = customEntry.data.enabled;
-    } else {
-      // 2. Check if this is an existing session with past conversation history
-      const hasPriorConversation = entries.some(
-        (e: any) =>
-          e.type === "message" ||
-          e.type === "custom_message" ||
-          e.role === "user" ||
-          e.role === "assistant"
-      );
-
-      if (hasPriorConversation) {
-        // Existing session: keep enabled to preserve prefix prompt cache hits!
-        activeSessionEnabled = true;
-      } else {
-        // 3. New session: adopt the user's global setting from enhanced-settings.json
-        activeSessionEnabled = store.get("scout.enabled");
-        try {
-          pi.appendEntry(SCOUT_TOOL_SESSION_ENTRY, {
-            enabled: activeSessionEnabled,
-            timestamp: Date.now(),
-          } satisfies ScoutSessionState);
-        } catch {
-          // Ignore if session tree is not yet writable
-        }
-      }
-    }
-
-    syncSearchTools(activeSessionEnabled);
+    const isEnabled = resolveSessionToolState(entries, "find", store.get("scout.enabled"));
+    activeSessionEnabled = isEnabled;
+    syncSearchTools(isEnabled);
 
     // Warm index in background only if Scout is enabled for this session
-    if (activeSessionEnabled) {
+    if (isEnabled) {
       try {
         const { FileIndexer } = await import("./indexer.js");
         const indexer = FileIndexer.getInstance();
@@ -139,15 +95,6 @@ export function registerScout(pi: ExtensionAPI): void {
       const newEnabled = settings["scout.enabled"];
       activeSessionEnabled = newEnabled;
       syncSearchTools(newEnabled);
-
-      try {
-        pi.appendEntry(SCOUT_TOOL_SESSION_ENTRY, {
-          enabled: newEnabled,
-          timestamp: Date.now(),
-        } satisfies ScoutSessionState);
-      } catch {
-        // Non-fatal
-      }
     }
   });
 

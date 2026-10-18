@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager, renderSubagentReportMessage } from "./jobs.js";
 import { SubagentBorderedLoader } from "./loader.js";
@@ -319,72 +320,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
     }
   }
 
-  // Initial sync
-  syncSubagentTools();
-
-  // Track tool executions to reset consecutive status poll counter when other tools run
-  pi.on("tool_execution_start", (event) => {
-    recordToolExecution(event.toolName);
-  });
-
-  pi.on("agent_start", () => {
-    resetConsecutiveStatusPolls();
-  });
-
-  pi.on("agent_settled", () => {
-    resetConsecutiveStatusPolls();
-  });
-
   // Attach UI context on session start and restore session-scoped state to protect prompt cache
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     jobManager.setUIContext(ctx.ui);
 
     const entries = ctx.sessionManager?.getEntries?.() || [];
-
-    // 1. Look for explicit persisted session state
-    const lastSessionEntry = [...entries]
-      .reverse()
-      .find(
-        (e) =>
-          e.type === "custom" &&
-          ((e as any).customType === SUBAGENT_TOOL_SESSION_ENTRY ||
-            (e as any).name === SUBAGENT_TOOL_SESSION_ENTRY)
-      );
-
-    const customEntry = lastSessionEntry as any;
-    if (
-      customEntry?.data &&
-      typeof customEntry.data.enabled === "boolean"
-    ) {
-      activeSessionEnabled = customEntry.data.enabled;
-    } else {
-      // 2. Check if this is an existing session with past conversation history
-      const hasPriorConversation = entries.some(
-        (e: any) =>
-          e.type === "message" ||
-          e.type === "custom_message" ||
-          e.role === "user" ||
-          e.role === "assistant"
-      );
-
-      if (hasPriorConversation) {
-        // Existing session: keep enabled to preserve prefix prompt cache hits!
-        activeSessionEnabled = true;
-      } else {
-        // 3. New session: adopt user's global setting from enhanced-settings.json
-        activeSessionEnabled = store.get("subagent.enabled");
-        try {
-          pi.appendEntry(SUBAGENT_TOOL_SESSION_ENTRY, {
-            enabled: activeSessionEnabled,
-            timestamp: Date.now(),
-          } satisfies SubagentSessionState);
-        } catch {
-          // Ignore if session tree is not yet writable
-        }
-      }
-    }
-
-    syncSubagentTools(activeSessionEnabled);
+    const isEnabled = resolveSessionToolState(entries, "subagent", store.get("subagent.enabled"));
+    activeSessionEnabled = isEnabled;
+    syncSubagentTools(isEnabled);
   });
 
   // Dynamic setting toggles
@@ -393,15 +336,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
       const newEnabled = settings["subagent.enabled"];
       activeSessionEnabled = newEnabled;
       syncSubagentTools(newEnabled);
-
-      try {
-        pi.appendEntry(SUBAGENT_TOOL_SESSION_ENTRY, {
-          enabled: newEnabled,
-          timestamp: Date.now(),
-        } satisfies SubagentSessionState);
-      } catch {
-        // Non-fatal
-      }
     }
   });
 

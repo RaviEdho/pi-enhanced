@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { createAskUserToolDefinition } from "./tools.js";
 
@@ -66,57 +67,12 @@ export function registerFeedbackTools(pi: ExtensionAPI): void {
     }
   }
 
-  // Initial sync
-  syncFeedbackTools();
-
   // Session lifecycle: restore session-scoped state to protect prompt cache on resumed sessions
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     const entries = ctx.sessionManager?.getEntries?.() || [];
-
-    // 1. Look for explicit persisted session state
-    const lastSessionEntry = [...entries]
-      .reverse()
-      .find(
-        (e) =>
-          e.type === "custom" &&
-          ((e as any).customType === FEEDBACK_TOOL_SESSION_ENTRY ||
-            (e as any).name === FEEDBACK_TOOL_SESSION_ENTRY)
-      );
-
-    const customEntry = lastSessionEntry as any;
-    if (
-      customEntry?.data &&
-      typeof customEntry.data.enabled === "boolean"
-    ) {
-      activeSessionEnabled = customEntry.data.enabled;
-    } else {
-      // 2. Check if this is an existing session with past conversation history
-      const hasPriorConversation = entries.some(
-        (e: any) =>
-          e.type === "message" ||
-          e.type === "custom_message" ||
-          e.role === "user" ||
-          e.role === "assistant"
-      );
-
-      if (hasPriorConversation) {
-        // Existing session: keep enabled to preserve prefix prompt cache hits!
-        activeSessionEnabled = true;
-      } else {
-        // 3. New session: adopt the user's global setting from enhanced-settings.json
-        activeSessionEnabled = store.get("feedback.askUser");
-        try {
-          pi.appendEntry(FEEDBACK_TOOL_SESSION_ENTRY, {
-            enabled: activeSessionEnabled,
-            timestamp: Date.now(),
-          } satisfies FeedbackSessionState);
-        } catch {
-          // Ignore if session tree is not yet writable
-        }
-      }
-    }
-
-    syncFeedbackTools(activeSessionEnabled);
+    const isEnabled = resolveSessionToolState(entries, "ask_user", store.get("feedback.askUser"));
+    activeSessionEnabled = isEnabled;
+    syncFeedbackTools(isEnabled);
   });
 
   // Dynamic setting toggles
@@ -125,16 +81,6 @@ export function registerFeedbackTools(pi: ExtensionAPI): void {
       const newEnabled = settings["feedback.askUser"];
       activeSessionEnabled = newEnabled;
       syncFeedbackTools(newEnabled);
-
-      // Persist the explicit change to the active session so future resumes of this session also remember it
-      try {
-        pi.appendEntry(FEEDBACK_TOOL_SESSION_ENTRY, {
-          enabled: newEnabled,
-          timestamp: Date.now(),
-        } satisfies FeedbackSessionState);
-      } catch {
-        // Non-fatal
-      }
     }
   });
 
