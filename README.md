@@ -43,6 +43,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Codebase Scout Search Engine (`tools/scout/`, `/scout-health`, `/scout-rescan`)**: 100% pure TypeScript port of FFF concepts. Replaces standard `find` and `grep` with memory-cached, typo-tolerant search tools (`find`, `grep`, `multi_grep`). Features Smith-Waterman fuzzy matching, definition-first ranking, multi-pattern OR search in a single turn, git recency awareness, and strict output budgeting with match-centered line truncation (`…match…`) to prevent context blowup.
 - **Unified Multi-Provider Web Search & Fetch (`tools/web/`)**: Native `web_search` and `web_fetch` tools. Supports Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Features transparent multi-engine failover, Google-style syntax parsing (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, strict token budgeting, and API key management directly via `/login` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `multi_grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
+- **Interactive User Feedback Tool (`tools/feedback/`)**: Direct, native user feedback tool exposing `ask_user`. Polymorphically supports both open-ended clarification prompts via freeform text input (`ctx.ui.input`) and structured 3-choice decision selectors (`ctx.ui.select`). Supports custom typed responses (`✎ Type custom answer...`), signal abort and timeout handling, and operates seamlessly even in safe Plan Mode.
 - **Pi Auth Sync**: Automatically imports credentials from `~/.pi/agent/auth.json` into the accounts pool and syncs the active healthy account back to `auth.json`.
 
 ## Usage
@@ -146,8 +147,8 @@ Configurable options include:
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
-- `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
 - `timer.showWorkingTelemetry`: Live working spinner duration, token count & speed telemetry (`enabled` / `disabled`)
+- `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
 - `subagent.defaultMode`: Default execution mode for `/subagent` (`background` / `sync`)
@@ -223,6 +224,14 @@ Keys are securely prompted in the TUI, saved to `~/.pi/agent/auth.json`, or read
 
 - **`web_search`**: Supports Google operators (`site:`, `before:`, `after:`, `"exact phrase"`, `-negation`) and automatically falls over if a provider hits rate limits or errors across Brave, Tavily, Google Antigravity, TinyFish, Exa, and Parallel.
 - **`web_fetch`**: Fetches any URL and extracts clean Markdown (handling JS-rendered SPAs, anti-bot challenges, and token budgeting) with automatic failover across TinyFish, Parallel, Exa, Tavily, and Jina Reader.
+
+### Interactive User Feedback (`ask_user`)
+
+The extension gives the LLM direct access to user input dialogs during execution via the unified `ask_user` tool:
+
+- **Freeform Text Input**: When called with a `question` (and optional `placeholder`), prompts the user inside a native TUI input box (`ctx.ui.input`). Ideal for gathering missing tokens, URLs, file paths, or custom requirements.
+- **3-Choice Decisions**: When called with `choices: ["Option 1...", "Option 2...", "Option 3..."]`, displays an interactive selector (`ctx.ui.select`). Automatically includes a `✎ Type custom answer...` option for typing an alternative choice. Dismissing with `Esc` cancels cleanly.
+- **Multi-Question Questionnaires**: When called with `questions: [{ question, choices?, placeholder? }, ...]`, prompts the user sequentially through each question in a single tool turn (e.g. `[1/3] Question...`). Preserves already answered questions even if the user cancels midway. Fully safe and functional in Plan Mode.
 
 ## Development
 

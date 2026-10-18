@@ -22,6 +22,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Codebase Scout Search Engine (`tools/scout/`)**: 100% pure TypeScript port of FFF concepts without native binaries or C FFI dependencies. Features typo-tolerant fuzzy path finding (`find`), definition-first content grep (`grep`), multi-pattern OR search (`multi_grep`), transparent shell search interception and agent steering, in-memory file index with git status awareness, and strict output budgeting with match-centered truncation (`…match…`) to prevent LLM context blowup.
 - **Unified Web Search & Fetch Tools (`tools/web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: Zero-overhead in-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `multi_grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
+- **Interactive User Feedback Tool (`tools/feedback/`)**: Direct, native user feedback tool exposing `ask_user`. Polymorphically supports single open-ended prompts via freeform text input (`ctx.ui.input`), structured 3-choice decision selectors (`ctx.ui.select`) with customizable response fallback (`✎ Type custom answer...`), and multi-question sequential questionnaires (`questions: [...]`) in a single tool turn. Features clean TUI renderers, mid-flow dismissal preservation, non-interactive environment resilience (`hasUI`), signal and timeout integration, and safe-execution compatibility with Plan Mode.
 
 ---
 
@@ -139,10 +140,14 @@ pi-enhanced/
 │   ├── subagent/               # Autonomous isolated subagent routine
 │   │   ├── index.ts            # /subagent and /jobs commands, tool registration
 │   │   ├── jobs.ts             # BackgroundJobManager: non-blocking job registry, TUI widget, follow-up injection
-│   │   ├── runner.ts           # runSubagent in-process runner with model/thinking inheritance
 │   │   ├── loader.ts           # SubagentBorderedLoader: native cancellable loader for sync runs
+│   │   ├── runner.ts           # runSubagent in-process runner with model/thinking inheritance
 │   │   ├── tools.ts            # subagent, subagent_status, subagent_list, subagent_cancel tool definitions
 │   │   └── types.ts            # Subagent types & schemas
+│   ├── feedback/               # Interactive user feedback subsystem
+│   │   ├── index.ts            # Feedback tool registration & system prompt guidelines
+│   │   ├── tools.ts            # Unified ask_user tool definition & polymorphic TUI renderers
+│   │   └── types.ts            # Schemas for open-ended questions & structured choice selectors
 │   └── index.ts                # registerTools aggregator
 ├── ux/                         # Workflow & user experience enhancements
 │   ├── context/                # /context command: active context window analysis & breakdown
@@ -156,13 +161,13 @@ pi-enhanced/
 │   │   ├── index.ts            # Input handler registering "." continue shortcut
 │   │   └── prompt.ts           # System directive instructing model to resume unfinished work
 │   ├── plan/                   # Plan & Implement mode subsystem (/plan, /implement)
+│   │   ├── editor.ts           # Plan custom editor component with Amber border palette
+│   │   ├── gate.ts             # Human-in-the-loop plan approval gate
 │   │   ├── index.ts            # /plan, /implement commands, shortcuts (Ctrl+Alt+P, Alt+M), flag
 │   │   ├── manager.ts          # PlanModeManager: state store, tool_call sandboxing & persistence
 │   │   ├── prompt.ts           # System directives for Plan Mode and Implement Mode
 │   │   ├── safe-bash.ts        # Shell command allowlist/blocklist safety classifier
 │   │   └── types.ts            # PlanModeState schema
-│   │   ├── editor.ts           # Plan custom editor component with Amber border palette
-│   │   ├── gate.ts             # Human-in-the-loop plan approval gate
 │   ├── settings/               # Enhanced settings configuration subsystem & /settings-enhanced
 │   │   ├── command.ts          # /settings-enhanced command dispatcher (TUI vs non-TUI)
 │   │   ├── component.ts        # EnhancedSettingsComponent: SettingsList with live toggles
@@ -248,20 +253,20 @@ pi-enhanced/
 7. **Native UI Harmony & Minimal Surface Area**:
    - Always match Pi's native interaction model, visual language, and keyboard conventions.
    - Do **not** inject synthetic pseudo-options such as `[ Cancel ]`, `[ Back ]`, or `← Back` into selector lists (`ctx.ui.select`); Pi's native TUI components inherently use `Esc` for cancellation and dismissal.
+   - **Standardized Selection & Radio Indicator**: All choice lists and selectors must align with Pi's native selection conventions (`→ ` selection arrow / `theme.cursor`). Avoid redundant or competing leading glyphs (such as `*`, `▶`, `■`, or status icons/emojis) at the beginning of choice strings that clash with the selection arrow; use clean text labels and suffix tags (e.g. `(current)`, `(active)`) instead. In custom modal components, always render selection indicators using `→ ` (matching `theme.cursor`), not `>` or `*`.
    - Touch as minimal a surface area of the host application as possible. Avoid replacing core components (e.g. replacing the primary editor or recreating entire host dialogs) when a targeted hook, lightweight lifecycle event, or native dialog invocation (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.notify`) achieves the same behavior.
    - Multi-account flows (e.g. account selection during `/logout`) must look and feel like native Pi sub-selectors with standard formatting (e.g. `(active)`, clean identity labels) rather than bespoke custom dashboards.
-
----
-
-   - **Standardized Selection & Radio Indicator**: All choice lists and selectors must align with Pi's native selection conventions (`→ ` selection arrow / `theme.cursor`). Avoid redundant or competing leading glyphs (such as `*`, `▶`, `■`, or status icons/emojis) at the beginning of choice strings that clash with the selection arrow; use clean text labels and suffix tags (e.g. `(current)`, `(active)`) instead. In custom modal components, always render selection indicators using `→ ` (matching `theme.cursor`), not `>` or `*`.
-## Testing Workflow
-
-### 1. Transient Verification Commands (No Test Files)
-Do not create persistent test files. Validate changes using type checking and live transient CLI executions:
 
 8. **No Persistent Test Files**:
    - Do **NOT** write, commit, or persist unit test files (`*.test.ts`, `*.spec.ts`, `tests/`, `__tests__/`).
    - Verify behavior transiently: test dynamically using headless `pi -e ./index.ts -p "..."` runs, live interactive CLI checks, or temporary inline one-liners. Always clean up any ephemeral test scripts before completing the task.
+
+---
+
+## Testing Workflow
+
+### 1. Transient Verification Commands (No Test Files)
+Do not create persistent test files. Validate changes using type checking and live transient CLI executions:
 
 ```bash
 # Typecheck TypeScript files
@@ -270,15 +275,15 @@ npm run typecheck
 # Test extension directly without installing
 pi -e ./index.ts --model google-antigravity/gemini-2.5-flash -p "say hello"
 
+# Test slash commands headlessly
+pi -e ./index.ts -p "/settings-enhanced list"
+pi -e ./index.ts -p "/usage"
+
 # Install globally to test local build
 pi install .
 
 # Verify active models
 pi --list-models
-# Test slash commands headlessly
-pi -e ./index.ts -p "/settings-enhanced list"
-pi -e ./index.ts -p "/usage"
-
 ```
 
 ---
