@@ -11,18 +11,20 @@ import { PlanModeManager } from "./manager.js";
  * Checks whether an assistant message contains a structured implementation plan artifact.
  *
  * Looks for common plan headings followed by at least two ordered steps
- * (e.g. "1. ...", "2. ...") or task checkboxes (e.g. "- [ ] ...").
+ * (e.g. "1. ...", "Phase 1: ...", "Step 1: ...", or task checkboxes "- [ ] ...").
  */
 export function hasPlanArtifact(text: string): boolean {
   if (!text || text.length < 40) return false;
 
   const headerRegex =
-    /(?:^|\n)\s*(?:#+\s*|\*{1,2}|__)?\s*(?:Implementation\s+Plan|Execution\s+Plan|Action\s+Plan|Proposed\s+Plan|Plan)\s*(?::|\*{1,2}|__)*\s*(?:\n|$)/i;
+    /(?:^|\n)\s*(?:#+\s*|\*{1,2}|__)?\s*(?:Implementation\s+Plan|Execution\s+Plan|Action\s+Plan|Proposed\s+Plan|Implementation\s+Roadmap|Plan\s+of\s+Action|Step-by-Step\s+Plan|Plan)\s*(?::|\*{1,2}|__)*\s*(?:\n|$)/i;
   const match = text.match(headerRegex);
   if (!match || match.index === undefined) return false;
 
   const afterHeader = text.slice(match.index + match[0].length);
-  const stepMatches = afterHeader.match(/^\s*(?:\d+[\.\)]|[-*+]\s+\[[ x]\])\s+\S+/gim);
+  const stepMatches = afterHeader.match(
+    /^\s*(?:\d+[\.\)]|(?:Step|Phase)\s+\d+[:\.]|[-*+]\s+\[[ x]\])\s+\S+/gim
+  );
   return !!(stepMatches && stepMatches.length >= 2);
 }
 
