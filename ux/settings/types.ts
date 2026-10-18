@@ -64,7 +64,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
   },
   "web.enabled": {
     key: "web.enabled",
-    label: "Web Search & Fetch",
+    label: "Web Access Tools",
     category: "Agent Tools",
     description: "Multi-provider web search & extraction (web_search, web_fetch). Disabling drops schemas & busts cache",
     defaultValue: true,
@@ -72,7 +72,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
   },
   "subagent.enabled": {
     key: "subagent.enabled",
-    label: "Subagent Routine",
+    label: "Subagent Tools",
     category: "Agent Tools",
     description: "Autonomous isolated subagent execution (subagent, /subagent, /jobs). Disabling mid-session drops schemas & busts cache",
     defaultValue: true,
@@ -88,7 +88,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
   },
   "feedback.askUser": {
     key: "feedback.askUser",
-    label: "Interactive Ask User",
+    label: "Ask User Tools",
     category: "Agent Tools",
     description: "Allow LLM to prompt user for feedback and 3 choices. Disabling mid-session drops schema & busts cache",
     defaultValue: true,

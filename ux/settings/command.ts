@@ -145,13 +145,13 @@ export async function handleSettingsEnhancedCommand(
             const kTok = (tokens / 1000).toFixed(1);
             let toolName: string;
             if (key === "feedback.askUser") {
-              toolName = "'ask_user'";
+              toolName = "Ask User Tools ('ask_user')";
             } else if (key === "scout.enabled") {
-              toolName = "Scout search tools ('find', 'grep', 'multi_grep')";
+              toolName = "Scout Search Tools ('find', 'grep', 'multi_grep')";
             } else if (key === "web.enabled") {
-              toolName = "Web tools ('web_search', 'web_fetch')";
+              toolName = "Web Access Tools ('web_search', 'web_fetch')";
             } else {
-              toolName = "Subagent tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
+              toolName = "Subagent Tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
             }
             const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling ${toolName} mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
             if (ctx.hasUI) {

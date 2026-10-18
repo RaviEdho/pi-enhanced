@@ -508,13 +508,13 @@ export class EnhancedSettingsComponent implements Component {
       if (tokens >= 10_000) {
         let toolLabel: string;
         if (key === "feedback.askUser") {
-          toolLabel = "'ask_user'";
+          toolLabel = "Ask User Tools ('ask_user')";
         } else if (key === "scout.enabled") {
-          toolLabel = "Scout search tools ('find', 'grep', 'multi_grep')";
+          toolLabel = "Scout Search Tools ('find', 'grep', 'multi_grep')";
         } else if (key === "web.enabled") {
-          toolLabel = "Web search & fetch tools ('web_search', 'web_fetch')";
+          toolLabel = "Web Access Tools ('web_search', 'web_fetch')";
         } else {
-          toolLabel = "Subagent tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
+          toolLabel = "Subagent Tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
         }
 
         this.cacheWarning = {

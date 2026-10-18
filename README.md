@@ -142,11 +142,13 @@ Configure `pi-enhanced` subsystems interactively or via CLI commands:
 ```
 
 Configurable options include:
-- `compressor.enabled`: Terminal output compressor for bash/powershell (`enabled` / `disabled`)
-- `scout.enabled`: In-memory code search tools (`find`, `grep`, `multi_grep`) with session cache memory (`enabled` / `disabled`)
-- `scout.interceptShell`: Transparent shell grep/find/rg interception & scout steering (`enabled` / `disabled`)
-- `web.enabled`: Multi-provider web search & extraction (`web_search`, `web_fetch`) with session cache memory (`enabled` / `disabled`)
-- `feedback.askUser`: Interactive human feedback tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
+- `scout.enabled`: Scout Search Tools (`find`, `grep`, `multi_grep`) with session cache memory (`enabled` / `disabled`)
+- `scout.interceptShell`: Scout Shell Interceptor - shell grep/find/rg interception & scout steering (`enabled` / `disabled`)
+- `web.enabled`: Web Access Tools - multi-provider search & extraction (`web_search`, `web_fetch`) with session cache memory (`enabled` / `disabled`)
+- `subagent.enabled`: Subagent Tools - isolated in-process subagent execution (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
+- `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
+- `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
+- `compressor.enabled`: Output Compressor - terminal noise reduction for bash/powershell (`enabled` / `disabled`)
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
@@ -154,8 +156,6 @@ Configurable options include:
 - `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
-- `subagent.enabled`: Autonomous isolated subagent tools (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
-- `subagent.defaultMode`: Default execution mode for `/subagent` (`background` / `sync`)
 
 Settings persist to `~/.pi/agent/enhanced-settings.json`.
 
