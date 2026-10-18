@@ -5,10 +5,9 @@ import { registerSearchInterceptor } from "./interceptor.js";
 import {
   createFindToolDefinition,
   createGrepToolDefinition,
-  createMultiGrepToolDefinition,
 } from "./tools.js";
 
-const SEARCH_TOOL_NAMES = ["find", "grep", "multi_grep"];
+const SEARCH_TOOL_NAMES = ["find", "grep"];
 export const SCOUT_TOOL_SESSION_ENTRY = "scout-tool-session-state";
 
 export interface ScoutSessionState {
@@ -46,7 +45,6 @@ export function registerScout(pi: ExtensionAPI): void {
   // Register core search tools
   pi.registerTool(createFindToolDefinition("find"));
   pi.registerTool(createGrepToolDefinition("grep"));
-  pi.registerTool(createMultiGrepToolDefinition("multi_grep"));
 
   const store = EnhancedSettingsStore.getInstance();
 
@@ -128,7 +126,7 @@ export function registerScout(pi: ExtensionAPI): void {
       event.systemPromptOptions.toolSnippets = {};
     }
     const shellSnippet =
-      "Execute shell commands (git, build tools, tests, package managers). Do NOT use for searching code or files; use grep, multi_grep, or find instead.";
+      "Execute shell commands (git, build tools, tests, package managers). Do NOT use for searching code or files; use grep or find instead.";
     event.systemPromptOptions.toolSnippets["bash"] = shellSnippet;
     event.systemPromptOptions.toolSnippets["powershell"] = shellSnippet;
 
@@ -141,7 +139,7 @@ export function registerScout(pi: ExtensionAPI): void {
         event.systemPromptOptions.toolGuidelines[shellTool] = [];
       }
       event.systemPromptOptions.toolGuidelines[shellTool].push(
-        "Never run file search or content search commands (rg, ripgrep, grep, find, ag, fd) via shell. Always use the dedicated grep, find, or multi_grep tools instead."
+        "Never run file search or content search commands (rg, ripgrep, grep, find, ag, fd) via shell. Always use the dedicated grep or find tools instead."
       );
     }
 
@@ -149,7 +147,7 @@ export function registerScout(pi: ExtensionAPI): void {
       event.systemPromptOptions.promptGuidelines = [];
     }
     event.systemPromptOptions.promptGuidelines.push(
-      "CRITICAL: Do NOT execute `rg`, `ripgrep`, `grep`, `find`, `fd`, or `ag` via the bash or powershell tools. Always use the built-in search tools (`grep`, `multi_grep`, `find`) for both workspace and external paths.",
+      "CRITICAL: Do NOT execute `rg`, `ripgrep`, `grep`, `find`, `fd`, or `ag` via the bash or powershell tools. Always use the built-in search tools (`grep`, `find`) for both workspace and external paths.",
       "The built-in search tools support workspace files (in-memory) and external paths/node_modules (auto-fallback), definition-first ranking, and token-compressed output."
     );
   });

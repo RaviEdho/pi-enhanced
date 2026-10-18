@@ -800,7 +800,7 @@ export function registerSearchInterceptor(pi: ExtensionAPI): void {
     const steeringHeader = [
       `[Enhanced Search Interceptor]`,
       `Executed via Pi's fast enhanced search engine (intercepted: \`${pending.rawCommand}\`).`,
-      `Tip: In future turns, use the built-in \`${suggestedTool}\` or \`multi_grep\` tool directly for faster in-memory execution and structured parameters.`,
+      `Tip: In future turns, use the built-in \`${suggestedTool}\` tool directly for faster in-memory execution and structured parameters.`,
       "",
     ].join("\n");
 

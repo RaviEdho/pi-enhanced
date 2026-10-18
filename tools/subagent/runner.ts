@@ -10,7 +10,6 @@ import { Type } from "typebox";
 import {
   createFindToolDefinition,
   createGrepToolDefinition,
-  createMultiGrepToolDefinition,
 } from "../scout/tools.js";
 import {
   createWebFetchToolDefinition,
@@ -34,7 +33,7 @@ AUTONOMY & HEADLESS ENVIRONMENT:
 - If you encounter a fundamental blocker, missing permission, dangerous/destructive action (e.g. git reset --hard, database drops), or a major architectural fork that genuinely requires higher-level decision-making from the main agent, call the 'escalate' tool to cleanly hand off control with your partial findings and recommended options.
 
 TOOL USAGE:
-- Use dedicated search tools ('find', 'grep', 'multi_grep') and web tools ('web_search', 'web_fetch') whenever appropriate instead of running verbose shell commands.
+- Use dedicated search tools ('find', 'grep') and web tools ('web_search', 'web_fetch') whenever appropriate instead of running verbose shell commands.
 - Keep your final output informative but concise so it integrates cleanly back into the parent conversation.`;
 
 const ALL_SUBAGENT_TOOL_NAMES = [
@@ -44,7 +43,6 @@ const ALL_SUBAGENT_TOOL_NAMES = [
   "write",
   "find",
   "grep",
-  "multi_grep",
   "web_search",
   "web_fetch",
   "escalate",
@@ -167,7 +165,6 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
   const customTools = [
     createFindToolDefinition("find"),
     createGrepToolDefinition("grep"),
-    createMultiGrepToolDefinition("multi_grep"),
     createWebSearchToolDefinition(),
     createWebFetchToolDefinition(),
     createEscalateToolDefinition((payload) => {

@@ -23,7 +23,7 @@ const SubagentParametersSchema = Type.Object({
   tools: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Optional list of tools the subagent is allowed to use. Available tools include 'read', 'bash', 'edit', 'write', 'find', 'grep', 'multi_grep', 'web_search', 'web_fetch'. Defaults to all available tools.",
+        "Optional list of tools the subagent is allowed to use. Available tools include 'read', 'bash', 'edit', 'write', 'find', 'grep', 'web_search', 'web_fetch'. Defaults to all available tools.",
     })
   ),
   maxTurns: Type.Optional(

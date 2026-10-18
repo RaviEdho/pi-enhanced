@@ -134,7 +134,8 @@ export async function executeFind(
 
 export async function executeGrep(
   params: {
-    pattern: string;
+    pattern?: string;
+    patterns?: string[];
     path?: string;
     glob?: string;
     ignoreCase?: boolean;
@@ -148,6 +149,7 @@ export async function executeGrep(
   const cursorStore = CursorStore.getInstance();
 
   let pattern = params.pattern;
+  let patterns = params.patterns ? [...params.patterns] : undefined;
   let offset = 0;
   let limit = params.limit ?? PAGE_SIZE_GREP;
   let targetPath = params.path;
@@ -160,7 +162,11 @@ export async function executeGrep(
     const stored = cursorStore.get(params.cursor);
     if (stored && stored.type === "grep") {
       offset = stored.nextOffset;
-      pattern = stored.query;
+      if (stored.options?.patterns && Array.isArray(stored.options.patterns)) {
+        patterns = stored.options.patterns;
+      } else {
+        pattern = stored.query;
+      }
       targetPath = targetPath ?? stored.options?.path;
       glob = glob ?? stored.options?.glob;
       ignoreCase = ignoreCase ?? stored.options?.ignoreCase;
@@ -172,9 +178,105 @@ export async function executeGrep(
     }
   }
 
+  // Normalize patterns vs pattern
+  if (patterns && patterns.length > 0) {
+    if (pattern && !patterns.includes(pattern)) {
+      patterns.unshift(pattern);
+    }
+    if (patterns.length === 1) {
+      pattern = patterns[0];
+      patterns = undefined;
+    }
+  }
+
+  // If neither pattern nor patterns is provided
+  if (!pattern && (!patterns || patterns.length === 0)) {
+    return {
+      output: "Error: Must provide either 'pattern' or 'patterns' to grep.",
+      details: { totalMatched: 0, count: 0, error: "Missing pattern" },
+    };
+  }
+
+  // Handle multi-pattern search when multiple patterns are present
+  if (patterns && patterns.length > 1) {
+    if (targetPath && shouldDelegateToExternal(targetPath, cwd)) {
+      const { matches, totalMatched } = await externalMultiGrep(
+        patterns,
+        {
+          path: targetPath,
+          glob,
+          ignoreCase,
+          context,
+          limit,
+          offset,
+        },
+        cwd
+      );
+
+      let nextCursor: string | undefined;
+      if (offset + matches.length < totalMatched) {
+        nextCursor = cursorStore.store("grep", patterns.join(" | "), offset + matches.length, {
+          ...params,
+          patterns,
+          path: targetPath,
+          glob,
+          ignoreCase,
+          context,
+          limit,
+        });
+      }
+
+      const output = formatGrepOutput(matches, totalMatched, nextCursor);
+      return {
+        output,
+        details: { totalMatched, count: matches.length, filesSearched: 0, external: true, patterns },
+      };
+    }
+
+    const indexer = FileIndexer.getInstance(cwd);
+    const frecency = FrecencyTracker.getInstance();
+
+    const { matches, totalMatched, filesSearched } = await indexer.multiGrep(patterns, {
+      path: targetPath,
+      glob,
+      ignoreCase,
+      context,
+      limit,
+      offset,
+    });
+
+    for (const m of matches) {
+      if (m.isDefinition) {
+        frecency.recordAccess(m.filePath);
+      }
+    }
+
+    let nextCursor: string | undefined;
+    if (offset + matches.length < totalMatched) {
+      nextCursor = cursorStore.store("grep", patterns.join(" | "), offset + matches.length, {
+        ...params,
+        patterns,
+        path: targetPath,
+        glob,
+        ignoreCase,
+        context,
+        limit,
+      });
+    }
+
+    const output = formatGrepOutput(matches, totalMatched, nextCursor);
+    return {
+      output,
+      details: { totalMatched, count: matches.length, filesSearched, patterns },
+    };
+  }
+
+  // Fallback to single pattern
+  const singlePattern = pattern!;
+
   if (targetPath && shouldDelegateToExternal(targetPath, cwd)) {
     const { matches, totalMatched } = await externalGrep(
-      pattern,
+      singlePattern,
       {
         path: targetPath,
         glob,
@@ -189,7 +291,7 @@ export async function executeGrep(
 
     let nextCursor: string | undefined;
     if (offset + matches.length < totalMatched) {
-      nextCursor = cursorStore.store("grep", pattern, offset + matches.length, {
+      nextCursor = cursorStore.store("grep", singlePattern, offset + matches.length, {
         ...params,
         path: targetPath,
         glob,
@@ -209,7 +311,7 @@ export async function executeGrep(
   const indexer = FileIndexer.getInstance(cwd);
   const frecency = FrecencyTracker.getInstance();
 
-  const { matches, totalMatched, filesSearched } = await indexer.grep(pattern, {
+  const { matches, totalMatched, filesSearched } = await indexer.grep(singlePattern, {
     path: params.path,
     glob: params.glob,
     ignoreCase: params.ignoreCase,
@@ -228,7 +330,7 @@ export async function executeGrep(
 
   let nextCursor: string | undefined;
   if (offset + matches.length < totalMatched) {
-    nextCursor = cursorStore.store("grep", pattern, offset + matches.length, params);
+    nextCursor = cursorStore.store("grep", singlePattern, offset + matches.length, params);
   }
 
   const output = formatGrepOutput(matches, totalMatched, nextCursor);
@@ -246,7 +348,14 @@ export const findToolSchema = Type.Object({
 });
 
 export const grepToolSchema = Type.Object({
-  pattern: Type.String({ description: "Search pattern (text or regex)" }),
+  pattern: Type.Optional(
+    Type.String({ description: "Search pattern (literal text or regex). For multiple terms, you can also use 'patterns'." })
+  ),
+  patterns: Type.Optional(
+    Type.Array(Type.String({ description: "Search pattern (literal text)" }), {
+      description: "Array of patterns to search simultaneously with OR logic in one single pass",
+    })
+  ),
   path: Type.Optional(Type.String({ description: "Directory or file path constraint (e.g. 'src/', '!test/')" })),
   glob: Type.Optional(Type.String({ description: "Filter files by glob pattern, e.g. '*.ts'" })),
   ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: smart case)" })),
@@ -325,10 +434,10 @@ export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof g
     name,
     label: name,
     description:
-      "Fast in-memory content search (replaces rg, ripgrep, ag, grep). Definition-first prioritization, smart case, and typo fallback. Compresses matching lines to save LLM tokens. Surfaces definitions before usages.",
+      "Fast in-memory content search (replaces rg, ripgrep, ag, grep). Supports single pattern or multiple patterns with OR logic ('patterns: [...]'). Definition-first prioritization, smart case, and typo fallback. Compresses matching lines to save LLM tokens. Surfaces definitions before usages.",
     parameters: grepToolSchema,
     promptGuidelines: [
-      `Use ${name} to search code contents instead of running bash (rg, ripgrep, grep, ag). Returns compressed, definition-first results to minimize context size. Tolerates typos and automatically matches case.`,
+      `Use ${name} to search code contents instead of running bash (rg, ripgrep, grep, ag). Accepts single 'pattern' or multiple 'patterns' (searched simultaneously with OR logic in one single pass). Returns compressed, definition-first results to minimize context size. Tolerates typos and automatically matches case.`,
     ],
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isScoutActive()) {
@@ -346,9 +455,24 @@ export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof g
       };
     },
     renderCall(args, theme, context) {
-      const pattern = args?.pattern || "";
+      const patterns = Array.isArray(args?.patterns) ? args.patterns.filter(Boolean) : [];
+      const pattern = args?.pattern?.trim();
+      let patternSummary = "";
+      if (patterns.length > 0) {
+        if (pattern && !patterns.includes(pattern)) {
+          patterns.unshift(pattern);
+        }
+        patternSummary =
+          patterns.slice(0, 3).map((p: string) => `/${p}/`).join(" | ") +
+          (patterns.length > 3 ? ` (+${patterns.length - 3} more)` : "");
+      } else if (pattern) {
+        patternSummary = `/${pattern}/`;
+      } else {
+        patternSummary = `//`;
+      }
+
       const rawPath = args?.path?.trim();
-      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", `/${pattern}/`);
+      let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", patternSummary);
       if (rawPath) {
         text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
       }
@@ -371,10 +495,10 @@ export function createMultiGrepToolDefinition(name = "multi_grep"): ToolDefiniti
     name,
     label: name,
     description:
-      "Search multiple patterns simultaneously with OR logic in one single pass (replaces sequential rg/grep calls). Eliminates multiple grep tool turns and saves agent context tokens.",
+      "Search multiple patterns simultaneously with OR logic in one single pass (delegates to grep).",
     parameters: multiGrepToolSchema,
     promptGuidelines: [
-      `Use ${name} when searching for multiple keywords or identifiers simultaneously instead of running multiple sequential bash search commands (e.g. rg, grep).`,
+      `Use ${name} when searching for multiple keywords or identifiers simultaneously.`,
     ],
     renderCall(args, theme, context) {
       const patterns = Array.isArray(args?.patterns) ? args.patterns : [];
@@ -406,43 +530,10 @@ export function createMultiGrepToolDefinition(name = "multi_grep"): ToolDefiniti
         };
       }
       const cwd = ctx?.cwd || process.cwd();
-      if (params.path && shouldDelegateToExternal(params.path, cwd)) {
-        const { matches, totalMatched } = await externalMultiGrep(params.patterns, {
-          path: params.path,
-          glob: params.glob,
-          ignoreCase: params.ignoreCase,
-          context: params.context,
-          limit: params.limit ?? 40,
-        }, cwd);
-
-        const output = formatGrepOutput(matches, totalMatched);
-        return {
-          content: [{ type: "text", text: output }],
-          details: { totalMatched, count: matches.length, filesSearched: 0, external: true },
-        };
-      }
-
-      const indexer = FileIndexer.getInstance(ctx?.cwd);
-      const frecency = FrecencyTracker.getInstance();
-
-      const { matches, totalMatched, filesSearched } = await indexer.multiGrep(params.patterns, {
-        path: params.path,
-        glob: params.glob,
-        ignoreCase: params.ignoreCase,
-        context: params.context,
-        limit: params.limit ?? 40,
-      });
-
-      for (const m of matches) {
-        if (m.isDefinition) {
-          frecency.recordAccess(m.filePath);
-        }
-      }
-
-      const output = formatGrepOutput(matches, totalMatched);
+      const res = await executeGrep(params, cwd);
       return {
-        content: [{ type: "text", text: output }],
-        details: { totalMatched, count: matches.length, filesSearched },
+        content: [{ type: "text", text: res.output }],
+        details: res.details,
       };
     },
   };

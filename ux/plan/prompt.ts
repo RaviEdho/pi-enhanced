@@ -16,7 +16,7 @@ export function getPlanModeDirective(options?: {
 
   const toolsList: string[] = ["read"];
   if (scoutEnabled) {
-    toolsList.push("find", "grep", "multi_grep");
+    toolsList.push("find", "grep");
   }
   if (webEnabled) {
     toolsList.push("web_search", "web_fetch");

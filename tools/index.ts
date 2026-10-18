@@ -8,7 +8,7 @@ import { registerFeedbackTools } from "./feedback/index.js";
 
 /**
  * Registers all agent capability tools:
- * - Scout code search engine (find, grep, multi_grep, interceptor)
+ * - Scout code search engine (find, grep, interceptor)
  * - Unified web search & fetch subsystem (web_search, web_fetch)
  * - Autonomous Git workflow & commit sub-agent (/git, /commit)
  * - Terminal output noise compressor (/recall, /gain)

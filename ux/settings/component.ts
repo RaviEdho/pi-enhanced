@@ -510,7 +510,7 @@ export class EnhancedSettingsComponent implements Component {
         if (key === "feedback.askUser") {
           toolLabel = "Ask User Tools ('ask_user')";
         } else if (key === "scout.enabled") {
-          toolLabel = "Scout Search Tools ('find', 'grep', 'multi_grep')";
+          toolLabel = "Scout Search Tools ('find', 'grep')";
         } else if (key === "web.enabled") {
           toolLabel = "Web Access Tools ('web_search', 'web_fetch')";
         } else {

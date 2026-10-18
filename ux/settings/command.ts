@@ -147,7 +147,7 @@ export async function handleSettingsEnhancedCommand(
             if (key === "feedback.askUser") {
               toolName = "Ask User Tools ('ask_user')";
             } else if (key === "scout.enabled") {
-              toolName = "Scout Search Tools ('find', 'grep', 'multi_grep')";
+              toolName = "Scout Search Tools ('find', 'grep')";
             } else if (key === "web.enabled") {
               toolName = "Web Access Tools ('web_search', 'web_fetch')";
             } else {

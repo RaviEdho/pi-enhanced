@@ -514,11 +514,13 @@ export class FileIndexer {
       ignoreCase?: boolean;
       context?: number;
       limit?: number;
+      offset?: number;
     }
   ): Promise<{ matches: SearchMatch[]; totalMatched: number; filesSearched: number }> {
     await this.scan();
 
     const limit = options?.limit ?? 50;
+    const offset = options?.offset ?? 0;
     const contextLines = options?.context ?? 0;
     const constraints = this.buildPathAndGlobConstraints(options?.path, options?.glob);
 
@@ -599,6 +601,6 @@ export class FileIndexer {
     });
 
     const totalMatched = matches.length;
-    return { matches: matches.slice(0, limit), totalMatched, filesSearched };
+    return { matches: matches.slice(offset, offset + limit), totalMatched, filesSearched };
   }
 }

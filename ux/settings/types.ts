@@ -2,7 +2,7 @@ export type SubagentExecutionMode = "background" | "sync";
 export type ContextUsageFormat = "pi" | "pi-enhanced" | "off";
 
 export interface EnhancedSettings {
-  /** In-memory code search engine exposing find, grep, and multi_grep tools. */
+  /** In-memory code search engine exposing find and grep tools. */
   "scout.enabled": boolean;
   /** Transparently intercept shell grep/find/rg commands and steer LLM to scout. */
   "scout.interceptShell": boolean;
@@ -50,7 +50,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     key: "scout.enabled",
     label: "Scout Search Tools",
     category: "Agent Tools",
-    description: "In-memory search tools (find, grep, multi_grep). Disabling mid-session drops schemas & busts cache",
+    description: "In-memory search tools (find, grep). Disabling mid-session drops schemas & busts cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
