@@ -227,7 +227,7 @@ export class CommitConfirmationDialog implements Component {
     for (let i = 0; i < actions.length; i++) {
       const isSelected = i === this.selectedIndex;
       if (isSelected) {
-        lines.push(`  ${accentFn(">")} ${boldFn(accentFn(actions[i]))}`);
+        lines.push(`  ${accentFn("→")} ${boldFn(accentFn(actions[i]))}`);
       } else {
         lines.push(`    ${textFn(actions[i])}`);
       }

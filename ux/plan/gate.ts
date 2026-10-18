@@ -68,17 +68,17 @@ export async function handlePlanApprovalGate(
   if (!hasPlanArtifact(text)) return;
 
   const choice = await ctx.ui.select("Plan ready — choose action:", [
-    "▶ Execute plan (restore write access & begin)",
-    "✏ Refine plan (enter feedback or adjustments)",
-    "■ Stay in plan mode (continue exploration)",
+    "Execute plan (restore write access & begin)",
+    "Refine plan (enter feedback or adjustments)",
+    "Stay in plan mode (continue exploration)",
   ]);
 
-  if (choice?.startsWith("▶ Execute")) {
+  if (choice?.startsWith("Execute")) {
     manager.disable(ctx, true);
     pi.sendUserMessage("Execute the approved implementation plan. Start with step 1.", {
       deliverAs: "followUp",
     });
-  } else if (choice?.startsWith("✏ Refine")) {
+  } else if (choice?.startsWith("Refine")) {
     const refinement = await ctx.ui.editor("Refine plan (enter adjustments or feedback):", "");
     if (refinement?.trim()) {
       pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });

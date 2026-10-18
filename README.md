@@ -169,9 +169,9 @@ Explore and design code solutions safely before committing to file modifications
 - **CLI Startup Flag**: Start Pi in Plan Mode with `pi --plan`.
 - **Status & Textbox Sync**: The terminal footer displays `■ plan • ~/dir` or `▶ implement • ~/dir`, and the input textbox border dynamically reflects reasoning effort across both modes.
 - **Human-in-the-Loop Approval Gate**: When a plan is drafted, an interactive menu presents:
-  - `▶ Execute plan`: Automatically switches to Implement Mode and launches execution of step 1.
-  - `✏ Refine plan`: Prompts for adjustments while remaining safely in Plan Mode.
-  - `■ Stay in plan mode`: Keeps exploring or asking questions.
+  - `Execute plan`: Automatically switches to Implement Mode and launches execution of step 1.
+  - `Refine plan`: Prompts for adjustments while remaining safely in Plan Mode.
+  - `Stay in plan mode`: Keeps exploring or asking questions.
 - **Cache-Safe Sandboxing**: Tool schemas are never altered dynamically, ensuring prefix caching remains completely intact.
 
 ### 8. Autonomous Git Assistant (`/git`, `/commit`)

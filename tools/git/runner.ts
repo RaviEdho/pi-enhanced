@@ -267,14 +267,13 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           const optOnlyStaged = `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
           const optOnlyUnstaged = `Commit only unstaged changes (${unstaged.length} file${unstaged.length === 1 ? "" : "s"}, stash staged)`;
           const optStageAll = `Stage all and commit everything (${staged.length} staged + ${unstaged.length} unstaged)`;
-          const optCancel = "Cancel";
 
           const choice = await ctx.ui.select(
             "Staged and unstaged changes detected",
-            [optOnlyStaged, optOnlyUnstaged, optStageAll, optCancel]
+            [optOnlyStaged, optOnlyUnstaged, optStageAll]
           );
 
-          if (!choice || choice === optCancel) {
+          if (!choice) {
             ctx.ui.notify("Commit cancelled.", "info");
             return;
           }

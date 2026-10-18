@@ -47,14 +47,23 @@ export async function handleBranchCommand(args: string, ctx: ExtensionCommandCon
     const branches = (await execGit(["branch", "--sort=-committerdate"], cwd))
       .split("\n")
       .map((b) => b.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((b) => {
+        const isCurrent = b.startsWith("*");
+        const clean = b.replace(/^\*\s*/, "").trim();
+        return isCurrent ? `${clean} (current)` : clean;
+      });
 
     if (ctx.hasUI) {
       const selected = await ctx.ui.select(`Current branch: ${currentBranch}. Switch to:`, branches);
       if (selected) {
-        const cleanName = selected.replace(/^\*\s*/, "").trim();
-        await execGit(["switch", cleanName], cwd);
-        ctx.ui.notify(`Switched to '${cleanName}'`, "info");
+        const cleanName = selected.replace(/\s+\(current\)$/, "").trim();
+        if (cleanName === currentBranch) {
+          ctx.ui.notify(`Already on branch '${cleanName}'`, "info");
+        } else {
+          await execGit(["switch", cleanName], cwd);
+          ctx.ui.notify(`Switched to '${cleanName}'`, "info");
+        }
       }
     } else {
       process.stdout.write(`Current branch: ${currentBranch}\n\n${branches.join("\n")}\n`);
@@ -71,14 +80,23 @@ export async function handleBranchCommand(args: string, ctx: ExtensionCommandCon
       const rawBranches = (await execGit(["branch", "--sort=-committerdate"], cwd))
         .split("\n")
         .map((b) => b.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((b) => {
+          const isCurrent = b.startsWith("*");
+          const clean = b.replace(/^\*\s*/, "").trim();
+          return isCurrent ? `${clean} (current)` : clean;
+        });
 
       if (ctx.hasUI && rawBranches.length > 0) {
         const selected = await ctx.ui.select(`Switch branch (current: ${currentBranch}):`, rawBranches);
         if (selected) {
-          const cleanName = selected.replace(/^\*\s*/, "").trim();
-          await execGit(["switch", cleanName], cwd);
-          ctx.ui.notify(`Switched to '${cleanName}'`, "info");
+          const cleanName = selected.replace(/\s+\(current\)$/, "").trim();
+          if (cleanName === currentBranch) {
+            ctx.ui.notify(`Already on branch '${cleanName}'`, "info");
+          } else {
+            await execGit(["switch", cleanName], cwd);
+            ctx.ui.notify(`Switched to '${cleanName}'`, "info");
+          }
         }
       }
       return;

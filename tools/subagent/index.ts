@@ -184,13 +184,11 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
 
   const items = jobs.map((j) => {
     const elapsed = (((j.endTime ?? Date.now()) - j.startTime) / 1000).toFixed(1);
-    const icon = j.status === "running" ? "⚡" : j.status === "escalated" ? "▲" : j.status === "completed" ? "✓" : "✗";
-    const iconSpace = icon === "⚡" ? "" : " ";
     let desc = j.description;
     if (j.status === "escalated" && j.escalation) {
       desc = `[${j.escalation.reason}] ${desc}`;
     }
-    return `${icon}${iconSpace}[${j.id}] ${j.status.toUpperCase()} (${elapsed}s, ${j.turns} turns) - ${desc}`;
+    return `[${j.id}] ${j.status.toUpperCase()} (${elapsed}s, ${j.turns} turns) - ${desc}`;
   });
 
   if (ctx.hasUI) {
