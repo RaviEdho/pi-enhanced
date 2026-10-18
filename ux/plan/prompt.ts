@@ -5,15 +5,25 @@
 export function getPlanModeDirective(options?: {
   askUserEnabled?: boolean;
   scoutEnabled?: boolean;
+  webEnabled?: boolean;
 } | boolean): string {
   const askUserEnabled =
     typeof options === "boolean" ? options : (options?.askUserEnabled ?? true);
   const scoutEnabled =
     typeof options === "boolean" ? true : (options?.scoutEnabled ?? true);
+  const webEnabled =
+    typeof options === "boolean" ? true : (options?.webEnabled ?? true);
 
-  const searchTools = scoutEnabled
-    ? "read, find, grep, multi_grep, web_search, web_fetch, safe read-only bash"
-    : "read, web_search, web_fetch, safe read-only bash";
+  const toolsList: string[] = ["read"];
+  if (scoutEnabled) {
+    toolsList.push("find", "grep", "multi_grep");
+  }
+  if (webEnabled) {
+    toolsList.push("web_search", "web_fetch");
+  }
+  toolsList.push("safe read-only bash");
+
+  const searchTools = toolsList.join(", ");
 
   const feedbackSnippet = askUserEnabled
     ? " and feedback tool (ask_user)"

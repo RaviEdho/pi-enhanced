@@ -8,6 +8,8 @@ export interface EnhancedSettings {
   "scout.enabled": boolean;
   /** Transparently intercept shell grep/find/rg commands and steer LLM to scout. */
   "scout.interceptShell": boolean;
+  /** Multi-provider web search and content fetch tools (web_search, web_fetch). */
+  "web.enabled": boolean;
   /** Allow LLM to ask user clarification questions and 3 choices interactively. */
   "feedback.askUser": boolean;
   /** Display live quota consumption and time progress bars in status footer. */
@@ -63,6 +65,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     label: "Scout Shell Interceptor",
     category: "Tools & Filters",
     description: "Intercept shell grep/find/rg commands and steer LLM to fast in-memory scout tools",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "web.enabled": {
+    key: "web.enabled",
+    label: "Web Search & Fetch",
+    category: "Tools & Filters",
+    description: "Multi-provider web search & extraction (web_search, web_fetch). Disabling drops schemas & busts cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -152,6 +162,7 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
   "scout.enabled": SETTING_DEFINITIONS["scout.enabled"].defaultValue,
   "scout.interceptShell": SETTING_DEFINITIONS["scout.interceptShell"].defaultValue,
+  "web.enabled": SETTING_DEFINITIONS["web.enabled"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,
   "usage.contextFormat": SETTING_DEFINITIONS["usage.contextFormat"].defaultValue,

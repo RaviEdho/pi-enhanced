@@ -5,6 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { isWebActive } from "./index.js";
 import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
 import type { SearchProviderId } from "./types.js";
 
@@ -78,6 +79,19 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       "Search the live web for up-to-date documentation, APIs, code samples, and current events beyond training cutoff. Supports Google operators (site:, after:, before:, \"quotes\", -exclusions). Automatically fails over across configured search engines (Brave, Tavily, Google Antigravity, TinyFish, Exa, Parallel).",
     parameters: WebSearchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      if (!isWebActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Web search and fetch tools are currently disabled for this session ('web.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       const { SearchPipeline } = await import("./pipeline.js");
       const { formatSearchResponseForLLM } = await import("./formatter.js");
       const pipeline = SearchPipeline.getInstance();
@@ -225,6 +239,19 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
       "Fetch and extract clean Markdown content from any web page, documentation article, or blog post. Automatically handles JavaScript-rendered SPAs and anti-bot challenges with multi-provider failover (TinyFish, Parallel, Exa, Tavily, Jina Reader).",
     parameters: WebFetchParametersSchema,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      if (!isWebActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Web search and fetch tools are currently disabled for this session ('web.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       const { FetchPipeline } = await import("./fetch/pipeline.js");
       const pipeline = FetchPipeline.getInstance();
 

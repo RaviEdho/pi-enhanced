@@ -14,6 +14,7 @@ import {
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
+import { isWebActive } from "../../tools/web/index.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   SETTING_DEFINITIONS,
@@ -22,7 +23,7 @@ import {
 } from "./types.js";
 
 interface CacheWarningState {
-  settingKey: "feedback.askUser" | "scout.enabled" | "subagent.enabled";
+  settingKey: "feedback.askUser" | "scout.enabled" | "subagent.enabled" | "web.enabled";
   toolLabel: string;
   contextTokens: number;
   selectedOption: number; // 0 = Keep enabled (recommended), 1 = Proceed and disable
@@ -59,6 +60,7 @@ export class EnhancedSettingsComponent implements Component {
     const scoutActive = isScoutActive();
     const feedbackActive = isFeedbackToolActive();
     const subagentActive = isSubagentActive();
+    const webActive = isWebActive();
 
     // Build setting items mapped from definitions
     this.items = (
@@ -73,6 +75,8 @@ export class EnhancedSettingsComponent implements Component {
         currentRaw = scoutActive;
       } else if (def.key === "subagent.enabled") {
         currentRaw = subagentActive;
+      } else if (def.key === "web.enabled") {
+        currentRaw = webActive;
       }
 
       let currentValue =
@@ -492,9 +496,12 @@ export class EnhancedSettingsComponent implements Component {
       return;
     }
 
-    // Check mid-run prompt cache invalidation warning for ask_user, scout tools, or subagent tools
+    // Check mid-run prompt cache invalidation warning for ask_user, scout tools, subagent tools, or web tools
     if (
-      (key === "feedback.askUser" || key === "scout.enabled" || key === "subagent.enabled") &&
+      (key === "feedback.askUser" ||
+        key === "scout.enabled" ||
+        key === "subagent.enabled" ||
+        key === "web.enabled") &&
       newValue === "disabled"
     ) {
       const tokens = this.getContextTokens();
@@ -504,6 +511,8 @@ export class EnhancedSettingsComponent implements Component {
           toolLabel = "'ask_user'";
         } else if (key === "scout.enabled") {
           toolLabel = "Scout search tools ('find', 'grep', 'multi_grep')";
+        } else if (key === "web.enabled") {
+          toolLabel = "Web search & fetch tools ('web_search', 'web_fetch')";
         } else {
           toolLabel = "Subagent tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
         }

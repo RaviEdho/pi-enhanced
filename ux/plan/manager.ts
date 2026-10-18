@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getPlanModeDirective, PLAN_MODE_DIRECTIVE } from "./prompt.js";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
+import { isWebActive } from "../../tools/web/index.js";
 import { isSafeBashCommand } from "./safe-bash.js";
 import type { PlanModeState } from "./types.js";
 
@@ -281,6 +282,7 @@ export class PlanModeManager {
     return getPlanModeDirective({
       askUserEnabled: isFeedbackToolActive(),
       scoutEnabled: isScoutActive(),
+      webEnabled: isWebActive(),
     });
   }
 
