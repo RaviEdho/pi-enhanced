@@ -140,6 +140,7 @@ pi-enhanced/
 │   │   ├── index.ts            # /subagent and /jobs commands, tool registration
 │   │   ├── jobs.ts             # BackgroundJobManager: non-blocking job registry, TUI widget, follow-up injection
 │   │   ├── runner.ts           # runSubagent in-process runner with model/thinking inheritance
+│   │   ├── loader.ts           # SubagentBorderedLoader: native cancellable loader for sync runs
 │   │   ├── tools.ts            # subagent, subagent_status, subagent_list, subagent_cancel tool definitions
 │   │   └── types.ts            # Subagent types & schemas
 │   └── index.ts                # registerTools aggregator
@@ -160,6 +161,8 @@ pi-enhanced/
 │   │   ├── prompt.ts           # System directives for Plan Mode and Implement Mode
 │   │   ├── safe-bash.ts        # Shell command allowlist/blocklist safety classifier
 │   │   └── types.ts            # PlanModeState schema
+│   │   ├── editor.ts           # Plan custom editor component with Amber border palette
+│   │   ├── gate.ts             # Human-in-the-loop plan approval gate
 │   ├── settings/               # Enhanced settings configuration subsystem & /settings-enhanced
 │   │   ├── command.ts          # /settings-enhanced command dispatcher (TUI vs non-TUI)
 │   │   ├── component.ts        # EnhancedSettingsComponent: SettingsList with live toggles
@@ -230,9 +233,16 @@ pi-enhanced/
 
 ---
 
+   - **Standardized Selection & Radio Indicator**: All choice lists and selectors must align with Pi's native selection conventions (`→ ` selection arrow / `theme.cursor`). Avoid redundant or competing leading glyphs (such as `*`, `▶`, `■`, or status icons/emojis) at the beginning of choice strings that clash with the selection arrow; use clean text labels and suffix tags (e.g. `(current)`, `(active)`) instead. In custom modal components, always render selection indicators using `→ ` (matching `theme.cursor`), not `>` or `*`.
 ## Testing Workflow
 
-### 1. Verification Commands
+### 1. Transient Verification Commands (No Test Files)
+Do not create persistent test files. Validate changes using type checking and live transient CLI executions:
+
+8. **No Persistent Test Files**:
+   - Do **NOT** write, commit, or persist unit test files (`*.test.ts`, `*.spec.ts`, `tests/`, `__tests__/`).
+   - Verify behavior transiently: test dynamically using headless `pi -e ./index.ts -p "..."` runs, live interactive CLI checks, or temporary inline one-liners. Always clean up any ephemeral test scripts before completing the task.
+
 ```bash
 # Typecheck TypeScript files
 npm run typecheck
@@ -245,9 +255,10 @@ pi install .
 
 # Verify active models
 pi --list-models
+# Test slash commands headlessly
+pi -e ./index.ts -p "/settings-enhanced list"
+pi -e ./index.ts -p "/usage"
 
-# Test commands
-pi -p "/usage"
 ```
 
 ---
