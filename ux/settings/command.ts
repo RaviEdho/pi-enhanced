@@ -109,13 +109,13 @@ export async function handleSettingsEnhancedCommand(
       const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
 
       if (isEnabling) {
-        if (key === "scout.interceptShell" && !store.get("scout.enabled")) {
-          const msg = "Cannot enable 'scout.interceptShell' while Scout search tools are disabled ('scout.enabled' is disabled). Please enable 'scout.enabled' first.";
-          if (ctx.hasUI) ctx.ui.notify(msg, "error");
-          else console.error(msg);
+        store.set(key, true as any);
+        if (key === "scout.interceptShell" && !isScoutActive()) {
+          const note = "Set scout.interceptShell = enabled (Note: interceptor remains dormant while Scout search tools are disabled).";
+          if (ctx.hasUI) ctx.ui.notify(note, "info");
+          else console.log(note);
           return;
         }
-        store.set(key, true as any);
       } else if (isDisabling) {
         if (key === "feedback.askUser" || key === "scout.enabled") {
           const usage = ctx.getContextUsage?.();

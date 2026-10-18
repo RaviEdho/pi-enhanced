@@ -69,8 +69,6 @@ export class EnhancedSettingsComponent implements Component {
         currentRaw = feedbackActive;
       } else if (def.key === "scout.enabled") {
         currentRaw = scoutActive;
-      } else if (def.key === "scout.interceptShell" && !scoutActive) {
-        currentRaw = false;
       }
 
       let currentValue =
@@ -84,10 +82,8 @@ export class EnhancedSettingsComponent implements Component {
       let description = def.description;
 
       if (def.key === "scout.interceptShell" && !scoutActive) {
-        currentValue = "disabled";
-        options = ["disabled"];
         description =
-          "Intercept shell grep/find/rg commands (Locked: requires Scout Search Tools to be enabled)";
+          "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
       }
 
       return {
@@ -450,10 +446,8 @@ export class EnhancedSettingsComponent implements Component {
   private handleSettingChange(id: string, newValue: string): void {
     const key = id as EnhancedSettingKey;
 
-    // Guard: scout.interceptShell cannot be enabled if scout search tools are disabled
+    // Guard: scout.interceptShell cannot be toggled while scout search tools are disabled
     if (key === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
-      this.settingsList.updateValue("scout.interceptShell", "disabled");
-      this.tui.requestRender();
       return;
     }
 
@@ -492,13 +486,9 @@ export class EnhancedSettingsComponent implements Component {
     if (!interceptItem) return;
 
     if (!scoutEnabled) {
-      this.settingsList.updateValue("scout.interceptShell", "disabled");
-      interceptItem.currentValue = "disabled";
-      interceptItem.values = ["disabled"];
       interceptItem.description =
-        "Intercept shell grep/find/rg commands (Locked: requires Scout Search Tools to be enabled)";
+        "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
     } else {
-      interceptItem.values = ["enabled", "disabled"];
       interceptItem.description =
         SETTING_DEFINITIONS["scout.interceptShell"].description;
     }
