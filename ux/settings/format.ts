@@ -29,10 +29,9 @@ export function formatEnhancedSettings(
   lines.push("");
 
   const categories: Array<SettingDefinition["category"]> = [
-    "Tools & Filters",
+    "Agent Tools",
     "UX & Telemetry",
     "Multi-Account",
-    "Subagent",
   ];
 
   for (const cat of categories) {
