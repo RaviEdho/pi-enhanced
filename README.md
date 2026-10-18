@@ -239,7 +239,8 @@ The tool is enabled by default, but can be completely disabled via `/settings-en
 /settings-enhanced set feedback.askUser disabled
 ```
 - When disabled, the tool definition is completely removed from the model's active tool list and prompt instructions.
-- **Prompt Cache Protection**: If disabled mid-session when the active context has at least 10,000 tokens (`≥ 10k`), an explicit warning modal prompts for confirmation to prevent accidental prefix prompt cache invalidation and token cost spikes.
+- **Session Memory & Cache Protection**: Just like Pi remembers model selections on past sessions, toggling `feedback.askUser` applies to **future/new sessions**. Resuming an existing long session automatically remembers its initial tool configuration, preserving 100% prefix prompt cache hits on past conversations!
+- **Prompt Cache Warning Gate**: If you explicitly disable `ask_user` mid-session when the active context has at least 10,000 tokens (`≥ 10k`), an explicit warning modal prompts for confirmation to prevent accidental prefix prompt cache invalidation and token cost spikes.
 
 ## Development
 
