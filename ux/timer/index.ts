@@ -325,14 +325,29 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   let timer: NodeJS.Timeout | undefined;
   let run: RunMetrics | undefined;
   let turnActive = false;
+  let activeCtx: ExtensionContext | undefined;
+
+  const isWorkingTelemetryEnabled = (): boolean => {
+    return EnhancedSettingsStore.getInstance().get("timer.showWorkingTelemetry");
+  };
 
   const updateMessage = (ctx: ExtensionContext) => {
-    if (!ctx.hasUI || !run) return;
+    if (!ctx.hasUI) return;
+    if (!isWorkingTelemetryEnabled()) {
+      ctx.ui.setWorkingMessage();
+      return;
+    }
+    if (!run) return;
     ctx.ui.setWorkingMessage(buildWorkingMessage(run, Date.now()));
   };
 
   const startTimer = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
+    if (!isWorkingTelemetryEnabled()) {
+      pauseTimer();
+      ctx.ui.setWorkingMessage();
+      return;
+    }
     updateMessage(ctx);
     if (!timer) {
       timer = setInterval(() => {
@@ -353,12 +368,29 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     pauseTimer();
     run = undefined;
     turnActive = false;
+    activeCtx = undefined;
     if (ctx.hasUI) {
       ctx.ui.setWorkingMessage();
     }
   };
 
+  EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
+    if (changedKey === "timer.showWorkingTelemetry" && activeCtx) {
+      if (isWorkingTelemetryEnabled()) {
+        if (run && turnActive) {
+          startTimer(activeCtx);
+        }
+      } else {
+        pauseTimer();
+        if (activeCtx.hasUI) {
+          activeCtx.ui.setWorkingMessage();
+        }
+      }
+    }
+  });
+
   pi.on("agent_start", async (_event, ctx) => {
+    activeCtx = ctx;
     if (!run) {
       run = createRunMetrics(Date.now());
     }
@@ -366,6 +398,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   });
 
   pi.on("turn_start", async (_event, ctx) => {
+    activeCtx = ctx;
     const now = Date.now();
     if (!run) {
       run = createRunMetrics(now);
@@ -382,6 +415,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   });
 
   pi.on("message_update", async (event, ctx) => {
+    activeCtx = ctx;
     if (!run) return;
     const message = event.message;
     if (message.role !== "assistant") return;
@@ -440,6 +474,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   });
 
   pi.on("message_end", async (event, ctx) => {
+    activeCtx = ctx;
     if (!run) return;
     const message = event.message;
     if (message.role !== "assistant") return;

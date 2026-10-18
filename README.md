@@ -147,6 +147,7 @@ Configurable options include:
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
 - `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
+- `timer.showWorkingTelemetry`: Live working spinner duration, token count & speed telemetry (`enabled` / `disabled`)
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
 - `subagent.defaultMode`: Default execution mode for `/subagent` (`background` / `sync`)

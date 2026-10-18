@@ -12,6 +12,8 @@ export interface EnhancedSettings {
   "usage.contextFormat": ContextUsageFormat;
   /** Append turn summary telemetry (duration, tokens, speed) after settled turns. */
   "timer.showSummary": boolean;
+  /** Display live duration, token count, TTFT, and decoding speed in the working spinner. */
+  "timer.showWorkingTelemetry": boolean;
   /** Enable literal dot "." prompt continuation shortcut. */
   "continue.dotShortcut": boolean;
   /** Automatically failover to next eligible account on HTTP 429 rate limit. */
@@ -74,6 +76,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
+  "timer.showWorkingTelemetry": {
+    key: "timer.showWorkingTelemetry",
+    label: "Live Working Telemetry",
+    category: "UX & Telemetry",
+    description: "Display live duration, token count, TTFT, and decoding speed in the working spinner",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
   "continue.dotShortcut": {
     key: "continue.dotShortcut",
     label: "Continue Shortcut (.)",
@@ -114,6 +124,7 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,
   "usage.contextFormat": SETTING_DEFINITIONS["usage.contextFormat"].defaultValue,
   "timer.showSummary": SETTING_DEFINITIONS["timer.showSummary"].defaultValue,
+  "timer.showWorkingTelemetry": SETTING_DEFINITIONS["timer.showWorkingTelemetry"].defaultValue,
   "continue.dotShortcut": SETTING_DEFINITIONS["continue.dotShortcut"].defaultValue,
   "balancer.failoverOn429": SETTING_DEFINITIONS["balancer.failoverOn429"].defaultValue,
   "balancer.paceBalancing": SETTING_DEFINITIONS["balancer.paceBalancing"].defaultValue,
