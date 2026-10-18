@@ -16,20 +16,32 @@ export interface ScoutSessionState {
 }
 
 let activeSessionEnabled: boolean | undefined = undefined;
+let savedPi: ExtensionAPI | undefined = undefined;
 
 /**
  * Returns whether Scout search tools are active for the current session.
  * Prefers the session-persisted state to protect prompt caches on resumed sessions,
- * falling back to the global setting in enhanced-settings.json for new sessions.
+ * falling back to active tools in the session, or the global setting in enhanced-settings.json.
  */
 export function isScoutActive(): boolean {
   if (activeSessionEnabled !== undefined) {
     return activeSessionEnabled;
   }
+  if (savedPi) {
+    try {
+      const active = savedPi.getActiveTools();
+      if (active && active.length > 0) {
+        return active.includes("find");
+      }
+    } catch {
+      // Non-fatal if session runner not yet initialized
+    }
+  }
   return EnhancedSettingsStore.getInstance().get("scout.enabled");
 }
 
 export function registerScout(pi: ExtensionAPI): void {
+  savedPi = pi;
   // Register core search tools
   pi.registerTool(createFindToolDefinition("find"));
   pi.registerTool(createGrepToolDefinition("grep"));

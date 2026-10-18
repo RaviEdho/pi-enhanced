@@ -11,15 +11,26 @@ export interface FeedbackSessionState {
 }
 
 let activeSessionEnabled: boolean | undefined = undefined;
+let savedPi: ExtensionAPI | undefined = undefined;
 
 /**
  * Returns whether ask_user is active for the current session.
  * Prefers the session-persisted state to protect prompt caches on resumed sessions,
- * falling back to the global setting in enhanced-settings.json for new sessions.
+ * falling back to active tools in the session, or the global setting in enhanced-settings.json.
  */
 export function isFeedbackToolActive(): boolean {
   if (activeSessionEnabled !== undefined) {
     return activeSessionEnabled;
+  }
+  if (savedPi) {
+    try {
+      const active = savedPi.getActiveTools();
+      if (active && active.length > 0) {
+        return active.includes("ask_user");
+      }
+    } catch {
+      // Non-fatal if session runner not yet initialized
+    }
   }
   return EnhancedSettingsStore.getInstance().get("feedback.askUser");
 }
@@ -30,6 +41,7 @@ export function isFeedbackToolActive(): boolean {
  * while reflecting settings changes in future/new sessions.
  */
 export function registerFeedbackTools(pi: ExtensionAPI): void {
+  savedPi = pi;
   pi.registerTool(createAskUserToolDefinition());
 
   const store = EnhancedSettingsStore.getInstance();

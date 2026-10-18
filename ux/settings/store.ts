@@ -7,6 +7,7 @@ import {
   type EnhancedSettingKey,
   type EnhancedSettings,
 } from "./types.js";
+import { isScoutActive } from "../../tools/scout/index.js";
 
 type SettingsChangeListener = (settings: EnhancedSettings, changedKey?: EnhancedSettingKey) => void;
 
@@ -63,7 +64,7 @@ export class EnhancedSettingsStore {
     this.checkExternalChanges();
 
     // Invariant: scout.interceptShell requires scout.enabled to be active
-    if (key === "scout.interceptShell" && value === true && !this.settings["scout.enabled"]) {
+    if (key === "scout.interceptShell" && value === true && !this.settings["scout.enabled"] && !isScoutActive()) {
       return;
     }
 

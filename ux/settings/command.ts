@@ -1,4 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { isFeedbackToolActive } from "../../tools/feedback/index.js";
+import { isScoutActive } from "../../tools/scout/index.js";
 import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
@@ -32,7 +34,13 @@ export async function handleSettingsEnhancedCommand(
 
   // Subcommand: list
   if (action === "list") {
-    const output = formatEnhancedSettings(store.getAll(), store.getFilePath());
+    const activeSettings = store.getAll();
+    activeSettings["feedback.askUser"] = isFeedbackToolActive();
+    activeSettings["scout.enabled"] = isScoutActive();
+    if (!activeSettings["scout.enabled"]) {
+      activeSettings["scout.interceptShell"] = false;
+    }
+    const output = formatEnhancedSettings(activeSettings, store.getFilePath());
     if (ctx.hasUI) {
       ctx.ui.notify(output, "info");
     } else {
@@ -55,8 +63,22 @@ export async function handleSettingsEnhancedCommand(
       return;
     }
 
-    const val = store.get(key);
-    const formatted = `${key} = ${formatSettingValue(key, val)}`;
+    let val = store.get(key);
+    let note = "";
+    if (key === "feedback.askUser") {
+      const active = isFeedbackToolActive();
+      if (active !== val) {
+        val = active as any;
+        note = " (session active)";
+      }
+    } else if (key === "scout.enabled") {
+      const active = isScoutActive();
+      if (active !== val) {
+        val = active as any;
+        note = " (session active)";
+      }
+    }
+    const formatted = `${key} = ${formatSettingValue(key, val)}${note}`;
     if (ctx.hasUI) {
       ctx.ui.notify(formatted, "info");
     } else {
@@ -146,6 +168,12 @@ export async function handleSettingsEnhancedCommand(
   }
 
   // Non-TUI mode fallback: print settings overview
-  const output = formatEnhancedSettings(store.getAll(), store.getFilePath());
+  const activeSettings = store.getAll();
+  activeSettings["feedback.askUser"] = isFeedbackToolActive();
+  activeSettings["scout.enabled"] = isScoutActive();
+  if (!activeSettings["scout.enabled"]) {
+    activeSettings["scout.interceptShell"] = false;
+  }
+  const output = formatEnhancedSettings(activeSettings, store.getFilePath());
   console.log(output);
 }

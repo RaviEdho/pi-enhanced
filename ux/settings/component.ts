@@ -11,6 +11,8 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { isFeedbackToolActive } from "../../tools/feedback/index.js";
+import { isScoutActive } from "../../tools/scout/index.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   SETTING_DEFINITIONS,
@@ -53,13 +55,24 @@ export class EnhancedSettingsComponent implements Component {
     this.onDone = onDone;
     this.ctx = ctx;
     this.store = EnhancedSettingsStore.getInstance();
-    const scoutEnabled = this.store.get("scout.enabled");
+    const scoutActive = isScoutActive();
+    const feedbackActive = isFeedbackToolActive();
 
     // Build setting items mapped from definitions
     this.items = (
       Object.values(SETTING_DEFINITIONS) as SettingDefinition[]
     ).map((def) => {
-      const currentRaw = this.store.get(def.key);
+      let currentRaw = this.store.get(def.key);
+
+      // Reflect session-persisted tool states so settings view matches active session reality
+      if (def.key === "feedback.askUser") {
+        currentRaw = feedbackActive;
+      } else if (def.key === "scout.enabled") {
+        currentRaw = scoutActive;
+      } else if (def.key === "scout.interceptShell" && !scoutActive) {
+        currentRaw = false;
+      }
+
       let currentValue =
         typeof currentRaw === "boolean"
           ? currentRaw
@@ -70,7 +83,7 @@ export class EnhancedSettingsComponent implements Component {
       let options = [...def.options];
       let description = def.description;
 
-      if (def.key === "scout.interceptShell" && !scoutEnabled) {
+      if (def.key === "scout.interceptShell" && !scoutActive) {
         currentValue = "disabled";
         options = ["disabled"];
         description =
@@ -181,7 +194,7 @@ export class EnhancedSettingsComponent implements Component {
     let listLines = this.settingsList.render(width);
 
     // If Scout search tools are disabled, render the interceptor setting row in faded dim color
-    if (!this.store.get("scout.enabled")) {
+    if (!this.isScoutCurrentlyEnabled()) {
       listLines = listLines.map((line) => {
         const clean = stripTerminalSequences(line);
         if (clean.includes("Scout Shell Interceptor")) {
@@ -303,6 +316,9 @@ export class EnhancedSettingsComponent implements Component {
     // Left Arrow (\x1b[D): Cycle value backward when not typing inside search query
     if (data === "\x1b[D" && searchVal.length === 0) {
       const currentItem = displayItems[anyList.selectedIndex];
+      if (currentItem?.id === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
+        return true;
+      }
       if (currentItem && currentItem.values && currentItem.values.length > 1) {
         const curIdx = currentItem.values.indexOf(currentItem.currentValue);
         const prevIdx =
@@ -318,6 +334,9 @@ export class EnhancedSettingsComponent implements Component {
     // Right Arrow (\x1b[C): Cycle value forward when not typing inside search query
     if (data === "\x1b[C" && searchVal.length === 0) {
       const currentItem = displayItems[anyList.selectedIndex];
+      if (currentItem?.id === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
+        return true;
+      }
       if (currentItem && currentItem.values && currentItem.values.length > 1) {
         const curIdx = currentItem.values.indexOf(currentItem.currentValue);
         const nextIdx = (curIdx + 1) % currentItem.values.length;
@@ -396,11 +415,19 @@ export class EnhancedSettingsComponent implements Component {
     return undefined;
   }
 
+  private isScoutCurrentlyEnabled(): boolean {
+    const scoutItem = this.items?.find((i) => i.id === "scout.enabled");
+    if (scoutItem) {
+      return scoutItem.currentValue === "enabled";
+    }
+    return isScoutActive();
+  }
+
   /**
    * Automatically jumps past unselectable/locked items (such as scout.interceptShell when scout is disabled).
    */
   private skipUnselectableItems(direction: "down" | "up"): void {
-    if (this.store.get("scout.enabled")) return;
+    if (this.isScoutCurrentlyEnabled()) return;
 
     const anyList = this.settingsList as any;
     const displayItems: SettingItem[] = anyList.getDisplayItems
@@ -424,7 +451,7 @@ export class EnhancedSettingsComponent implements Component {
     const key = id as EnhancedSettingKey;
 
     // Guard: scout.interceptShell cannot be enabled if scout search tools are disabled
-    if (key === "scout.interceptShell" && !this.store.get("scout.enabled")) {
+    if (key === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
       this.settingsList.updateValue("scout.interceptShell", "disabled");
       this.tui.requestRender();
       return;
