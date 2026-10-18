@@ -8,6 +8,7 @@ import { externalFind, externalGrep, externalMultiGrep } from "./external.js";
 import { formatFindOutput, formatGrepOutput } from "./formatter.js";
 import { FrecencyTracker } from "./frecency.js";
 import { FileIndexer } from "./indexer.js";
+import { isScoutActive } from "./index.js";
 
 const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
@@ -285,6 +286,13 @@ export function createFindToolDefinition(name = "find"): ToolDefinition<typeof f
       `Use ${name} to locate files by fuzzy name or path instead of running bash (find, ls, locate, fd). Supports constraints like 'git:modified', '*.ts', '!test/'. Automatically ranks active and recently edited files highest.`,
     ],
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!isScoutActive()) {
+        return {
+          content: [{ type: "text", text: "Scout search tools are currently disabled for this session ('scout.enabled': false). Please use shell commands (find/grep/ls) instead." }],
+          details: undefined,
+          isError: true,
+        };
+      }
       const cwd = ctx?.cwd || process.cwd();
       const res = await executeFind(params, cwd);
       return {
@@ -323,6 +331,13 @@ export function createGrepToolDefinition(name = "grep"): ToolDefinition<typeof g
       `Use ${name} to search code contents instead of running bash (rg, ripgrep, grep, ag). Returns compressed, definition-first results to minimize context size. Tolerates typos and automatically matches case.`,
     ],
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!isScoutActive()) {
+        return {
+          content: [{ type: "text", text: "Scout search tools are currently disabled for this session ('scout.enabled': false). Please use shell commands (find/grep/ls) instead." }],
+          details: undefined,
+          isError: true,
+        };
+      }
       const cwd = ctx?.cwd || process.cwd();
       const res = await executeGrep(params, cwd);
       return {
@@ -383,6 +398,13 @@ export function createMultiGrepToolDefinition(name = "multi_grep"): ToolDefiniti
       return textComponent;
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!isScoutActive()) {
+        return {
+          content: [{ type: "text", text: "Scout search tools are currently disabled for this session ('scout.enabled': false). Please use shell commands (find/grep/ls) instead." }],
+          details: undefined,
+          isError: true,
+        };
+      }
       const cwd = ctx?.cwd || process.cwd();
       if (params.path && shouldDelegateToExternal(params.path, cwd)) {
         const { matches, totalMatched } = await externalMultiGrep(params.patterns, {

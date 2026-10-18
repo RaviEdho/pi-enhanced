@@ -4,6 +4,8 @@ export type ContextUsageFormat = "pi" | "pi-enhanced" | "off";
 export interface EnhancedSettings {
   /** Enable token output compressor for noisy bash/powershell outputs. */
   "compressor.enabled": boolean;
+  /** In-memory code search engine exposing find, grep, and multi_grep tools. */
+  "scout.enabled": boolean;
   /** Transparently intercept shell grep/find/rg commands and steer LLM to scout. */
   "scout.interceptShell": boolean;
   /** Allow LLM to ask user clarification questions and 3 choices interactively. */
@@ -43,6 +45,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     label: "Output Compressor",
     category: "Tools & Filters",
     description: "Compress noisy bash/powershell outputs (tests, git, linters) before model context",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "scout.enabled": {
+    key: "scout.enabled",
+    label: "Scout Search Tools",
+    category: "Tools & Filters",
+    description: "In-memory search tools (find, grep, multi_grep). Disabling mid-session drops schemas & busts cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -130,6 +140,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
 
 export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
+  "scout.enabled": SETTING_DEFINITIONS["scout.enabled"].defaultValue,
   "scout.interceptShell": SETTING_DEFINITIONS["scout.interceptShell"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,

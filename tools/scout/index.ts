@@ -1,4 +1,5 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { registerSearchInterceptor } from "./interceptor.js";
 import {
   createFindToolDefinition,
@@ -6,47 +7,157 @@ import {
   createMultiGrepToolDefinition,
 } from "./tools.js";
 
+const SEARCH_TOOL_NAMES = ["find", "grep", "multi_grep"];
+export const SCOUT_TOOL_SESSION_ENTRY = "scout-tool-session-state";
+
+export interface ScoutSessionState {
+  enabled: boolean;
+  timestamp: number;
+}
+
+let activeSessionEnabled: boolean | undefined = undefined;
+
+/**
+ * Returns whether Scout search tools are active for the current session.
+ * Prefers the session-persisted state to protect prompt caches on resumed sessions,
+ * falling back to the global setting in enhanced-settings.json for new sessions.
+ */
+export function isScoutActive(): boolean {
+  if (activeSessionEnabled !== undefined) {
+    return activeSessionEnabled;
+  }
+  return EnhancedSettingsStore.getInstance().get("scout.enabled");
+}
+
 export function registerScout(pi: ExtensionAPI): void {
   // Register core search tools
   pi.registerTool(createFindToolDefinition("find"));
   pi.registerTool(createGrepToolDefinition("grep"));
   pi.registerTool(createMultiGrepToolDefinition("multi_grep"));
 
-  const searchToolNames = ["find", "grep", "multi_grep"];
+  const store = EnhancedSettingsStore.getInstance();
 
-  function activateSearchTools(): void {
+  function syncSearchTools(enabled?: boolean): void {
+    const isEnabled = enabled !== undefined ? enabled : isScoutActive();
     try {
       const current = pi.getActiveTools();
-      const toAdd = searchToolNames.filter((name) => !current.includes(name));
-      if (toAdd.length > 0) {
-        pi.setActiveTools([...current, ...toAdd]);
+      if (isEnabled) {
+        const toAdd = SEARCH_TOOL_NAMES.filter((name) => !current.includes(name));
+        if (toAdd.length > 0) {
+          pi.setActiveTools([...current, ...toAdd]);
+        }
+      } else {
+        const remaining = current.filter((name) => !SEARCH_TOOL_NAMES.includes(name));
+        if (remaining.length !== current.length) {
+          pi.setActiveTools(remaining);
+        }
       }
     } catch {
       // Non-fatal if session runner not yet initialized
     }
   }
 
-  activateSearchTools();
+  // Initial sync
+  syncSearchTools();
 
-  // Warm index in the background when session starts and ensure tools are active
-  pi.on("session_start", async () => {
-    try {
-      activateSearchTools();
-      const { FileIndexer } = await import("./indexer.js");
-      const indexer = FileIndexer.getInstance();
-      // Start background scan without blocking startup
-      indexer.scan().catch(() => {});
-    } catch {
-      // Ignore background warmup errors
+  // Session lifecycle: restore session-scoped state to protect prompt cache on resumed sessions
+  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    const entries = ctx.sessionManager?.getEntries?.() || [];
+
+    // 1. Look for explicit persisted session state
+    const lastSessionEntry = [...entries]
+      .reverse()
+      .find(
+        (e) =>
+          e.type === "custom" &&
+          ((e as any).customType === SCOUT_TOOL_SESSION_ENTRY ||
+            (e as any).name === SCOUT_TOOL_SESSION_ENTRY)
+      );
+
+    const customEntry = lastSessionEntry as any;
+    if (
+      customEntry?.data &&
+      typeof customEntry.data.enabled === "boolean"
+    ) {
+      activeSessionEnabled = customEntry.data.enabled;
+    } else {
+      // 2. Check if this is an existing session with past conversation history
+      const hasPriorConversation = entries.some(
+        (e: any) =>
+          e.type === "message" ||
+          e.type === "custom_message" ||
+          e.role === "user" ||
+          e.role === "assistant"
+      );
+
+      if (hasPriorConversation) {
+        // Existing session: keep enabled to preserve prefix prompt cache hits!
+        activeSessionEnabled = true;
+      } else {
+        // 3. New session: adopt the user's global setting from enhanced-settings.json
+        activeSessionEnabled = store.get("scout.enabled");
+        try {
+          pi.appendEntry(SCOUT_TOOL_SESSION_ENTRY, {
+            enabled: activeSessionEnabled,
+            timestamp: Date.now(),
+          } satisfies ScoutSessionState);
+        } catch {
+          // Ignore if session tree is not yet writable
+        }
+      }
+    }
+
+    syncSearchTools(activeSessionEnabled);
+
+    // Warm index in background only if Scout is enabled for this session
+    if (activeSessionEnabled) {
+      try {
+        const { FileIndexer } = await import("./indexer.js");
+        const indexer = FileIndexer.getInstance();
+        indexer.scan().catch(() => {});
+      } catch {
+        // Ignore background warmup errors
+      }
+    }
+  });
+
+  // Dynamic setting toggles
+  store.onChange((settings, changedKey) => {
+    if (!changedKey || changedKey === "scout.enabled") {
+      const newEnabled = settings["scout.enabled"];
+      activeSessionEnabled = newEnabled;
+      syncSearchTools(newEnabled);
+
+      try {
+        pi.appendEntry(SCOUT_TOOL_SESSION_ENTRY, {
+          enabled: newEnabled,
+          timestamp: Date.now(),
+        } satisfies ScoutSessionState);
+      } catch {
+        // Non-fatal
+      }
     }
   });
 
   // Inject system prompt rules and guidelines nudging agent to use in-memory search tools over bash
   pi.on("before_agent_start", (event) => {
+    const isEnabled = isScoutActive();
+
+    // If disabled: completely prune search tools from active tools, toolSnippets, and prompt guidelines
+    if (!isEnabled) {
+      if (event.systemPromptOptions?.selectedTools) {
+        event.systemPromptOptions.selectedTools = event.systemPromptOptions.selectedTools.filter(
+          (name) => !SEARCH_TOOL_NAMES.includes(name)
+        );
+      }
+      syncSearchTools(false);
+      return;
+    }
+
     if (!event.systemPromptOptions) return;
 
     if (event.systemPromptOptions.selectedTools) {
-      for (const name of searchToolNames) {
+      for (const name of SEARCH_TOOL_NAMES) {
         if (!event.systemPromptOptions.selectedTools.includes(name)) {
           event.systemPromptOptions.selectedTools.push(name);
         }
@@ -118,39 +229,41 @@ export function registerScout(pi: ExtensionAPI): void {
     handler: handleRescan,
   });
 
-  // Health command
+  // Health check command for scout index
   const handleHealth = async (_args: string | undefined, ctx: any) => {
     const { FileIndexer } = await import("./indexer.js");
-    const { FrecencyTracker } = await import("./frecency.js");
     const indexer = FileIndexer.getInstance(ctx.cwd);
-    const frecency = FrecencyTracker.getInstance();
-    await indexer.scan();
-    const filesCount = indexer.getIndexedFileCount();
+    const count = indexer.getIndexedFileCount();
     const gitCount = indexer.getGitModifiedCount();
-    const frecencyCount = frecency.getTrackedCount();
-    const memUsageMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    const memoryKb = Math.round(process.memoryUsage().heapUsed / 1024);
+    const active = isScoutActive();
+    const statusStr = active ? "Active" : "Disabled";
 
-    const report = [
-      "Scout Search Engine Status:",
-      `  Indexed files:    ${filesCount}`,
-      `  Git changes:      ${gitCount} active files`,
-      `  Frecency memory:  ${frecencyCount} tracked entries`,
-      `  Heap memory:      ~${memUsageMb} MB`,
-    ].join("\n");
-
+    const lines = [
+      `Scout Search Engine Health (${statusStr}):`,
+      `  Files Indexed:   ${count}`,
+      `  Git Tracked:     ${gitCount}`,
+      `  Process Heap:    ${memoryKb} KB`,
+      `  Indexed Exts:    ts, js, json, md, rs, py, go, c, cpp, h, toml, yaml...`,
+    ];
+    const msg = lines.join("\n");
     if (ctx.hasUI && ctx.mode === "tui") {
-      ctx.ui.notify(report, "info");
+      ctx.ui.notify(msg, "info");
     } else {
-      console.log(report);
+      console.log(msg);
     }
   };
 
   pi.registerCommand("scout-health", {
-    description: "Display scout search engine health, indexed file counts, and frecency memory",
+    description: "Display health, file count, and memory metrics for Scout index",
     handler: handleHealth,
   });
 }
 
-// Backward-compatible alias
-export const registerSmartSearch = registerScout;
-
+export { FileIndexer } from "./indexer.js";
+export { FrecencyTracker } from "./frecency.js";
+export {
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createMultiGrepToolDefinition,
+} from "./tools.js";

@@ -2,7 +2,19 @@
  * System prompt directives for Plan Mode and Implement Mode.
  */
 
-export function getPlanModeDirective(askUserEnabled = true): string {
+export function getPlanModeDirective(options?: {
+  askUserEnabled?: boolean;
+  scoutEnabled?: boolean;
+} | boolean): string {
+  const askUserEnabled =
+    typeof options === "boolean" ? options : (options?.askUserEnabled ?? true);
+  const scoutEnabled =
+    typeof options === "boolean" ? true : (options?.scoutEnabled ?? true);
+
+  const searchTools = scoutEnabled
+    ? "read, find, grep, multi_grep, web_search, web_fetch, safe read-only bash"
+    : "read, web_search, web_fetch, safe read-only bash";
+
   const feedbackSnippet = askUserEnabled
     ? " and feedback tool (ask_user)"
     : "";
@@ -17,7 +29,7 @@ You are currently operating in Plan Mode — a safe, read-only exploration and a
 Operating Rules:
 1. READ-ONLY SANDBOX:
    - File modification tools (edit, write) and mutating shell commands (rm, git commit, npm install, redirection >, etc.) are strictly disabled.
-   - Use inspection tools (read, find, grep, multi_grep, web_search, web_fetch, safe read-only bash)${feedbackSnippet} to inspect code and gather user requirements.
+   - Use inspection tools (${searchTools})${feedbackSnippet} to inspect code and gather user requirements.
 
 2. CLARIFY & EXPLORE FREELY:
 ${clarifyRule}

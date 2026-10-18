@@ -87,14 +87,23 @@ export async function handleSettingsEnhancedCommand(
       const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
 
       if (isEnabling) {
+        if (key === "scout.interceptShell" && !store.get("scout.enabled")) {
+          const msg = "Cannot enable 'scout.interceptShell' while Scout search tools are disabled ('scout.enabled' is disabled). Please enable 'scout.enabled' first.";
+          if (ctx.hasUI) ctx.ui.notify(msg, "error");
+          else console.error(msg);
+          return;
+        }
         store.set(key, true as any);
       } else if (isDisabling) {
-        if (key === "feedback.askUser") {
+        if (key === "feedback.askUser" || key === "scout.enabled") {
           const usage = ctx.getContextUsage?.();
           const tokens = usage?.tokens ?? 0;
           if (tokens >= 10_000) {
             const kTok = (tokens / 1000).toFixed(1);
-            const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling 'ask_user' mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
+            const toolName = key === "feedback.askUser"
+              ? "'ask_user'"
+              : "Scout search tools ('find', 'grep', 'multi_grep')";
+            const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling ${toolName} mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
             if (ctx.hasUI) {
               ctx.ui.notify(warn, "warning");
             } else {

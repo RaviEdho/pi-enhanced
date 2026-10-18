@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getPlanModeDirective, PLAN_MODE_DIRECTIVE } from "./prompt.js";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
+import { isScoutActive } from "../../tools/scout/index.js";
 import { isSafeBashCommand } from "./safe-bash.js";
 import type { PlanModeState } from "./types.js";
 
@@ -277,8 +278,10 @@ export class PlanModeManager {
    */
   public getDirective(): string | undefined {
     if (!this.enabled) return undefined;
-    const askUserEnabled = isFeedbackToolActive();
-    return getPlanModeDirective(askUserEnabled);
+    return getPlanModeDirective({
+      askUserEnabled: isFeedbackToolActive(),
+      scoutEnabled: isScoutActive(),
+    });
   }
 
   /**

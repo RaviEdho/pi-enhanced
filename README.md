@@ -143,7 +143,9 @@ Configure `pi-enhanced` subsystems interactively or via CLI commands:
 
 Configurable options include:
 - `compressor.enabled`: Terminal output compressor for bash/powershell (`enabled` / `disabled`)
+- `scout.enabled`: In-memory code search tools (`find`, `grep`, `multi_grep`) with session cache memory (`enabled` / `disabled`)
 - `scout.interceptShell`: Transparent shell grep/find/rg interception & scout steering (`enabled` / `disabled`)
+- `feedback.askUser`: Interactive human feedback tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)

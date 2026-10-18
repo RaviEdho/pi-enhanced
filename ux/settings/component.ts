@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
+  stripTerminalSequences,
   visibleWidth,
   SettingsList,
   type Component,
@@ -18,6 +19,8 @@ import {
 } from "./types.js";
 
 interface CacheWarningState {
+  settingKey: "feedback.askUser" | "scout.enabled";
+  toolLabel: string;
   contextTokens: number;
   selectedOption: number; // 0 = Keep enabled (recommended), 1 = Proceed and disable
 }
@@ -50,25 +53,36 @@ export class EnhancedSettingsComponent implements Component {
     this.onDone = onDone;
     this.ctx = ctx;
     this.store = EnhancedSettingsStore.getInstance();
+    const scoutEnabled = this.store.get("scout.enabled");
 
     // Build setting items mapped from definitions
     this.items = (
       Object.values(SETTING_DEFINITIONS) as SettingDefinition[]
     ).map((def) => {
       const currentRaw = this.store.get(def.key);
-      const currentValue =
+      let currentValue =
         typeof currentRaw === "boolean"
           ? currentRaw
             ? "enabled"
             : "disabled"
           : String(currentRaw);
 
+      let options = [...def.options];
+      let description = def.description;
+
+      if (def.key === "scout.interceptShell" && !scoutEnabled) {
+        currentValue = "disabled";
+        options = ["disabled"];
+        description =
+          "Intercept shell grep/find/rg commands (Locked: requires Scout Search Tools to be enabled)";
+      }
+
       return {
         id: def.key,
         label: def.label,
-        description: def.description,
+        description,
         currentValue,
-        values: [...def.options],
+        values: options,
       };
     });
 
@@ -121,7 +135,7 @@ export class EnhancedSettingsComponent implements Component {
         "  " +
           this.theme.fg(
             "text",
-            "Disabling 'ask_user' mid-session removes its tool definition and busts your prefix prompt cache."
+            `Disabling ${this.cacheWarning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`
           )
       );
       lines.push(
@@ -164,7 +178,19 @@ export class EnhancedSettingsComponent implements Component {
     lines.push(header);
 
     // 2. Settings list (contains search input + items + description + native hint line)
-    const listLines = this.settingsList.render(width);
+    let listLines = this.settingsList.render(width);
+
+    // If Scout search tools are disabled, render the interceptor setting row in faded dim color
+    if (!this.store.get("scout.enabled")) {
+      listLines = listLines.map((line) => {
+        const clean = stripTerminalSequences(line);
+        if (clean.includes("Scout Shell Interceptor")) {
+          return this.theme.fg("dim", clean);
+        }
+        return line;
+      });
+    }
+
     lines.push(...listLines);
 
     // 3. Bottom border
@@ -183,7 +209,7 @@ export class EnhancedSettingsComponent implements Component {
         data === "\x1b" ||
         data === "\x03"
       ) {
-        this.settingsList.updateValue("feedback.askUser", "enabled");
+        this.settingsList.updateValue(this.cacheWarning.settingKey, "enabled");
         this.cacheWarning = undefined;
         this.tui.requestRender();
         return true;
@@ -207,10 +233,13 @@ export class EnhancedSettingsComponent implements Component {
       if (matchesKey(data, "enter") || data === "\r" || data === "\n" || data === " ") {
         if (this.cacheWarning.selectedOption === 0) {
           // Revert to enabled
-          this.settingsList.updateValue("feedback.askUser", "enabled");
+          this.settingsList.updateValue(this.cacheWarning.settingKey, "enabled");
         } else {
           // Proceed with disabling
-          this.store.set("feedback.askUser", false);
+          this.store.set(this.cacheWarning.settingKey, false);
+          if (this.cacheWarning.settingKey === "scout.enabled") {
+            this.syncScoutInterceptorItem(false);
+          }
         }
         this.cacheWarning = undefined;
         this.tui.requestRender();
@@ -254,6 +283,7 @@ export class EnhancedSettingsComponent implements Component {
     if (data === "\t" || data === "\x09") {
       if (displayItems.length > 0) {
         anyList.selectedIndex = (anyList.selectedIndex + 1) % displayItems.length;
+        this.skipUnselectableItems("down");
         this.tui.requestRender();
         return true;
       }
@@ -264,6 +294,7 @@ export class EnhancedSettingsComponent implements Component {
       if (displayItems.length > 0) {
         anyList.selectedIndex =
           (anyList.selectedIndex - 1 + displayItems.length) % displayItems.length;
+        this.skipUnselectableItems("up");
         this.tui.requestRender();
         return true;
       }
@@ -301,6 +332,7 @@ export class EnhancedSettingsComponent implements Component {
     // PageUp (\x1b[5~): Jump selection up by 5
     if (data === "\x1b[5~") {
       anyList.selectedIndex = Math.max(0, anyList.selectedIndex - 5);
+      this.skipUnselectableItems("up");
       this.tui.requestRender();
       return true;
     }
@@ -311,6 +343,7 @@ export class EnhancedSettingsComponent implements Component {
         displayItems.length - 1,
         anyList.selectedIndex + 5
       );
+      this.skipUnselectableItems("down");
       this.tui.requestRender();
       return true;
     }
@@ -330,7 +363,17 @@ export class EnhancedSettingsComponent implements Component {
     }
 
     // Delegate to native SettingsList (handles text typing, arrow navigation, Enter/Space)
+    const isMovingUp = matchesKey(data, "up") || data === "k" || data === "\x1b[A";
+    const isMovingDown = matchesKey(data, "down") || data === "j" || data === "\x1b[B";
+
     this.settingsList.handleInput?.(data);
+
+    if (isMovingUp) {
+      this.skipUnselectableItems("up");
+    } else if (isMovingDown) {
+      this.skipUnselectableItems("down");
+    }
+
     this.tui.requestRender();
     return true;
   }
@@ -344,6 +387,7 @@ export class EnhancedSettingsComponent implements Component {
       };
       const result = this.settingsList.handleMouse?.(adjustedEvent);
       if (result) {
+        this.skipUnselectableItems("down");
         this.tui.requestRender();
         return result;
       }
@@ -352,14 +396,50 @@ export class EnhancedSettingsComponent implements Component {
     return undefined;
   }
 
+  /**
+   * Automatically jumps past unselectable/locked items (such as scout.interceptShell when scout is disabled).
+   */
+  private skipUnselectableItems(direction: "down" | "up"): void {
+    if (this.store.get("scout.enabled")) return;
+
+    const anyList = this.settingsList as any;
+    const displayItems: SettingItem[] = anyList.getDisplayItems
+      ? anyList.getDisplayItems()
+      : this.items;
+
+    if (!displayItems || displayItems.length === 0) return;
+
+    const currentItem = displayItems[anyList.selectedIndex];
+    if (currentItem?.id === "scout.interceptShell") {
+      if (direction === "down") {
+        anyList.selectedIndex = (anyList.selectedIndex + 1) % displayItems.length;
+      } else {
+        anyList.selectedIndex =
+          (anyList.selectedIndex - 1 + displayItems.length) % displayItems.length;
+      }
+    }
+  }
+
   private handleSettingChange(id: string, newValue: string): void {
     const key = id as EnhancedSettingKey;
 
-    // Check mid-run prompt cache invalidation warning for ask_user
-    if (key === "feedback.askUser" && newValue === "disabled") {
+    // Guard: scout.interceptShell cannot be enabled if scout search tools are disabled
+    if (key === "scout.interceptShell" && !this.store.get("scout.enabled")) {
+      this.settingsList.updateValue("scout.interceptShell", "disabled");
+      this.tui.requestRender();
+      return;
+    }
+
+    // Check mid-run prompt cache invalidation warning for ask_user or scout tools
+    if ((key === "feedback.askUser" || key === "scout.enabled") && newValue === "disabled") {
       const tokens = this.getContextTokens();
       if (tokens >= 10_000) {
+        const toolLabel = key === "feedback.askUser"
+          ? "'ask_user'"
+          : "Scout search tools ('find', 'grep', 'multi_grep')";
         this.cacheWarning = {
+          settingKey: key,
+          toolLabel,
           contextTokens: tokens,
           selectedOption: 0,
         };
@@ -371,8 +451,32 @@ export class EnhancedSettingsComponent implements Component {
     if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
-      this.store.set(key, (newValue === "enabled") as any);
+      const enabled = newValue === "enabled";
+      this.store.set(key, enabled as any);
+
+      if (key === "scout.enabled") {
+        this.syncScoutInterceptorItem(enabled);
+      }
     }
+  }
+
+  private syncScoutInterceptorItem(scoutEnabled: boolean): void {
+    const interceptItem = this.items.find((i) => i.id === "scout.interceptShell");
+    if (!interceptItem) return;
+
+    if (!scoutEnabled) {
+      this.settingsList.updateValue("scout.interceptShell", "disabled");
+      interceptItem.currentValue = "disabled";
+      interceptItem.values = ["disabled"];
+      interceptItem.description =
+        "Intercept shell grep/find/rg commands (Locked: requires Scout Search Tools to be enabled)";
+    } else {
+      interceptItem.values = ["enabled", "disabled"];
+      interceptItem.description =
+        SETTING_DEFINITIONS["scout.interceptShell"].description;
+    }
+    this.settingsList.invalidate();
+    this.tui.requestRender();
   }
 
   private getContextTokens(): number {

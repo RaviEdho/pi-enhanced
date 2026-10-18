@@ -61,11 +61,28 @@ export class EnhancedSettingsStore {
    */
   public set<K extends EnhancedSettingKey>(key: K, value: EnhancedSettings[K]): void {
     this.checkExternalChanges();
+
+    // Invariant: scout.interceptShell requires scout.enabled to be active
+    if (key === "scout.interceptShell" && value === true && !this.settings["scout.enabled"]) {
+      return;
+    }
+
     if (this.settings[key] === value) return;
 
     this.settings[key] = value;
+
+    // Disabling scout search tools automatically cascades to disabling shell interceptor
+    let cascadeInterceptor = false;
+    if (key === "scout.enabled" && value === false && this.settings["scout.interceptShell"]) {
+      this.settings["scout.interceptShell"] = false;
+      cascadeInterceptor = true;
+    }
+
     this.save();
     this.notify(key);
+    if (cascadeInterceptor) {
+      this.notify("scout.interceptShell");
+    }
   }
 
   /**
@@ -137,6 +154,11 @@ export class EnhancedSettingsStore {
               target[key] = rawVal;
             }
           }
+        }
+
+        // Invariant: if scout search tools are disabled, shell interceptor must remain disabled
+        if (!this.settings["scout.enabled"]) {
+          this.settings["scout.interceptShell"] = false;
         }
       }
     } catch (err) {
