@@ -217,12 +217,19 @@ pi-enhanced/
 6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight & "Perfect Provider" Standard)**:
    - **Always audit provider documentation and API completeness before writing any integration code.**
    - **The "Perfect Provider" Qualification Rules**:
-     For a provider to be deemed qualified or ideal for addition into `pi-enhanced`, they must adhere to two core API standards:
+     For a provider to be deemed qualified or ideal for addition into `pi-enhanced`, they must adhere to three core API standards:
      1. **Dynamic Model Discovery with Pricing & Reasoning Capabilities**:
         - Must provide an API that queries available models dynamically.
         - Per-token pricing (input, output, cache read/write) and available reasoning effort sliders/levels (e.g. `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) must be clearly visible and extractable.
         - *Bonus points*: The catalog endpoint accepts an authentication key or bearer token and filters the response strictly to the models accessible under that specific credential's subscription plan tier (eliminating phantom model choices and runtime 403/404 errors).
-     2. **Parseable Usage, Quota & Reset Mechanics (`/usage` Readiness)**:
+     2. **Programmatic Plan & Subscription Differentiation**:
+        - Must provide an unambiguous, programmatic mechanism for the extension to determine the account's active plan tier (e.g. `pay-as-you-go` / `prepaid`, `pro`, `max`, `team`, `enterprise`, etc.).
+        - Acceptable discovery mechanisms include:
+          - Dedicated subscription, account, or billing endpoints (e.g. `/v1/me`, `/v1/subscription`, `/v1/account`, `/billing/credits`).
+          - Decodable OAuth token claims (e.g. JWT claims like `chatgpt_plan_type`, `tier`, or plan IDs).
+          - Live usage/quota payload fields that return the active plan or product name.
+        - *Why this is mandatory*: Without programmatic plan identification, the extension cannot know which quota windows apply (e.g. weekly subscription allowance vs. non-expiring prepaid credits), which model tiers or priority rate limits are active, or how to truthfully format reset countdowns in the status footer and `/usage` view without guessing or fabricating data.
+     3. **Parseable Usage, Quota & Reset Mechanics (`/usage` Readiness)**:
         - Must provide an API exposing usage, remaining quota, and reset timings. It does not need to be standardized, but it must be reliably parseable so we can integrate it directly into the `/usage` module and status footer.
         - Must show available or consumed quota alongside when the quota resets.
         - Must identify the provider's exact reset architecture:
