@@ -490,10 +490,16 @@ export async function stashStagedChanges(
   return { stashSha, purelyStaged, decoupledFiles, overlappingCollisions };
 }
 
+export interface RestoreStashResult {
+  conflicts: string[];
+}
+
 export async function restoreStashedChanges(
   state: StashedState,
   cwd: string
-): Promise<void> {
+): Promise<RestoreStashResult> {
+  const conflicts: string[] = [];
+
   // 1. Restore purely staged files from stash index ($stashSha^2)
   if (state.purelyStaged.length > 0) {
     try {
@@ -507,16 +513,82 @@ export async function restoreStashedChanges(
     }
   }
 
-  // 2. Restore decoupled files:
-  // The newly committed HEAD contains the bugfix.
-  // Restore the original worktree content from stashSha, and re-stage the remaining unfinalized feature work!
+  // 2. Restore decoupled files using 3-way merge:
+  // The newly committed HEAD contains the latter unstaged changes.
+  // We perform a 3-way merge:
+  // - Base: state.stashSha^1:<file> (original HEAD before any commits)
+  // - Current: worktree <file> (which has the newly committed HEAD version)
+  // - Other: state.stashSha^2:<file> (the older, staged changes)
   if (state.decoupledFiles.length > 0) {
+    let tempDir = "";
     try {
-      await execGit(["restore", "-s", state.stashSha, "--worktree", "--", ...state.decoupledFiles], cwd);
-      await execGit(["add", "--", ...state.decoupledFiles], cwd);
-    } catch (err: any) {
-      const cleanErr = err?.stderr?.trim() || err?.message || String(err);
-      throw new Error(cleanErr);
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-merge-"));
+    } catch {
+      tempDir = "";
+    }
+
+    try {
+      for (const file of state.decoupledFiles) {
+        let baseContent = "";
+        try {
+          baseContent = await execGit(["show", `${state.stashSha}^1:${file}`], cwd);
+        } catch {
+          baseContent = "";
+        }
+
+        let stagedContent = "";
+        try {
+          stagedContent = await execGit(["show", `${state.stashSha}^2:${file}`], cwd);
+        } catch {
+          stagedContent = "";
+        }
+
+        if (!tempDir) {
+          // Fallback if tempDir failed: restore worktree from stashSha
+          await execGit(["restore", "-s", state.stashSha, "--worktree", "--", file], cwd);
+          await execGit(["add", "--", file], cwd);
+          continue;
+        }
+
+        const baseFile = path.join(tempDir, `base_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+        const stagedFile = path.join(tempDir, `staged_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+        await fs.writeFile(baseFile, baseContent, "utf8");
+        await fs.writeFile(stagedFile, stagedContent, "utf8");
+
+        const targetFilePath = path.isAbsolute(file) ? file : path.join(cwd, file);
+
+        let hasConflict = false;
+        try {
+          await execGit(
+            ["merge-file", "-L", "HEAD", "-L", "base", "-L", "staged", targetFilePath, baseFile, stagedFile],
+            cwd
+          );
+        } catch {
+          // git merge-file exits with positive integer (conflict count) if conflicts occur
+          hasConflict = true;
+          conflicts.push(file);
+        }
+
+        if (!hasConflict) {
+          // Re-stage the cleanly merged changes so the older staged changes are staged against new HEAD!
+          await execGit(["add", "--", file], cwd);
+        }
+
+        try {
+          await fs.unlink(baseFile);
+          await fs.unlink(stagedFile);
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      if (tempDir) {
+        try {
+          await fs.rm(tempDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 
@@ -526,6 +598,8 @@ export async function restoreStashedChanges(
   } catch {
     // ignore
   }
+
+  return { conflicts };
 }
 
 export async function rollbackStashedChanges(

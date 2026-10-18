@@ -157,11 +157,15 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
 
         if (action.type === "stashed") {
           try {
-            await restoreStashedChanges(action.state, cwd);
+            const { conflicts } = await restoreStashedChanges(action.state, cwd);
             let msg = "Restored unfinalized staged changes.";
             if (action.state.decoupledFiles.length > 0) {
               const fileList = action.state.decoupledFiles.join(", ");
               msg += ` Re-staged unfinalized changes in ${fileList} on top of the new commit.`;
+            }
+            if (conflicts.length > 0) {
+              const conflictList = conflicts.join(", ");
+              msg += ` Warning: Merge conflict in ${conflictList}; conflict markers left in working tree for review.`;
             }
             return msg;
           } catch (err) {
