@@ -241,6 +241,16 @@ function buildUsageBar(ctx: ExtensionContext): string {
     return `${prefix}  ${segments.join(" · ")}`;
   }
 
+  // Charm Hyper: show remaining Hypercredit balance and Sunday reset countdown (or prepaid status)
+  // without a synthetic 0% progress bar since credits represent a balance pool rather than a fractional window.
+  if (report.providerId === "hyper") {
+    const balancePart = report.capacitySummary || `${primary.displayName}: ${primary.description || ""}`;
+    const resetPart = primary.resetTime
+      ? ` · resets ${formatRelativeTime(primary.resetTime, now)}`
+      : "";
+    return `${prefix}  ${balancePart}${resetPart}`;
+  }
+
   const usedPct = Math.round(primary.usedFraction * 100);
   const timeElapsed = computeTimeElapsedFraction(
     primary.resetTime,

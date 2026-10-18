@@ -119,6 +119,11 @@ export function extractCooldownMs(error: unknown): number {
     }
   }
 
+  // Depleted credits, payment required, or billing errors: back off for 1 hour to prevent re-hammering
+  if (/402|insufficient.?hypercredits|billing_error|payment.?required/i.test(msg)) {
+    return 60 * 60 * 1000;
+  }
+
   return DEFAULT_COOLDOWN_MS;
 }
 

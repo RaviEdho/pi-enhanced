@@ -3,15 +3,26 @@ import type { CreditsResponse } from "../../providers/hyper/types.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
 
 /**
+ * Calculates the next Sunday 00:00 UTC timestamp.
+ * Subscriptions (Shred and Business) reset their weekly Hypercredit allowance
+ * every Sunday at 00:00 UTC.
+ */
+export function getNextSundayMidnightUtc(now = new Date()): Date {
+  const next = new Date(now.getTime());
+  const day = next.getUTCDay(); // 0 is Sunday
+  const daysUntilNextSunday = day === 0 ? 7 : (7 - day);
+  next.setUTCDate(next.getUTCDate() + daysUntilNextSunday);
+  next.setUTCHours(0, 0, 0, 0);
+  return next;
+}
+
+/**
  * Fetches the remaining Hypercredit balance from Charm Hyper.
  *
  * Hyper retired its free monthly grant (previously 100 HC/month): Shred
  * subscriptions now provide weekly allowances resetting every Sunday 00:00 UTC,
- * and prepaid credits never expire. The credits endpoint only exposes the
- * current balance — no allowance or reset timestamps — so this report is a
- * plain balance view without a depletable window. Legacy accounts created
- * before the change may still carry a "free" planType; it is no longer echoed
- * since that plan no longer exists.
+ * Business subscriptions provide higher weekly allowances with ZDR, and
+ * prepaid credits never expire.
  */
 export async function fetchHyperUsage(
   token: string,
@@ -66,19 +77,32 @@ export async function fetchHyperUsage(
       };
     }
 
-    // 1 Hypercredit = 5¢. The API exposes no allowance, consumption, or reset
-    // metadata, so usage fractions cannot be derived honestly — surface the
-    // remaining balance as-is instead of fabricating a window.
+    // 1 Hypercredit = 5¢.
     const usdVal = (balance * 0.05).toFixed(2);
     const formattedBalance = Number.isInteger(balance) ? balance.toString() : balance.toFixed(2);
+
+    const isSubscription =
+      displayPlan?.toLowerCase() === "shred" || displayPlan?.toLowerCase() === "business";
+    const nextSunday = getNextSundayMidnightUtc(new Date(fetchedAt));
+    const window = isSubscription ? "weekly" : "balance";
+    const windowSeconds = isSubscription ? 7 * 24 * 3600 : undefined;
+    const resetTime = isSubscription ? nextSunday.toISOString() : undefined;
+
+    const resetDesc = isSubscription
+      ? "Resets Sunday 00:00 UTC"
+      : displayPlan?.toLowerCase() === "prepaid"
+        ? "Prepaid (never expires)"
+        : "Available balance";
 
     const bucket: QuotaBucket = {
       bucketId: "hypercredits",
       displayName: "Credits",
-      window: "balance",
+      window,
+      windowSeconds,
       usedFraction: 0,
       remainingFraction: 1,
-      description: `${formattedBalance} Hypercredits available ($${usdVal})`,
+      resetTime,
+      description: `${formattedBalance} Hypercredits available ($${usdVal}) · ${resetDesc}`,
     };
 
     return {

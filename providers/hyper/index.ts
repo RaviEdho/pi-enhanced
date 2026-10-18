@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import {
   AccountBalancer,
   AccountStore,
@@ -21,12 +22,86 @@ import {
 } from "./oauth.js";
 import { streamHyper } from "./stream.js";
 
+function prismLabel(value: string | undefined): string | undefined {
+  return value !== undefined &&
+    value.trim() !== "" &&
+    value.length <= 200 &&
+    !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
+    ? value.trim()
+    : undefined;
+}
+
 /**
  * Registers Charm Hyper inference provider with dynamic model discovery and multi-account failover.
  */
 export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
+
+  let collectingPrismRoute = false;
+  let prismRoute: { modelName: string | undefined; modelId: string | undefined } | undefined;
+
+  // Render Prism meta-routing indication (e.g. "Prism → DeepSeek V4.1 Flash")
+  pi.registerEntryRenderer("hyper-prism-route", (entry, _options, theme) => {
+    const data = entry.data;
+    if (typeof data !== "object" || data === null) return undefined;
+    const modelName =
+      "modelName" in data && typeof data.modelName === "string" ? prismLabel(data.modelName) : undefined;
+    const modelId =
+      "modelId" in data && typeof data.modelId === "string" ? prismLabel(data.modelId) : undefined;
+    const label = modelName ?? modelId;
+    if (label) {
+      return new Text(
+        `${theme.fg("muted", "Prism")} ${theme.fg("dim", "→")} ${theme.fg("muted", label)}`,
+        0,
+        0
+      );
+    }
+    return undefined;
+  });
+
+  pi.on("turn_start", () => {
+    collectingPrismRoute = true;
+    prismRoute = undefined;
+  });
+
+  pi.on("after_provider_response", (event) => {
+    if (!collectingPrismRoute) return;
+    const modelName = prismLabel(event.headers?.["x-prism-model-name"]);
+    const modelId = prismLabel(event.headers?.["x-prism-model-id"]);
+    if (modelName || modelId) {
+      prismRoute = { modelName, modelId };
+    }
+  });
+
+  pi.on("message_end", (event) => {
+    if (event.message.role === "assistant") {
+      collectingPrismRoute = false;
+    }
+  });
+
+  pi.on("turn_end", (event) => {
+    const route = prismRoute;
+    prismRoute = undefined;
+    collectingPrismRoute = false;
+    if (
+      event.message.role !== "assistant" ||
+      event.message.provider !== HYPER_PROVIDER_ID ||
+      event.message.stopReason === "error" ||
+      event.message.stopReason === "aborted"
+    ) {
+      return undefined;
+    }
+    if (route) {
+      return {
+        entries: [
+          ...event.entries,
+          { type: "custom", customType: "hyper-prism-route", data: route },
+        ],
+      };
+    }
+    return undefined;
+  });
 
   // Always load from disk cache first, falling back to offline defaults.
   // Live discovery happens through refreshModels(): Pi invokes it during model
@@ -63,9 +138,7 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
           activeToken = (context.credential as { access: string }).access;
         }
       }
-      if (!activeToken) {
-        return loadCachedModels() || hyperModels;
-      }
+      // Hyper models endpoints (/v1/provider and /v1/models) are public; fetch live catalog even if unauthenticated
       const live = await fetchHyperModels(activeToken, context?.signal);
       return live && live.length > 0 ? live : (loadCachedModels() || hyperModels);
     },

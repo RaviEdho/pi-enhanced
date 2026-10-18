@@ -256,7 +256,9 @@ function formatBucketEntry(
 
   let detailStr = "";
   if (report.providerId === "hyper" && report.capacitySummary) {
-    detailStr = report.capacitySummary;
+    detailStr = bucket.resetTime
+      ? `${report.capacitySummary} · reset ${formatRelativeTime(bucket.resetTime, now)}`
+      : report.capacitySummary;
   } else if (bucket.usedFraction <= 0) {
     detailStr = "ready";
   } else if (bucket.resetTime) {
@@ -265,9 +267,11 @@ function formatBucketEntry(
     detailStr = report.capacitySummary;
   }
 
-  const metric = detailStr
-    ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
-    : pctColored;
+  const metric = report.providerId === "hyper" && detailStr
+    ? dim(detailStr)
+    : detailStr
+      ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
+      : pctColored;
 
   const full = `${bar}   ${metric}`;
   const visibleLen = barWidth + 3 + visibleWidth(metric);
