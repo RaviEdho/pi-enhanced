@@ -214,9 +214,22 @@ pi-enhanced/
 5. **Type Safety**:
    - Always run `npm run typecheck` before committing.
 
-6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight)**:
+6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight & "Perfect Provider" Standard)**:
    - **Always audit provider documentation and API completeness before writing any integration code.**
-   - Inspect and evaluate the following facets:
+   - **The "Perfect Provider" Qualification Rules**:
+     For a provider to be deemed qualified or ideal for addition into `pi-enhanced`, they must adhere to two core API standards:
+     1. **Dynamic Model Discovery with Pricing & Reasoning Capabilities**:
+        - Must provide an API that queries available models dynamically.
+        - Per-token pricing (input, output, cache read/write) and available reasoning effort sliders/levels (e.g. `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) must be clearly visible and extractable.
+        - *Bonus points*: The catalog endpoint accepts an authentication key or bearer token and filters the response strictly to the models accessible under that specific credential's subscription plan tier (eliminating phantom model choices and runtime 403/404 errors).
+     2. **Parseable Usage, Quota & Reset Mechanics (`/usage` Readiness)**:
+        - Must provide an API exposing usage, remaining quota, and reset timings. It does not need to be standardized, but it must be reliably parseable so we can integrate it directly into the `/usage` module and status footer.
+        - Must show available or consumed quota alongside when the quota resets.
+        - Must identify the provider's exact reset architecture:
+          - **Global / Bulk Reset**: Fixed-schedule all-at-once replenishment (e.g. daily at 00:00 UTC, weekly on Sundays at 00:00 UTC, monthly billing boundaries).
+          - **Rolling Window Reset**: Continuous replenishment where older requests/tokens roll off after a sliding duration (e.g. 5-hour rolling window, 24-hour sliding window, per-minute request replenishment).
+   - **Audit Evaluation Checklist**:
+     Inspect and evaluate the following facets during pre-flight:
      - **Inference & Wire Protocols**: OpenAI / Anthropic compatibility, streaming (SSE), tool calling, reasoning effort translations, structured outputs, embeddings, etc.
      - **Dynamic Model Catalog**: Endpoints for discovering active models/pricing dynamically to avoid hardcoding model lists.
      - **Usage, Quotas & Cost Tracking**: Inline token/cost fields, balance endpoints (`/credits`), settled exports, and `/usage` monitor integration potential.
