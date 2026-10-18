@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
+import { isSubagentActive } from "../../tools/subagent/index.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   SETTING_DEFINITIONS,
@@ -21,7 +22,7 @@ import {
 } from "./types.js";
 
 interface CacheWarningState {
-  settingKey: "feedback.askUser" | "scout.enabled";
+  settingKey: "feedback.askUser" | "scout.enabled" | "subagent.enabled";
   toolLabel: string;
   contextTokens: number;
   selectedOption: number; // 0 = Keep enabled (recommended), 1 = Proceed and disable
@@ -57,6 +58,7 @@ export class EnhancedSettingsComponent implements Component {
     this.store = EnhancedSettingsStore.getInstance();
     const scoutActive = isScoutActive();
     const feedbackActive = isFeedbackToolActive();
+    const subagentActive = isSubagentActive();
 
     // Build setting items mapped from definitions
     this.items = (
@@ -69,6 +71,8 @@ export class EnhancedSettingsComponent implements Component {
         currentRaw = feedbackActive;
       } else if (def.key === "scout.enabled") {
         currentRaw = scoutActive;
+      } else if (def.key === "subagent.enabled") {
+        currentRaw = subagentActive;
       }
 
       let currentValue =
@@ -84,6 +88,9 @@ export class EnhancedSettingsComponent implements Component {
       if (def.key === "scout.interceptShell" && !scoutActive) {
         description =
           "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
+      } else if (def.key === "subagent.defaultMode" && !subagentActive) {
+        description =
+          "Default execution mode for isolated subagents (Dormant: requires Subagent Routine to be enabled)";
       }
 
       return {
@@ -200,6 +207,17 @@ export class EnhancedSettingsComponent implements Component {
       });
     }
 
+    // If Subagent tools are disabled, render the subagent default mode row in faded dim color
+    if (!this.isSubagentCurrentlyEnabled()) {
+      listLines = listLines.map((line) => {
+        const clean = stripTerminalSequences(line);
+        if (clean.includes("Subagent Default Mode")) {
+          return this.theme.fg("dim", clean);
+        }
+        return line;
+      });
+    }
+
     lines.push(...listLines);
 
     // 3. Bottom border
@@ -248,6 +266,8 @@ export class EnhancedSettingsComponent implements Component {
           this.store.set(this.cacheWarning.settingKey, false);
           if (this.cacheWarning.settingKey === "scout.enabled") {
             this.syncScoutInterceptorItem(false);
+          } else if (this.cacheWarning.settingKey === "subagent.enabled") {
+            this.syncSubagentModeItem(false);
           }
         }
         this.cacheWarning = undefined;
@@ -315,6 +335,9 @@ export class EnhancedSettingsComponent implements Component {
       if (currentItem?.id === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
         return true;
       }
+      if (currentItem?.id === "subagent.defaultMode" && !this.isSubagentCurrentlyEnabled()) {
+        return true;
+      }
       if (currentItem && currentItem.values && currentItem.values.length > 1) {
         const curIdx = currentItem.values.indexOf(currentItem.currentValue);
         const prevIdx =
@@ -331,6 +354,9 @@ export class EnhancedSettingsComponent implements Component {
     if (data === "\x1b[C" && searchVal.length === 0) {
       const currentItem = displayItems[anyList.selectedIndex];
       if (currentItem?.id === "scout.interceptShell" && !this.isScoutCurrentlyEnabled()) {
+        return true;
+      }
+      if (currentItem?.id === "subagent.defaultMode" && !this.isSubagentCurrentlyEnabled()) {
         return true;
       }
       if (currentItem && currentItem.values && currentItem.values.length > 1) {
@@ -419,12 +445,19 @@ export class EnhancedSettingsComponent implements Component {
     return isScoutActive();
   }
 
+  private isSubagentCurrentlyEnabled(): boolean {
+    const subItem = this.items?.find((i) => i.id === "subagent.enabled");
+    if (subItem) {
+      return subItem.currentValue === "enabled";
+    }
+    return isSubagentActive();
+  }
+
   /**
-   * Automatically jumps past unselectable/locked items (such as scout.interceptShell when scout is disabled).
+   * Automatically jumps past unselectable/locked items (such as scout.interceptShell when scout is disabled,
+   * or subagent.defaultMode when subagent is disabled).
    */
   private skipUnselectableItems(direction: "down" | "up"): void {
-    if (this.isScoutCurrentlyEnabled()) return;
-
     const anyList = this.settingsList as any;
     const displayItems: SettingItem[] = anyList.getDisplayItems
       ? anyList.getDisplayItems()
@@ -433,7 +466,10 @@ export class EnhancedSettingsComponent implements Component {
     if (!displayItems || displayItems.length === 0) return;
 
     const currentItem = displayItems[anyList.selectedIndex];
-    if (currentItem?.id === "scout.interceptShell") {
+    const isScoutDormant = currentItem?.id === "scout.interceptShell" && !this.isScoutCurrentlyEnabled();
+    const isSubagentDormant = currentItem?.id === "subagent.defaultMode" && !this.isSubagentCurrentlyEnabled();
+
+    if (isScoutDormant || isSubagentDormant) {
       if (direction === "down") {
         anyList.selectedIndex = (anyList.selectedIndex + 1) % displayItems.length;
       } else {
@@ -451,13 +487,27 @@ export class EnhancedSettingsComponent implements Component {
       return;
     }
 
-    // Check mid-run prompt cache invalidation warning for ask_user or scout tools
-    if ((key === "feedback.askUser" || key === "scout.enabled") && newValue === "disabled") {
+    // Guard: subagent.defaultMode cannot be toggled while subagents are disabled
+    if (key === "subagent.defaultMode" && !this.isSubagentCurrentlyEnabled()) {
+      return;
+    }
+
+    // Check mid-run prompt cache invalidation warning for ask_user, scout tools, or subagent tools
+    if (
+      (key === "feedback.askUser" || key === "scout.enabled" || key === "subagent.enabled") &&
+      newValue === "disabled"
+    ) {
       const tokens = this.getContextTokens();
       if (tokens >= 10_000) {
-        const toolLabel = key === "feedback.askUser"
-          ? "'ask_user'"
-          : "Scout search tools ('find', 'grep', 'multi_grep')";
+        let toolLabel: string;
+        if (key === "feedback.askUser") {
+          toolLabel = "'ask_user'";
+        } else if (key === "scout.enabled") {
+          toolLabel = "Scout search tools ('find', 'grep', 'multi_grep')";
+        } else {
+          toolLabel = "Subagent tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
+        }
+
         this.cacheWarning = {
           settingKey: key,
           toolLabel,
@@ -477,8 +527,25 @@ export class EnhancedSettingsComponent implements Component {
 
       if (key === "scout.enabled") {
         this.syncScoutInterceptorItem(enabled);
+      } else if (key === "subagent.enabled") {
+        this.syncSubagentModeItem(enabled);
       }
     }
+  }
+
+  private syncSubagentModeItem(subagentEnabled: boolean): void {
+    const modeItem = this.items.find((i) => i.id === "subagent.defaultMode");
+    if (!modeItem) return;
+
+    if (!subagentEnabled) {
+      modeItem.description =
+        "Default execution mode for isolated subagents (Dormant: requires Subagent Routine to be enabled)";
+    } else {
+      modeItem.description =
+        SETTING_DEFINITIONS["subagent.defaultMode"].description;
+    }
+    this.settingsList.invalidate();
+    this.tui.requestRender();
   }
 
   private syncScoutInterceptorItem(scoutEnabled: boolean): void {

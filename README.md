@@ -153,6 +153,7 @@ Configurable options include:
 - `continue.dotShortcut`: Single dot `.` prompt continue shortcut (`enabled` / `disabled`)
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
+- `subagent.enabled`: Autonomous isolated subagent tools (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
 - `subagent.defaultMode`: Default execution mode for `/subagent` (`background` / `sync`)
 
 Settings persist to `~/.pi/agent/enhanced-settings.json`.

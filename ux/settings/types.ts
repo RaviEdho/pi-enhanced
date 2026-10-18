@@ -24,6 +24,8 @@ export interface EnhancedSettings {
   "balancer.failoverOn429": boolean;
   /** Balance account selection using weekly reset pace and perishable credits. */
   "balancer.paceBalancing": boolean;
+  /** Enable autonomous isolated subagent execution (subagent, /subagent, /jobs). */
+  "subagent.enabled": boolean;
   /** Default execution mode for /subagent tasks (background or sync). */
   "subagent.defaultMode": SubagentExecutionMode;
 }
@@ -128,6 +130,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
+  "subagent.enabled": {
+    key: "subagent.enabled",
+    label: "Subagent Routine",
+    category: "Subagent",
+    description: "Autonomous isolated subagent execution (subagent, /subagent, /jobs). Disabling mid-session drops schemas & busts cache",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
   "subagent.defaultMode": {
     key: "subagent.defaultMode",
     label: "Subagent Default Mode",
@@ -150,5 +160,6 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "continue.dotShortcut": SETTING_DEFINITIONS["continue.dotShortcut"].defaultValue,
   "balancer.failoverOn429": SETTING_DEFINITIONS["balancer.failoverOn429"].defaultValue,
   "balancer.paceBalancing": SETTING_DEFINITIONS["balancer.paceBalancing"].defaultValue,
+  "subagent.enabled": SETTING_DEFINITIONS["subagent.enabled"].defaultValue,
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,
 };

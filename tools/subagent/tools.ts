@@ -2,6 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
+import { isSubagentActive } from "./index.js";
 import { jobManager } from "./jobs.js";
 import { runSubagent } from "./runner.js";
 import {
@@ -54,6 +55,19 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       "Delegate a task to an isolated subagent with its own clean context window. Inherits the current model and thinking effort of the parent session. Runs in the background by default (non-blocking, returns jobId) or synchronously (blocking with background: false).",
     parameters: SubagentParametersSchema,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      if (!isSubagentActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Subagent tools are currently disabled for this session ('subagent.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       if (!ctx.model) {
         return {
           content: [
@@ -267,6 +281,19 @@ export function createSubagentStatusToolDefinition(): ToolDefinition<typeof Suba
     description: "Check the progress or output of a running or completed background subagent by its jobId.",
     parameters: SubagentStatusParametersSchema,
     async execute(_toolCallId, params, signal, onUpdate) {
+      if (!isSubagentActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Subagent tools are currently disabled for this session ('subagent.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       let job = jobManager.getJob(params.jobId);
       if (!job) {
         resetConsecutiveStatusPolls();
@@ -520,6 +547,19 @@ export function createSubagentCancelToolDefinition(): ToolDefinition<typeof Suba
     description: "Cancel a running background subagent job.",
     parameters: SubagentCancelParametersSchema,
     async execute(_toolCallId, params) {
+      if (!isSubagentActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Subagent tools are currently disabled for this session ('subagent.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       const cancelled = jobManager.cancelJob(params.jobId);
       if (!cancelled) {
         return {
@@ -590,6 +630,19 @@ export function createSubagentListToolDefinition(): ToolDefinition<typeof Subage
       "List all active and recent background subagent jobs with their status, turn count, duration, and current activity.",
     parameters: SubagentListParametersSchema,
     async execute(_toolCallId, params) {
+      if (!isSubagentActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Subagent tools are currently disabled for this session ('subagent.enabled': false).",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+
       const allJobs = jobManager.listJobs();
       const filter = params.status && params.status !== "all" ? params.status : undefined;
       const jobs = filter ? allJobs.filter((j) => j.status === filter) : allJobs;

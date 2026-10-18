@@ -1,6 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
+import { isSubagentActive } from "../../tools/subagent/index.js";
 import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
@@ -40,6 +41,7 @@ export async function handleSettingsEnhancedCommand(
     if (!activeSettings["scout.enabled"]) {
       activeSettings["scout.interceptShell"] = false;
     }
+    activeSettings["subagent.enabled"] = isSubagentActive();
     const output = formatEnhancedSettings(activeSettings, store.getFilePath());
     if (ctx.hasUI) {
       ctx.ui.notify(output, "info");
@@ -73,6 +75,12 @@ export async function handleSettingsEnhancedCommand(
       }
     } else if (key === "scout.enabled") {
       const active = isScoutActive();
+      if (active !== val) {
+        val = active as any;
+        note = " (session active)";
+      }
+    } else if (key === "subagent.enabled") {
+      const active = isSubagentActive();
       if (active !== val) {
         val = active as any;
         note = " (session active)";
@@ -117,14 +125,19 @@ export async function handleSettingsEnhancedCommand(
           return;
         }
       } else if (isDisabling) {
-        if (key === "feedback.askUser" || key === "scout.enabled") {
+        if (key === "feedback.askUser" || key === "scout.enabled" || key === "subagent.enabled") {
           const usage = ctx.getContextUsage?.();
           const tokens = usage?.tokens ?? 0;
           if (tokens >= 10_000) {
             const kTok = (tokens / 1000).toFixed(1);
-            const toolName = key === "feedback.askUser"
-              ? "'ask_user'"
-              : "Scout search tools ('find', 'grep', 'multi_grep')";
+            let toolName: string;
+            if (key === "feedback.askUser") {
+              toolName = "'ask_user'";
+            } else if (key === "scout.enabled") {
+              toolName = "Scout search tools ('find', 'grep', 'multi_grep')";
+            } else {
+              toolName = "Subagent tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
+            }
             const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling ${toolName} mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
             if (ctx.hasUI) {
               ctx.ui.notify(warn, "warning");
@@ -174,6 +187,7 @@ export async function handleSettingsEnhancedCommand(
   if (!activeSettings["scout.enabled"]) {
     activeSettings["scout.interceptShell"] = false;
   }
+  activeSettings["subagent.enabled"] = isSubagentActive();
   const output = formatEnhancedSettings(activeSettings, store.getFilePath());
   console.log(output);
 }

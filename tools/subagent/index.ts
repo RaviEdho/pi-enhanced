@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager, renderSubagentReportMessage } from "./jobs.js";
 import { SubagentBorderedLoader } from "./loader.js";
@@ -13,11 +13,56 @@ import {
 } from "./tools.js";
 import type { SubagentResult } from "./types.js";
 
+const SUBAGENT_TOOL_NAMES = [
+  "subagent",
+  "subagent_status",
+  "subagent_list",
+  "subagent_cancel",
+];
+export const SUBAGENT_TOOL_SESSION_ENTRY = "subagent-tool-session-state";
+
+export interface SubagentSessionState {
+  enabled: boolean;
+  timestamp: number;
+}
+
+let activeSessionEnabled: boolean | undefined = undefined;
+let savedPi: ExtensionAPI | undefined = undefined;
+
+/**
+ * Returns whether subagent tools are active for the current session.
+ * Prefers the session-persisted state to protect prompt caches on resumed sessions,
+ * falling back to active tools in the session, or the global setting in enhanced-settings.json.
+ */
+export function isSubagentActive(): boolean {
+  if (activeSessionEnabled !== undefined) {
+    return activeSessionEnabled;
+  }
+  if (savedPi) {
+    try {
+      const active = savedPi.getActiveTools();
+      if (active && active.length > 0) {
+        return active.includes("subagent");
+      }
+    } catch {
+      // Non-fatal if session runner not yet initialized
+    }
+  }
+  return EnhancedSettingsStore.getInstance().get("subagent.enabled");
+}
+
 /**
  * Handles the `/subagent [--sync|--fg] <task>` slash command.
  * Defaults to background execution unless `--sync`, `--fg`, or `--foreground` is specified.
  */
 async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  if (!isSubagentActive()) {
+    const msg = "Subagents are currently disabled for this session ('subagent.enabled' is disabled). Enable 'subagent.enabled' in /settings-enhanced first.";
+    if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+    else process.stderr.write(`${msg}\n`);
+    return;
+  }
+
   const isForeground = /\b(--sync|-s|--fg|-f|--foreground)\b/i.test(args);
   const task = args
     .replace(/\b(--sync|-s|--fg|-f|--foreground|--bg|-b|--background)\b/gi, "")
@@ -176,6 +221,13 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
  * Handles `/jobs` slash command to display background subagents.
  */
 async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
+  if (!isSubagentActive()) {
+    const msg = "Subagents are currently disabled for this session ('subagent.enabled' is disabled).";
+    if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+    else process.stderr.write(`${msg}\n`);
+    return;
+  }
+
   const jobs = jobManager.listJobs();
   if (jobs.length === 0) {
     ctx.ui.notify("No background subagents have been run in this session.", "info");
@@ -231,6 +283,8 @@ async function handleJobsCommand(ctx: ExtensionCommandContext): Promise<void> {
  * Registers the subagent tools and slash commands.
  */
 export function registerSubagent(pi: ExtensionAPI): void {
+  savedPi = pi;
+
   // Initialize job manager with ExtensionAPI
   jobManager.init(pi);
 
@@ -242,6 +296,31 @@ export function registerSubagent(pi: ExtensionAPI): void {
   pi.registerTool(createSubagentStatusToolDefinition());
   pi.registerTool(createSubagentListToolDefinition());
   pi.registerTool(createSubagentCancelToolDefinition());
+
+  const store = EnhancedSettingsStore.getInstance();
+
+  function syncSubagentTools(enabled?: boolean): void {
+    const isEnabled = enabled !== undefined ? enabled : isSubagentActive();
+    try {
+      const current = pi.getActiveTools();
+      if (isEnabled) {
+        const toAdd = SUBAGENT_TOOL_NAMES.filter((name) => !current.includes(name));
+        if (toAdd.length > 0) {
+          pi.setActiveTools([...current, ...toAdd]);
+        }
+      } else {
+        const remaining = current.filter((name) => !SUBAGENT_TOOL_NAMES.includes(name));
+        if (remaining.length !== current.length) {
+          pi.setActiveTools(remaining);
+        }
+      }
+    } catch {
+      // Non-fatal if session runner not yet initialized
+    }
+  }
+
+  // Initial sync
+  syncSubagentTools();
 
   // Track tool executions to reset consecutive status poll counter when other tools run
   pi.on("tool_execution_start", (event) => {
@@ -256,9 +335,100 @@ export function registerSubagent(pi: ExtensionAPI): void {
     resetConsecutiveStatusPolls();
   });
 
-  // Attach UI context on session start and cleanup on shutdown
-  pi.on("session_start", async (_event, ctx) => {
+  // Attach UI context on session start and restore session-scoped state to protect prompt cache
+  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     jobManager.setUIContext(ctx.ui);
+
+    const entries = ctx.sessionManager?.getEntries?.() || [];
+
+    // 1. Look for explicit persisted session state
+    const lastSessionEntry = [...entries]
+      .reverse()
+      .find(
+        (e) =>
+          e.type === "custom" &&
+          ((e as any).customType === SUBAGENT_TOOL_SESSION_ENTRY ||
+            (e as any).name === SUBAGENT_TOOL_SESSION_ENTRY)
+      );
+
+    const customEntry = lastSessionEntry as any;
+    if (
+      customEntry?.data &&
+      typeof customEntry.data.enabled === "boolean"
+    ) {
+      activeSessionEnabled = customEntry.data.enabled;
+    } else {
+      // 2. Check if this is an existing session with past conversation history
+      const hasPriorConversation = entries.some(
+        (e: any) =>
+          e.type === "message" ||
+          e.type === "custom_message" ||
+          e.role === "user" ||
+          e.role === "assistant"
+      );
+
+      if (hasPriorConversation) {
+        // Existing session: keep enabled to preserve prefix prompt cache hits!
+        activeSessionEnabled = true;
+      } else {
+        // 3. New session: adopt user's global setting from enhanced-settings.json
+        activeSessionEnabled = store.get("subagent.enabled");
+        try {
+          pi.appendEntry(SUBAGENT_TOOL_SESSION_ENTRY, {
+            enabled: activeSessionEnabled,
+            timestamp: Date.now(),
+          } satisfies SubagentSessionState);
+        } catch {
+          // Ignore if session tree is not yet writable
+        }
+      }
+    }
+
+    syncSubagentTools(activeSessionEnabled);
+  });
+
+  // Dynamic setting toggles
+  store.onChange((settings, changedKey) => {
+    if (!changedKey || changedKey === "subagent.enabled") {
+      const newEnabled = settings["subagent.enabled"];
+      activeSessionEnabled = newEnabled;
+      syncSubagentTools(newEnabled);
+
+      try {
+        pi.appendEntry(SUBAGENT_TOOL_SESSION_ENTRY, {
+          enabled: newEnabled,
+          timestamp: Date.now(),
+        } satisfies SubagentSessionState);
+      } catch {
+        // Non-fatal
+      }
+    }
+  });
+
+  // Inject or prune subagent tools from system prompt
+  pi.on("before_agent_start", (event) => {
+    const isEnabled = isSubagentActive();
+
+    // If disabled: completely prune subagent tools from active tools and prompt
+    if (!isEnabled) {
+      if (event.systemPromptOptions?.selectedTools) {
+        event.systemPromptOptions.selectedTools = event.systemPromptOptions.selectedTools.filter(
+          (name) => !SUBAGENT_TOOL_NAMES.includes(name)
+        );
+      }
+      syncSubagentTools(false);
+      return;
+    }
+
+    if (!event.systemPromptOptions) return;
+
+    if (event.systemPromptOptions.selectedTools) {
+      for (const name of SUBAGENT_TOOL_NAMES) {
+        if (!event.systemPromptOptions.selectedTools.includes(name)) {
+          event.systemPromptOptions.selectedTools.push(name);
+        }
+      }
+    }
   });
 
   pi.on("session_shutdown", async () => {
