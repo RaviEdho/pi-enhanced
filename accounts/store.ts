@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 1;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode", "kenari"]);
 
 export class AccountStore {
   private static instance?: AccountStore;
@@ -235,6 +235,8 @@ export class AccountStore {
         ? process.env.HYPER_API_KEY?.trim()
         : provider === "commandcode"
         ? process.env.COMMANDCODE_API_KEY?.trim()
+        : provider === "kenari"
+        ? process.env.KENARI_API_KEY?.trim()
         : undefined;
     if (!existingAuth && !envVal) {
       return;
@@ -393,7 +395,8 @@ export class AccountStore {
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
               (provider === "openai-codex" || provider === "openai" ? extractPlanTypeFromJwt(access) : undefined) ||
               (provider === "commandcode" ? "individual-provider" : undefined) ||
-              (provider === "google-antigravity" ? "free-tier" : undefined);
+              (provider === "google-antigravity" ? "free-tier" : undefined) ||
+              (provider === "kenari" ? "PAYG" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
             const existing = findExisting(provider, email, accountId, id, refresh, key);
 
@@ -404,6 +407,8 @@ export class AccountStore {
                   ? process.env.HYPER_API_KEY?.trim()
                   : provider === "commandcode"
                   ? process.env.COMMANDCODE_API_KEY?.trim()
+                  : provider === "kenari"
+                  ? process.env.KENARI_API_KEY?.trim()
                   : undefined;
               const priorCount = this.data.accounts.length;
               this.data.accounts = this.data.accounts.filter((a) => {
@@ -523,6 +528,38 @@ export class AccountStore {
           });
           if (!this.data.activeAccounts["commandcode"]) {
             this.data.activeAccounts["commandcode"] = id;
+          }
+          modified = true;
+        } else if (existing.apiKey !== envKey) {
+          existing.apiKey = envKey;
+          existing.access = envKey;
+          existing.updatedAt = Date.now();
+          modified = true;
+        }
+      }
+    }
+
+    // Check process.env.KENARI_API_KEY
+    if (process.env.KENARI_API_KEY) {
+      const envKey = process.env.KENARI_API_KEY.trim();
+      if (envKey) {
+        authProviders.add("kenari");
+        const id = AccountStore.generateAccountId("kenari", "env-key");
+        const existing = findExisting("kenari", undefined, undefined, id, undefined, envKey);
+        if (!existing) {
+          this.data.accounts.push({
+            id,
+            provider: "kenari",
+            type: "api_key",
+            apiKey: envKey,
+            access: envKey,
+            email: "env-key",
+            planType: "PAYG",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          if (!this.data.activeAccounts["kenari"]) {
+            this.data.activeAccounts["kenari"] = id;
           }
           modified = true;
         } else if (existing.apiKey !== envKey) {

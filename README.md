@@ -1,9 +1,15 @@
 # pi-enhanced
 
-Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, **Command Code** provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
+Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, **Command Code** provider, **Kenari** AI gateway provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
 
 ## Features
 
+- **Kenari AI Gateway Provider**:
+  - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
+  - Dual authentication: Browser loopback PKCE OAuth flow (`/login kenari`) and API key via `KENARI_API_KEY`.
+  - Dynamic live model discovery (`/v1/models` and `/api/public/pricing`) with live micro-IDR token pricing converted to USD, context length limits, tool calling, and discrete reasoning effort controls.
+  - Multi-account pooling with transparent 429 rate limit failover (`plan_limit_reached`, `free_quota_daily`, `free_quota_rpm`) and 402 balance backoff (`insufficient_balance`).
+  - Live rolling window quota (5-hour, weekly, monthly) and prepaid balance monitoring via `/usage` and interactive status footer.
 - **Command Code Provider**:
   - Direct connection to Command Code's Provider API (`https://api.commandcode.ai/provider/v1`) with access to 80+ open & closed frontier models.
   - Dual authentication: Browser loopback redirect flow (`/login commandcode`) and API key via `COMMANDCODE_API_KEY`.
@@ -71,9 +77,12 @@ pi list
 
 # Or login to Charm Hyper:
 /login hyper
+
+# Or login to Kenari:
+/login kenari
 ```
 
-Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."` or `HYPER_API_KEY="sk-hyper-..."` directly.
+Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."`, `HYPER_API_KEY="sk-hyper-..."`, or `KENARI_API_KEY="kn-..."` directly.
 
 ### 3. Running with Models
 
@@ -86,6 +95,11 @@ pi --model commandcode/google/gemini-3.7-flash
 # Interactive mode with Charm Hyper
 pi --model hyper/deepseek-v4.1-flash
 pi --model hyper/qwen3.8-max
+
+# Interactive mode with Kenari
+pi --model kenari/deepseek-v4-1-flash:free
+pi --model kenari/kenari-free
+pi --model kenari/claude-haiku-5-5
 
 # Interactive mode with default Antigravity model
 pi --model google-antigravity/gemini-3.1-pro

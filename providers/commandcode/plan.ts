@@ -125,6 +125,50 @@ export async function fetchBillingInfo(
 }
 
 /**
+ * Checks whether a model is covered by the plan itself (without requiring extra purchased credits).
+ */
+export function isModelCoveredByPlan(
+  modelId: string,
+  planId?: string
+): boolean {
+  if (!planId) return false;
+  const plan = planId.toLowerCase();
+  const cleanId = modelId.replace(/^[^/]+\//, "");
+
+  // Max / Ultra / Teams plans have access to all models
+  if (
+    plan.includes("max") ||
+    plan.includes("ultra") ||
+    plan.includes("team")
+  ) {
+    return true;
+  }
+
+  // Provider pay-as-you-go plan allows virtually all models except unreleased experiments
+  if (plan.includes("provider")) {
+    return cleanId !== "gpt-6.1-sol" && cleanId !== "meta/muse-wonder-1.0";
+  }
+
+  // Pro plan allows open-source and standard premium, but gates ultra-premium (Opus, Fable, GPT-6 Astra)
+  if (plan.includes("pro")) {
+    return !PRO_BLOCKED_MODELS.has(cleanId);
+  }
+
+  // GOAT plan ($10/mo) allows open-source models + Sonnet 5.5, Haiku, Gemini 3.7, GPT-5.6 Sol
+  if (plan.includes("goat")) {
+    return !PREMIUM_MODELS.has(cleanId);
+  }
+
+  // Go plan ($1/mo) has entry restrictions
+  if (plan.includes("go")) {
+    return !GO_BLOCKED_MODELS.has(cleanId);
+  }
+
+  // Default allow
+  return true;
+}
+
+/**
  * Checks whether a given model is allowed under the account's plan and credit status.
  */
 export function isModelAllowedForBilling(
@@ -141,39 +185,7 @@ export function isModelAllowedForBilling(
     return true;
   }
 
-  const plan = billing.planId?.toLowerCase() || "";
-
-  // Max / Ultra / Teams plans have access to all models
-  if (
-    plan.includes("max") ||
-    plan.includes("ultra") ||
-    plan.includes("team")
-  ) {
-    return true;
-  }
-
-  // Provider pay-as-you-go plan allows virtually all models except unreleased experiments
-  if (plan.includes("provider")) {
-    return modelId !== "gpt-6.1-sol" && modelId !== "meta/muse-wonder-1.0";
-  }
-
-  // Pro plan allows open-source and standard premium, but gates ultra-premium (Opus, Fable, GPT-6 Astra)
-  if (plan.includes("pro")) {
-    return !PRO_BLOCKED_MODELS.has(modelId);
-  }
-
-  // GOAT plan ($10/mo) allows open-source models + Sonnet 5.5, Haiku, Gemini 3.7, GPT-5.6 Sol
-  if (plan.includes("goat")) {
-    return !PREMIUM_MODELS.has(modelId);
-  }
-
-  // Go plan ($1/mo) has entry restrictions
-  if (plan.includes("go")) {
-    return !GO_BLOCKED_MODELS.has(modelId);
-  }
-
-  // Default allow
-  return true;
+  return isModelCoveredByPlan(modelId, billing.planId);
 }
 
 /**

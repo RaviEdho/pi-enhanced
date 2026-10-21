@@ -10,6 +10,7 @@ import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balan
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { PlanModeManager } from "../plan/manager.js";
+import { isModelCoveredByPlan } from "../../providers/commandcode/plan.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import {
   computeTimeElapsedFraction,
@@ -51,58 +52,105 @@ function formatCwd(cwd: string, home: string | undefined): string {
   return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
+interface KeyBuckets {
+  primary?: QuotaBucket;
+  secondary?: QuotaBucket;
+  balance?: QuotaBucket;
+}
+
 /**
  * Extracts primary and secondary quota buckets for the active model.
  */
 function extractKeyBuckets(
   report: ProviderUsageReport,
   modelId?: string
-): { primary?: QuotaBucket; secondary?: QuotaBucket } {
+): KeyBuckets {
   const cleanModel = (modelId || "").toLowerCase();
   const allBuckets = report.groups.flatMap((g) => g.buckets);
   if (allBuckets.length === 0) {
     return {};
   }
 
-  let relevant = allBuckets;
   if (report.providerId === "hyper") {
     const hyperBucket = allBuckets.find((b) => b.bucketId === "hypercredits");
-    if (hyperBucket) {
-      return { primary: hyperBucket };
+    return { balance: hyperBucket };
+  }
+
+  if (report.providerId === "commandcode") {
+    const fiveHour = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
+    const weekly = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
+    const credits = allBuckets.find((b) => b.bucketId === "commandcode-credits");
+    const extra = allBuckets.find((b) => b.bucketId === "commandcode-extra");
+    const balanceBucket = extra ?? credits;
+
+    if (fiveHour) {
+      return { primary: fiveHour, secondary: weekly, balance: balanceBucket };
     }
-  } else if (report.providerId === "commandcode") {
-    const fiveHourBucket = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
-    if (fiveHourBucket) {
-      const weeklyBucket = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
-      return { primary: fiveHourBucket, secondary: weeklyBucket };
+    if (weekly) {
+      return { primary: weekly, balance: balanceBucket };
     }
-    const creditsBucket = allBuckets.find((b) => b.bucketId === "commandcode-credits");
-    if (creditsBucket) {
-      return { primary: creditsBucket };
+    return { balance: balanceBucket };
+  }
+
+  if (report.providerId === "kenari") {
+    const fiveHour = allBuckets.find((b) => b.bucketId === "kenari-5hour");
+    const weekly = allBuckets.find((b) => b.bucketId === "kenari-weekly");
+    const monthly = allBuckets.find((b) => b.bucketId === "kenari-monthly");
+    const balance = allBuckets.find((b) => b.bucketId === "kenari-balance");
+
+    if (fiveHour) {
+      return { primary: fiveHour, secondary: weekly ?? monthly, balance };
     }
-  } else if (report.providerId === "google-antigravity") {
+    if (weekly) {
+      return { primary: weekly, secondary: monthly, balance };
+    }
+    return { balance };
+  }
+
+  if (report.providerId === "google-antigravity") {
     const isClaudeOrGpt = cleanModel.includes("claude") || cleanModel.includes("gpt");
     const targetPrefix = isClaudeOrGpt ? "3p" : "gemini";
     const filtered = allBuckets.filter((b) =>
       b.bucketId.toLowerCase().includes(targetPrefix)
     );
-    if (filtered.length > 0) {
-      relevant = filtered;
-    }
+    const candidateList = filtered.length > 0 ? filtered : allBuckets;
+    const weekly = candidateList.find(
+      (b) =>
+        b.bucketId.toLowerCase().includes("weekly") ||
+        (b.windowSeconds && b.windowSeconds >= 6 * 86400)
+    );
+    const fiveHour = candidateList.find(
+      (b) =>
+        b !== weekly &&
+        (b.bucketId.toLowerCase().includes("5h") ||
+          (b.windowSeconds && b.windowSeconds <= 86400))
+    );
+    return { primary: weekly ?? candidateList[0], secondary: fiveHour };
   }
 
-  // Identify longest window (weekly) as primary, or fallback to first
-  let primary = relevant.find(
+  if (report.providerId === "openai-codex") {
+    const primary = allBuckets.find((b) => b.bucketId === "codex-primary") ?? allBuckets[0];
+    const secondary = allBuckets.find((b) => b.bucketId === "codex-secondary");
+    return { primary, secondary };
+  }
+
+  // Generic fallback for any other provider
+  const balanceBucket = allBuckets.find(
     (b) =>
-      b.bucketId.toLowerCase().includes("weekly") ||
-      (b.windowSeconds && b.windowSeconds >= 6 * 86400)
+      b.bucketId.toLowerCase().includes("balance") ||
+      b.bucketId.toLowerCase().includes("credit") ||
+      b.window === "prepaid" ||
+      b.window === "balance" ||
+      b.window === "on-demand"
   );
-  if (!primary) {
-    primary = relevant[0];
-  }
-
-  // Identify short-term burst window (e.g. 5h or daily) as secondary
-  const secondary = relevant.find(
+  const windowBuckets = allBuckets.filter((b) => b !== balanceBucket);
+  const primary =
+    windowBuckets.find(
+      (b) =>
+        b.bucketId.toLowerCase().includes("weekly") ||
+        (b.windowSeconds && b.windowSeconds >= 6 * 86400)
+    ) ?? windowBuckets[0];
+  const secondary = windowBuckets.find(
     (b) =>
       b !== primary &&
       (b.bucketId.toLowerCase().includes("5h") ||
@@ -111,7 +159,7 @@ function extractKeyBuckets(
         (b.windowSeconds && b.windowSeconds <= 86400))
   );
 
-  return { primary, secondary };
+  return { primary, secondary, balance: balanceBucket };
 }
 
 /**
@@ -172,6 +220,85 @@ function renderFooterLine1(
 }
 
 /**
+ * Renders the active quota rate-limit progress bar with reset time and optional secondary window.
+ */
+function renderProgressBar(
+  primary: QuotaBucket,
+  secondary: QuotaBucket | undefined,
+  now: number
+): string {
+  const usedPct = Math.round(primary.usedFraction * 100);
+  const timeElapsed = computeTimeElapsedFraction(
+    primary.resetTime,
+    primary.windowSeconds,
+    now,
+    primary.usedFraction
+  );
+  const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
+  const ready =
+    primary.usedFraction <= 0 && (timeElapsed === 0 || timeElapsed === undefined);
+  const resetSegment = primary.resetTime
+    ? ` (${ready ? "ready" : formatRelativeTime(primary.resetTime, now)})`
+    : "";
+
+  let secondarySegment = "";
+  if (secondary) {
+    const secPct = Math.round(secondary.usedFraction * 100);
+    const secLabel = secondary.window || "5h";
+    secondarySegment = ` · ${secLabel}: ${secPct}%`;
+  }
+
+  return `[${progressBar}] ${usedPct}%${resetSegment}${secondarySegment}`;
+}
+
+/**
+ * Renders the active balance representation (credits or prepaid currency) with optional reset countdown.
+ */
+function renderBalance(
+  balance: QuotaBucket | undefined,
+  report: ProviderUsageReport,
+  now: number
+): string {
+  if (report.providerId === "hyper") {
+    const balancePart = report.capacitySummary || balance?.description || "Hypercredits";
+    const resetPart = balance?.resetTime
+      ? ` · resets ${formatRelativeTime(balance.resetTime, now)}`
+      : "";
+    return `${balancePart}${resetPart}`;
+  }
+
+  if (report.providerId === "kenari") {
+    if (balance?.description) {
+      return balance.description;
+    }
+    if (report.capacitySummary) {
+      return report.capacitySummary;
+    }
+  }
+
+  if (report.providerId === "commandcode") {
+    const allBuckets = report.groups.flatMap((g) => g.buckets);
+    const extra = allBuckets.find((b) => b.bucketId === "commandcode-extra");
+    const credits = allBuckets.find((b) => b.bucketId === "commandcode-credits");
+    const target = extra ?? credits ?? balance;
+    if (target?.description) {
+      const cleanDesc = target.description.replace(/\s*\([^)]*\)$/, "");
+      return cleanDesc;
+    }
+    if (report.capacitySummary) {
+      return report.capacitySummary;
+    }
+  }
+
+  return (
+    balance?.description ||
+    report.capacitySummary ||
+    balance?.displayName ||
+    "Active balance"
+  );
+}
+
+/**
  * Builds Line 2 Right Side: Active account usage bar.
  */
 function buildUsageBar(ctx: ExtensionContext): string {
@@ -203,84 +330,65 @@ function buildUsageBar(ctx: ExtensionContext): string {
     return `${prefix}  ···`;
   }
 
-  const { primary, secondary } = extractKeyBuckets(report, model.id);
-  if (!primary) {
+  const { primary, secondary, balance } = extractKeyBuckets(report, model.id);
+
+  if (!primary && !balance && !report.capacitySummary) {
     return `${prefix}  No quota limits reported`;
   }
 
-  // Command Code: show the monthly credit-pool bar, followed by the 5-hour and
-  // weekly rolling rate-limit windows.
-  if (report.providerId === "commandcode") {
-    const allBuckets = report.groups.flatMap((g) => g.buckets);
-    const creditsBucket = allBuckets.find((b) => b.bucketId === "commandcode-credits");
-    const base = creditsBucket ?? primary;
-    const fiveHour = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
-    const weekly = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
+  // Determine whether progress bar or balance is active / in use
+  let showProgressBar = false;
 
-    const basePct = Math.round(base.usedFraction * 100);
-    const baseTimeElapsed = computeTimeElapsedFraction(
-      base.resetTime,
-      base.windowSeconds,
-      now,
-      base.usedFraction
-    );
-    const progressBar = makeProgressBar(base.usedFraction, 10, baseTimeElapsed, false);
-    const baseReady =
-      base.usedFraction <= 0 && (baseTimeElapsed === 0 || baseTimeElapsed === undefined);
-    const resetSegment = base.resetTime
-      ? ` (${baseReady ? "ready" : formatRelativeTime(base.resetTime, now)})`
-      : "";
+  if (primary && !balance) {
+    // Only quota window is available
+    showProgressBar = true;
+  } else if (!primary && (balance || report.capacitySummary)) {
+    // Only balance is available
+    showProgressBar = false;
+  } else if (primary && balance) {
+    // Both are available: determine dynamically based on provider, active model, and quota health
+    const hasAvailableBalance =
+      (balance.description && !balance.description.includes("Rp 0")) ||
+      balance.remainingFraction > 0;
 
-    const segments = [`[${progressBar}] ${basePct}%${resetSegment}`];
-    if (fiveHour) {
-      segments.push(`5h: ${Math.round(fiveHour.usedFraction * 100)}%`);
+    if (report.providerId === "commandcode") {
+      const isCovered = isModelCoveredByPlan(model.id, report.planType);
+      if (!isCovered && hasAvailableBalance) {
+        // Model requires credits bypass; balance is in use
+        showProgressBar = false;
+      } else if (primary.usedFraction >= 1.0 && hasAvailableBalance) {
+        // Rate-limit window is exhausted; balance is in use
+        showProgressBar = false;
+      } else {
+        // Rate limit window is actively governing the session
+        showProgressBar = true;
+      }
+    } else if (report.providerId === "kenari") {
+      if (primary.usedFraction >= 1.0 && hasAvailableBalance) {
+        // Plan budget is exhausted; fallback balance is in use
+        showProgressBar = false;
+      } else {
+        // Plan quota window is actively in use
+        showProgressBar = true;
+      }
+    } else {
+      if (primary.usedFraction >= 1.0 && hasAvailableBalance) {
+        showProgressBar = false;
+      } else {
+        showProgressBar = true;
+      }
     }
-    if (weekly) {
-      segments.push(`weekly: ${Math.round(weekly.usedFraction * 100)}%`);
-    }
-    return `${prefix}  ${segments.join(" · ")}`;
   }
 
-  // Charm Hyper: show remaining Hypercredit balance and Sunday reset countdown (or prepaid status)
-  // without a synthetic 0% progress bar since credits represent a balance pool rather than a fractional window.
-  if (report.providerId === "hyper") {
-    const balancePart = report.capacitySummary || `${primary.displayName}: ${primary.description || ""}`;
-    const resetPart = primary.resetTime
-      ? ` · resets ${formatRelativeTime(primary.resetTime, now)}`
-      : "";
-    return `${prefix}  ${balancePart}${resetPart}`;
+  if (showProgressBar && primary) {
+    return `${prefix}  ${renderProgressBar(primary, secondary, now)}`;
   }
 
-  const usedPct = Math.round(primary.usedFraction * 100);
-  const timeElapsed = computeTimeElapsedFraction(
-    primary.resetTime,
-    primary.windowSeconds,
-    now,
-    primary.usedFraction
-  );
-  const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
-
-  const barSegment = `[${progressBar}] ${usedPct}%`;
-
-  const resetSegment = primary.resetTime
-    ? primary.usedFraction <= 0 && (timeElapsed === 0 || timeElapsed === undefined)
-      ? " (ready)"
-      : ` (${formatRelativeTime(primary.resetTime, now)})`
-    : "";
-
-  let secondarySegment = "";
-  if (secondary) {
-    const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel = secondary.window || "5h";
-    secondarySegment = ` · ${secLabel}: ${secPct}%`;
+  if (balance || report.capacitySummary) {
+    return `${prefix}  ${renderBalance(balance, report, now)}`;
   }
 
-  let summarySegment = "";
-  if ((report.providerId === "hyper" || report.providerId === "commandcode") && report.capacitySummary) {
-    summarySegment = ` · ${report.capacitySummary}`;
-  }
-
-  return `${prefix}  ${barSegment}${resetSegment}${secondarySegment}${summarySegment}`;
+  return `${prefix}  No quota limits reported`;
 }
 
 /**

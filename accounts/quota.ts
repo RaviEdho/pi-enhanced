@@ -6,6 +6,7 @@ import { fetchCodexUsage } from "../ux/usage/codex.js";
 import { computeTimeElapsedFraction } from "../ux/usage/format.js";
 import { fetchHyperUsage } from "../ux/usage/hyper.js";
 import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
+import { fetchKenariUsage } from "../ux/usage/kenari.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
@@ -206,6 +207,13 @@ export class QuotaManager {
             signal,
             account.planType
           );
+        } else if (account.provider === "kenari") {
+          report = await fetchKenariUsage(
+            token,
+            account.email || account.id,
+            signal,
+            account.planType
+          );
         }
 
         if (report && !report.error) {
@@ -401,6 +409,74 @@ export class QuotaManager {
 
       // Find the longest limit window (e.g. 7-day secondary window)
       let longestBucket = allBuckets.reduce<QuotaBucket | undefined>((prev, curr) => {
+        if (!prev) return curr;
+        return (curr.windowSeconds || 0) > (prev.windowSeconds || 0) ? curr : prev;
+      }, undefined);
+
+      let longestUsed = 0.0;
+      let longestTimeElapsed = 0.0;
+      if (longestBucket) {
+        const isPastReset = longestBucket.resetTime ? Date.parse(longestBucket.resetTime) <= now : false;
+        longestUsed = isPastReset ? 0.0 : longestBucket.usedFraction;
+        longestTimeElapsed =
+          computeTimeElapsedFraction(longestBucket.resetTime, longestBucket.windowSeconds, now, longestUsed) ?? 0.0;
+      }
+
+      const longestRemaining = Math.max(0, 1 - longestUsed);
+      const urgencyDiscount = longestRemaining * Math.pow(longestTimeElapsed, 2);
+      const paceDelta = longestUsed - longestTimeElapsed;
+      const weight = paceDelta - urgencyDiscount;
+      const isUnstarted = maxUsed <= 0.0001 && longestTimeElapsed <= 0.0001;
+
+      return {
+        isExhausted,
+        usedFraction: maxUsed,
+        paceDelta,
+        weight,
+        remainingFraction: Math.max(0, 1 - maxUsed),
+        isUnstarted,
+        resetTimeMs: soonestResetMs,
+        reason: exhaustionReason,
+      };
+    }
+
+    // 4. Kenari quota evaluation
+    if (account.provider === "kenari") {
+      const allBuckets = report.groups.flatMap((g) => g.buckets);
+      const planBuckets = allBuckets.filter((b) => b.bucketId.startsWith("kenari-") && b.bucketId !== "kenari-balance");
+      const balanceBucket = allBuckets.find((b) => b.bucketId === "kenari-balance");
+
+      let isExhausted = false;
+      let maxUsed = 0.0;
+      let soonestResetMs: number | undefined;
+      let exhaustionReason: string | undefined;
+
+      for (const bucket of planBuckets) {
+        let bucketResetMs: number | undefined;
+        if (bucket.resetTime) {
+          const parsed = Date.parse(bucket.resetTime);
+          if (!isNaN(parsed)) bucketResetMs = parsed;
+        }
+
+        const isPastReset = bucketResetMs !== undefined && bucketResetMs <= now;
+        const remaining = isPastReset ? 1.0 : bucket.remainingFraction;
+        const used = isPastReset ? 0.0 : bucket.usedFraction;
+
+        maxUsed = Math.max(maxUsed, used);
+
+        if (!isPastReset && remaining <= 0.001) {
+          const hasBalance = balanceBucket && !balanceBucket.description?.includes("Rp 0 available");
+          if (!hasBalance) {
+            isExhausted = true;
+            exhaustionReason = `${bucket.displayName} exhausted and no PAYG balance`;
+            if (bucketResetMs && (!soonestResetMs || bucketResetMs < soonestResetMs)) {
+              soonestResetMs = bucketResetMs;
+            }
+          }
+        }
+      }
+
+      let longestBucket = planBuckets.reduce<QuotaBucket | undefined>((prev, curr) => {
         if (!prev) return curr;
         return (curr.windowSeconds || 0) > (prev.windowSeconds || 0) ? curr : prev;
       }, undefined);

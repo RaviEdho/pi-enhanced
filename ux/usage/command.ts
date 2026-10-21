@@ -18,6 +18,7 @@ import { AccountStore } from "../../accounts/store.js";
 import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
+import { fetchKenariUsage } from "./kenari.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import { fetchHyperUsage } from "./hyper.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
@@ -104,6 +105,7 @@ export async function collectUsageReports(
   const codexAccounts = store.list("openai-codex");
   const hyperAccounts = store.list("hyper");
   const commandcodeAccounts = store.list("commandcode");
+  const kenariAccounts = store.list("kenari");
 
   // 1. Google Antigravity multi-account fetch in parallel
   const isAntigravityActive = options?.currentProvider === "google-antigravity";
@@ -594,6 +596,100 @@ export async function collectUsageReports(
     }
   }
 
+  // 6. Kenari multi-account fetch in parallel
+  const isKenariActive = options?.currentProvider === "kenari";
+  const kenariPromises: Promise<ProviderUsageReport>[] = [];
+  if (kenariAccounts.length > 0) {
+    const sessionAccount = isKenariActive
+      ? balancer.getSessionAccount(
+          "kenari",
+          options?.sessionId,
+          options?.currentModelId
+        )
+      : undefined;
+    for (const acc of kenariAccounts) {
+      if (signal?.aborted) break;
+      const isSession = isKenariActive && sessionAccount?.id === acc.id;
+      const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
+      const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
+      const label = acc.email || acc.label || acc.id;
+
+      if (acc.disabledCause) {
+        kenariPromises.push(
+          Promise.resolve({
+            providerId: "kenari",
+            providerName: "Kenari",
+            accountEmail: label,
+            accountId: acc.id,
+            isSessionAccount: isSession,
+            planType: acc.planType,
+            cooldownMinutes: isCooldown ? mins : undefined,
+            fetchedAt: Date.now(),
+            groups: [],
+            error: acc.disabledCause,
+          })
+        );
+        continue;
+      }
+
+      kenariPromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          try {
+            const token = acc.apiKey || (await balancer.ensureFreshToken(acc));
+            const report = await fetchKenariUsage(
+              token,
+              label,
+              signal,
+              acc.planType
+            );
+            report.isSessionAccount = isSession;
+            report.accountId = acc.id;
+            report.accountEmail = label;
+            report.cooldownMinutes = isCooldown ? mins : undefined;
+            if (report.planType && report.planType !== acc.planType) {
+              acc.planType = report.planType;
+              acc.updatedAt = Date.now();
+              store.upsert(acc);
+            }
+            QuotaManager.getInstance().setReport(acc.id, report);
+            return report;
+          } catch (err) {
+            return {
+              providerId: "kenari",
+              providerName: "Kenari",
+              accountEmail: label,
+              accountId: acc.id,
+              isSessionAccount: isSession,
+              planType: acc.planType,
+              cooldownMinutes: isCooldown ? mins : undefined,
+              fetchedAt: Date.now(),
+              groups: [],
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        })()
+      );
+    }
+  } else {
+    // Fallback to auth.json or KENARI_API_KEY
+    const authMap = loadConfiguredAuth();
+    const kenariAuth = authMap["kenari"];
+    const fallbackToken = kenariAuth?.key || kenariAuth?.access || (kenariAuth as any)?.apiKey || process.env.KENARI_API_KEY;
+    if (fallbackToken) {
+      kenariPromises.push(
+        (async (): Promise<ProviderUsageReport> => {
+          const report = await fetchKenariUsage(
+            fallbackToken,
+            kenariAuth?.email || "default",
+            signal
+          );
+          report.isSessionAccount = isKenariActive;
+          return report;
+        })()
+      );
+    }
+  }
+
   // Await all provider account queries concurrently
   const settled = await Promise.allSettled([
     ...antigravityPromises,
@@ -601,6 +697,7 @@ export async function collectUsageReports(
     ...openaiPromises,
     ...hyperPromises,
     ...commandcodePromises,
+    ...kenariPromises,
   ]);
   for (const s of settled) {
     if (s.status === "fulfilled") {

@@ -6,6 +6,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   "google-antigravity": "Google Antigravity",
   hyper: "Charm Hyper",
   commandcode: "Command Code",
+  kenari: "Kenari",
   "openai-codex": "OpenAI Codex",
   openai: "OpenAI",
 };

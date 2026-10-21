@@ -74,7 +74,7 @@ export function isRateLimitError(error: unknown): boolean {
   if (!error) return false;
   const msg = error instanceof Error ? error.message : String(error);
   return (
-    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|insufficient.?hypercredits|billing_error/i.test(
+    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|insufficient.?hypercredits|billing_error|plan_limit_reached|insufficient_balance|free_quota_daily|free_quota_rpm/i.test(
       msg
     ) ||
     (typeof error === "object" &&
@@ -120,7 +120,7 @@ export function extractCooldownMs(error: unknown): number {
   }
 
   // Depleted credits, payment required, or billing errors: back off for 1 hour to prevent re-hammering
-  if (/402|insufficient.?hypercredits|billing_error|payment.?required/i.test(msg)) {
+  if (/402|insufficient.?hypercredits|billing_error|payment.?required|insufficient_balance/i.test(msg)) {
     return 60 * 60 * 1000;
   }
 

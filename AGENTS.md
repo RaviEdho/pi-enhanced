@@ -11,6 +11,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Google Antigravity Provider (`providers/antigravity/`)**: Custom provider integrating with Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`) using OAuth 2.0 with automatic project discovery / onboarding (`cloudaicompanionProject`).
 - **Charm Hyper Provider (`providers/hyper/`)**: Custom provider connecting to Charm Hyper (`https://hyper.charm.land/v1`) with device code OAuth flow (`/login hyper`), API key authentication (`HYPER_API_KEY`), live dynamic model discovery (`/v1/provider`), reasoning effort level translation, and multi-account load balancing.
 - **Command Code Provider (`providers/commandcode/`)**: Custom provider connecting to Command Code (`https://api.commandcode.ai/provider/v1`) with browser loopback OAuth flow (`/login commandcode`), API key authentication (`COMMANDCODE_API_KEY`), live dynamic model discovery (`/provider/v1/models` across 89 models), dual Anthropic Messages & OpenAI Completions protocol routing, subscription plan gating & credit bypass model projection, and rolling window quota monitoring (`/alpha/billing/credits`).
+- **Kenari Provider (`providers/kenari/`)**: Custom provider connecting to Kenari (`https://kenari.id/v1`) with browser loopback OAuth PKCE flow (`/login kenari`), API key authentication (`KENARI_API_KEY`), live dynamic model discovery (`/v1/models` and `/api/public/pricing`), subscription plan tier gating (`/api/plans`) with prepaid IDR balance bypass (`/v1/account/balance`), reasoning effort slider translation, multi-account failover, and rolling quota window + prepaid IDR balance monitoring (`/v1/account/quota`, `/v1/account/balance`).
 - **OpenAI & ChatGPT Subscription Balancer (`providers/codex/`)**: Dynamic tier detection from OAuth token JWT claims (`chatgpt_plan_type`). Unifies both ChatGPT login flows—the official Responses API (`/login openai` -> Sign in with ChatGPT) and the legacy Codex backend (`/login openai-codex`)—with multi-account failover, auto-switching, plan-based model filtering, quota scraping, and rate limit resilience.
 - **Provider Quota & Usage Monitor (`ux/usage/`)**: Live multi-account quota tracking, percentage consumption bars, and reset countdowns across configured providers via the `/usage` command and status footer.
 - **Context Window Usage & Breakdown (`ux/context/`)**: Interactive `/context` slash command and clean single-screen TUI modal featuring native Pi styling conventions, a compact horizontal usage progress bar, available headroom with auto-compaction thresholds, concise category breakdown (`System`, `Messages` with user/assistant/thinking details, `Tools` with call counts and top tools, `Compacted`), and one-key compaction (`c`), refresh (`r`), and close (`esc`).
@@ -67,6 +68,14 @@ pi-enhanced/
 │   │   ├── oauth.ts            # OAuth 2.0 Device Flow login, loopback poll, and token exchange
 │   │   ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
 │   │   └── types.ts            # Hyper device auth, token, and model schemas
+│   ├── kenari/
+│   │   ├── constants.ts        # Base URLs, API endpoints, User-Agent, timeouts
+│   │   ├── index.ts            # Kenari provider registration & streaming adapter
+│   │   ├── models.ts           # Dynamic model catalog discovery & micro-IDR pricing conversion
+│   │   ├── oauth.ts            # PKCE loopback login, key validation, and token exchange
+│   │   ├── plan.ts             # Plan tier definitions (/api/plans), model scoping & balance bypass
+│   │   ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
+│   │   └── types.ts            # Kenari protocol, model, balance, and quota schemas
 │   └── index.ts                # registerProviders aggregator
 ├── tools/                      # Agent capability tools
 │   ├── git/                    # Autonomous Git assistant & commit sub-agent
@@ -185,6 +194,7 @@ pi-enhanced/
 │   │   ├── format.ts           # Terminal & ASCII progress bar formatting
 │   │   ├── hyper.ts            # Charm Hyper /v1/credits quota scraper
 │   │   ├── index.ts            # /usage command registration + usage report collection
+│   │   ├── kenari.ts           # Kenari rolling window quota & prepaid balance scraper
 │   │   └── types.ts            # Quota report structures
 │   └── index.ts                # registerUX aggregator
 ├── index.ts                    # Root extension entry point
@@ -214,6 +224,7 @@ pi-enhanced/
    - For Antigravity: query Google's `fetchAvailableModels` endpoint.
    - For Charm Hyper: query `https://hyper.charm.land/v1/provider`.
    - For Command Code: query `https://api.commandcode.ai/provider/v1/models`.
+   - For Kenari: query `https://kenari.id/v1/models` and `https://kenari.id/api/public/pricing`.
    - For OpenAI Codex: query `https://chatgpt.com/backend-api/codex/models?client_version=1.0.0` and cross-reference `available_in_plans`.
 
 5. **Type Safety**:
