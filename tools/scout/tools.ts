@@ -102,11 +102,11 @@ export async function executeFind(
     relPath = path.relative(cwd, relPath);
   }
 
-  if (relPath && relPath !== "." && !params.cursor) {
-    query = `${relPath} ${query}`.trim();
-  }
-
-  const { files, totalMatched } = await indexer.findFiles(query, { limit, offset });
+  const { files, totalMatched } = await indexer.findFiles(query, {
+    limit,
+    offset,
+    path: relPath && relPath !== "." && relPath !== "./" ? relPath : undefined,
+  });
 
   // Record access for top 3 matched files in frecency memory
   for (let i = 0; i < Math.min(3, files.length); i++) {

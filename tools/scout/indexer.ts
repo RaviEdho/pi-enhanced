@@ -25,31 +25,66 @@ const DEFAULT_IGNORED_DIRS = new Set([
 ]);
 
 const BINARY_EXTENSIONS = new Set([
+  // Images
   ".png",
   ".jpg",
   ".jpeg",
   ".gif",
   ".webp",
   ".ico",
+  ".bmp",
+  ".tiff",
+  ".tif",
+  ".avif",
+  ".heic",
+  ".heif",
+  ".psd",
+  // Documents & Media
   ".pdf",
-  ".zip",
-  ".tar",
-  ".gz",
-  ".7z",
+  ".mp4",
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".flac",
+  ".aac",
+  ".m4a",
+  ".webm",
+  ".avi",
+  ".mov",
+  ".mkv",
+  // Fonts
   ".woff",
   ".woff2",
   ".ttf",
   ".eot",
-  ".mp4",
-  ".mp3",
-  ".wav",
+  ".otf",
+  // Archives
+  ".zip",
+  ".tar",
+  ".gz",
+  ".7z",
+  ".bz2",
+  ".xz",
+  ".rar",
+  ".zst",
+  ".tgz",
+  // Binaries, Executables & Bytecode
   ".wasm",
   ".exe",
   ".dll",
   ".so",
   ".dylib",
   ".bin",
-  ".lock",
+  ".iso",
+  ".dmg",
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".o",
+  ".obj",
+  ".lib",
+  ".a",
+  ".lockb",
 ]);
 
 export class FileIndexer {
@@ -218,17 +253,10 @@ export class FileIndexer {
         await this.walkDir(fullPath, relPath, collector, depth + 1);
       } else if (entry.isFile()) {
         const ext = path.extname(name).toLowerCase();
-        if (BINARY_EXTENSIONS.has(ext)) {
-          continue;
-        }
+        const isBinary = BINARY_EXTENSIONS.has(ext);
 
         try {
           const stats = await fs.promises.stat(fullPath);
-          if (stats.size > 2 * 1024 * 1024) {
-            // Skip oversized files (>2MB)
-            continue;
-          }
-
           const gitStatus = this.gitStatuses.get(relPath);
           const frecencyScore = this.frecency.calculateScore(relPath, gitStatus);
 
@@ -239,6 +267,7 @@ export class FileIndexer {
             mtime: stats.mtimeMs,
             gitStatus,
             frecencyScore,
+            isBinary,
           });
         } catch {
           // Stat failed, skip
@@ -279,11 +308,26 @@ export class FileIndexer {
    */
   public async findFiles(
     query: string,
-    options?: { limit?: number; offset?: number }
+    options?: { limit?: number; offset?: number; path?: string }
   ): Promise<{ files: IndexedFile[]; totalMatched: number }> {
     await this.scan();
 
     const constraints = parseQueryConstraints(query);
+    if (options?.path && options.path !== "." && options.path !== "./") {
+      let p = options.path.trim().replace(/\\/g, "/");
+      if (path.isAbsolute(p)) {
+        p = path.relative(this.cwd, p).replace(/\\/g, "/");
+      }
+      p = p.replace(/^\.\//, "");
+      if (p.endsWith("/")) p = p.slice(0, -1);
+      if (p && p !== ".") {
+        constraints.includePaths = constraints.includePaths || [];
+        if (!constraints.includePaths.includes(p)) {
+          constraints.includePaths.push(p);
+        }
+      }
+    }
+
     const pattern = constraints.pattern;
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
@@ -377,9 +421,11 @@ export class FileIndexer {
     const matches: SearchMatch[] = [];
     let filesSearched = 0;
 
-    // Filter candidate files
+    // Filter candidate files (skip binary files and files > 2MB)
     const candidateFiles: IndexedFile[] = [];
     for (const file of this.files.values()) {
+      if (file.isBinary) continue;
+      if (file.size > 2 * 1024 * 1024) continue;
       if (matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
         candidateFiles.push(file);
       }
@@ -394,6 +440,11 @@ export class FileIndexer {
       try {
         content = await fs.promises.readFile(file.absolutePath, "utf-8");
       } catch {
+        continue;
+      }
+
+      if (content.includes("\0")) {
+        file.isBinary = true;
         continue;
       }
 
@@ -466,6 +517,11 @@ export class FileIndexer {
           continue;
         }
 
+        if (content.includes("\0")) {
+          file.isBinary = true;
+          continue;
+        }
+
         const lines = content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -526,6 +582,8 @@ export class FileIndexer {
 
     const candidateFiles: IndexedFile[] = [];
     for (const file of this.files.values()) {
+      if (file.isBinary) continue;
+      if (file.size > 2 * 1024 * 1024) continue;
       if (matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
         candidateFiles.push(file);
       }
@@ -541,6 +599,11 @@ export class FileIndexer {
       try {
         content = await fs.promises.readFile(file.absolutePath, "utf-8");
       } catch {
+        continue;
+      }
+
+      if (content.includes("\0")) {
+        file.isBinary = true;
         continue;
       }
 

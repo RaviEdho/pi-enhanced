@@ -13,6 +13,8 @@ export interface IndexedFile {
   gitStatus?: GitFileStatus;
   /** Calculated frecency score */
   frecencyScore: number;
+  /** Whether the file is known or detected to be binary */
+  isBinary?: boolean;
 }
 
 export interface SearchMatch {
