@@ -58,11 +58,18 @@ const GO_BLOCKED_MODELS = new Set<string>([
   "gpt-5.6-sol",
   "google/gemini-3.7-flash",
   "google/gemini-3.8-flash",
+  "google/gemini-3.6-flash",
+  "google/gemini-3.5-flash",
+  "google/gemini-3.5-flash-lite",
+  "google/gemini-3.1-flash-lite",
+  "meta/muse-spark-1.1",
   "meta/muse-spark-1.2",
   "meta/muse-spark-1.3",
   "xai/grok-4.6",
   "xai/grok-4.7",
   "xiaomi/mimo-v2.6-pro-ultraspeed",
+  "ornith/ornith-1.5-122b",
+  "Qwen/Qwen3.8-Max-Prime",
 ]);
 
 const billingCache = new Map<string, AccountBillingInfo>();
@@ -135,6 +142,16 @@ export function isModelCoveredByPlan(
   const plan = planId.toLowerCase();
   const cleanId = modelId.replace(/^[^/]+\//, "");
 
+  // Match against both the raw model ID and the prefix-stripped ID, so block
+  // lists written either way ("google/gemini-3.7-flash" or "gemini-3.7-flash")
+  // gate correctly regardless of catalog casing/prefixing.
+  const isBlockedWith = (set: Set<string>) =>
+    set.has(modelId) || set.has(cleanId);
+  const isBlocked = (set: Set<string>) =>
+    isBlockedWith(set) ||
+    set.has(modelId.toLowerCase()) ||
+    set.has(cleanId.toLowerCase());
+
   // Max / Ultra / Teams plans have access to all models
   if (
     plan.includes("max") ||
@@ -146,22 +163,24 @@ export function isModelCoveredByPlan(
 
   // Provider pay-as-you-go plan allows virtually all models except unreleased experiments
   if (plan.includes("provider")) {
-    return cleanId !== "gpt-6.1-sol" && cleanId !== "meta/muse-wonder-1.0";
+    return !isBlocked(
+      new Set<string>(["gpt-6.1-sol", "meta/muse-wonder-1.0"])
+    );
   }
 
   // Pro plan allows open-source and standard premium, but gates ultra-premium (Opus, Fable, GPT-6 Astra)
   if (plan.includes("pro")) {
-    return !PRO_BLOCKED_MODELS.has(cleanId);
+    return !isBlocked(PRO_BLOCKED_MODELS);
   }
 
   // GOAT plan ($10/mo) allows open-source models + Sonnet 5.5, Haiku, Gemini 3.7, GPT-5.6 Sol
   if (plan.includes("goat")) {
-    return !PREMIUM_MODELS.has(cleanId);
+    return !isBlocked(PREMIUM_MODELS);
   }
 
   // Go plan ($1/mo) has entry restrictions
   if (plan.includes("go")) {
-    return !GO_BLOCKED_MODELS.has(cleanId);
+    return !isBlocked(GO_BLOCKED_MODELS);
   }
 
   // Default allow
