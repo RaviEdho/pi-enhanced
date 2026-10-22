@@ -1,6 +1,7 @@
 import { CREDITS_FETCH_TIMEOUT_MS, CREDITS_URL, HYPER_USER_AGENT, PROVIDER_ID, PROVIDER_NAME } from "../../providers/hyper/constants.js";
 import type { CreditsResponse } from "../../providers/hyper/types.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
+import { QUOTA_WINDOW } from "./windows.js";
 
 /**
  * Calculates the next Sunday 00:00 UTC timestamp.
@@ -84,15 +85,20 @@ export async function fetchHyperUsage(
     const isSubscription =
       displayPlan?.toLowerCase() === "shred" || displayPlan?.toLowerCase() === "business";
     const nextSunday = getNextSundayMidnightUtc(new Date(fetchedAt));
-    const window = isSubscription ? "weekly" : "balance";
+    const window = isSubscription ? QUOTA_WINDOW.weekly : QUOTA_WINDOW.balance;
     const windowSeconds = isSubscription ? 7 * 24 * 3600 : undefined;
     const resetTime = isSubscription ? nextSunday.toISOString() : undefined;
 
-    const resetDesc = isSubscription
-      ? "Resets Sunday 00:00 UTC"
+    // A prepaid/plain balance carries no consumed fraction, so a progress bar
+    // would always render as an untouched `100% · ready` window. Only the
+    // weekly subscription allowance has a meaningful window to visualize.
+    const isBalance = !isSubscription;
+
+    const description = isSubscription
+      ? `${formattedBalance} Hypercredits available ($${usdVal}) · Resets Sunday 00:00 UTC`
       : displayPlan?.toLowerCase() === "prepaid"
-        ? "Prepaid (never expires)"
-        : "Available balance";
+        ? `${formattedBalance} Hypercredits available ($${usdVal}) · Prepaid (never expires)`
+        : `${formattedBalance} Hypercredits available ($${usdVal})`;
 
     const bucket: QuotaBucket = {
       bucketId: "hypercredits",
@@ -102,7 +108,8 @@ export async function fetchHyperUsage(
       usedFraction: 0,
       remainingFraction: 1,
       resetTime,
-      description: `${formattedBalance} Hypercredits available ($${usdVal}) · ${resetDesc}`,
+      displayMode: isBalance ? "value" : "bar",
+      description,
     };
 
     return {
