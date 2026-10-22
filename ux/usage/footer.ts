@@ -54,7 +54,7 @@ function formatCwd(cwd: string, home: string | undefined): string {
 
 interface KeyBuckets {
   primary?: QuotaBucket;
-  secondary?: QuotaBucket;
+  secondary?: QuotaBucket[];
   balance?: QuotaBucket;
 }
 
@@ -83,11 +83,22 @@ function extractKeyBuckets(
     const extra = allBuckets.find((b) => b.bucketId === "commandcode-extra");
     const balanceBucket = extra ?? credits;
 
-    if (fiveHour) {
-      return { primary: fiveHour, secondary: weekly, balance: balanceBucket };
+    // Monthly pool drives the progress bar; 5-hour and weekly windows are secondary entries.
+    const secondaries = [fiveHour, weekly].filter(
+      (b): b is QuotaBucket => b !== undefined
+    );
+    if (credits) {
+      return { primary: credits, secondary: secondaries, balance: balanceBucket };
     }
     if (weekly) {
-      return { primary: weekly, balance: balanceBucket };
+      return {
+        primary: weekly,
+        secondary: fiveHour ? [fiveHour] : undefined,
+        balance: balanceBucket,
+      };
+    }
+    if (fiveHour) {
+      return { primary: fiveHour, balance: balanceBucket };
     }
     return { balance: balanceBucket };
   }
@@ -99,10 +110,16 @@ function extractKeyBuckets(
     const balance = allBuckets.find((b) => b.bucketId === "kenari-balance");
 
     if (fiveHour) {
-      return { primary: fiveHour, secondary: weekly ?? monthly, balance };
+      return {
+        primary: fiveHour,
+        secondary: [weekly, monthly].filter(
+          (b): b is QuotaBucket => b !== undefined
+        ),
+        balance,
+      };
     }
     if (weekly) {
-      return { primary: weekly, secondary: monthly, balance };
+      return { primary: weekly, secondary: monthly ? [monthly] : undefined, balance };
     }
     return { balance };
   }
@@ -125,13 +142,16 @@ function extractKeyBuckets(
         (b.bucketId.toLowerCase().includes("5h") ||
           (b.windowSeconds && b.windowSeconds <= 86400))
     );
-    return { primary: weekly ?? candidateList[0], secondary: fiveHour };
+    return {
+      primary: weekly ?? candidateList[0],
+      secondary: fiveHour ? [fiveHour] : undefined,
+    };
   }
 
   if (report.providerId === "openai-codex") {
     const primary = allBuckets.find((b) => b.bucketId === "codex-primary") ?? allBuckets[0];
     const secondary = allBuckets.find((b) => b.bucketId === "codex-secondary");
-    return { primary, secondary };
+    return { primary, secondary: secondary ? [secondary] : undefined };
   }
 
   // Generic fallback for any other provider
@@ -159,7 +179,11 @@ function extractKeyBuckets(
         (b.windowSeconds && b.windowSeconds <= 86400))
   );
 
-  return { primary, secondary, balance: balanceBucket };
+  return {
+    primary,
+    secondary: secondary ? [secondary] : undefined,
+    balance: balanceBucket,
+  };
 }
 
 /**
@@ -224,7 +248,7 @@ function renderFooterLine1(
  */
 function renderProgressBar(
   primary: QuotaBucket,
-  secondary: QuotaBucket | undefined,
+  secondaries: QuotaBucket[] | undefined,
   now: number
 ): string {
   const usedPct = Math.round(primary.usedFraction * 100);
@@ -242,10 +266,10 @@ function renderProgressBar(
     : "";
 
   let secondarySegment = "";
-  if (secondary) {
+  for (const secondary of secondaries ?? []) {
     const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel = secondary.window || "5h";
-    secondarySegment = ` · ${secLabel}: ${secPct}%`;
+    const secLabel = secondary.window || secondary.displayName;
+    secondarySegment += ` · ${secLabel}: ${secPct}%`;
   }
 
   return `[${progressBar}] ${usedPct}%${resetSegment}${secondarySegment}`;

@@ -127,7 +127,7 @@ export async function fetchCommandCodeUsage(
       limitBuckets.push({
         bucketId: "commandcode-5hour",
         displayName: "5-Hour Window",
-        window: "5-hour",
+        window: "5h",
         windowSeconds: 5 * 3600,
         usedFraction: uFrac,
         remainingFraction: Math.max(0, 1 - uFrac),
