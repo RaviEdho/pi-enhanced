@@ -43,10 +43,21 @@ export async function registerCommandCodeProvider(pi: ExtensionAPI): Promise<voi
     void fetchBillingInfo(activeToken).catch(() => {});
   }
 
+  // Pi resolves the configured `apiKey` *before* invoking refreshModels(), and a
+  // dangling "$ENV_VAR" reference throws while the variable is unset. That throw
+  // is reported as "Could not refresh commandcode; showing cached models." even
+  // though this provider authenticates from the account store. Only reference the
+  // env var when it is actually set; otherwise use the stored key, or omit
+  // API-key auth entirely (leaving OAuth login as the only auth method) so an
+  // unauthenticated provider stays quietly unconfigured instead of erroring.
+  const apiKeyConfig = process.env.COMMANDCODE_API_KEY?.trim()
+    ? "$COMMANDCODE_API_KEY"
+    : activeToken;
+
   pi.registerProvider(COMMANDCODE_PROVIDER_ID, {
     name: COMMANDCODE_PROVIDER_NAME,
     baseUrl: COMMANDCODE_PROVIDER_V1_URL,
-    apiKey: "$COMMANDCODE_API_KEY",
+    apiKey: apiKeyConfig,
     api: "openai-completions",
 
     models: commandCodeModels,

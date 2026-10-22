@@ -69,10 +69,20 @@ export async function registerKenariProvider(pi: ExtensionAPI): Promise<void> {
 
   const initialModels = filterKenariModelsForBilling(rawKenariModels, initialBilling, cachedPlans);
 
+  // Pi resolves the configured `apiKey` *before* invoking refreshModels(), and a
+  // dangling "$ENV_VAR" reference throws while the variable is unset. That throw
+  // is reported as "Could not refresh kenari; showing cached models." even though
+  // this provider authenticates from the account store. Only reference the env
+  // var when it is actually set; otherwise use the stored key, or omit API-key
+  // auth entirely so an unauthenticated provider stays quietly unconfigured.
+  const apiKeyConfig = process.env.KENARI_API_KEY?.trim()
+    ? "$KENARI_API_KEY"
+    : activeToken;
+
   pi.registerProvider(KENARI_PROVIDER_ID, {
     name: KENARI_PROVIDER_NAME,
     baseUrl: KENARI_API_BASE_URL,
-    apiKey: "$KENARI_API_KEY",
+    apiKey: apiKeyConfig,
     api: "openai-completions",
 
     models: initialModels,
