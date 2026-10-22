@@ -186,8 +186,9 @@ function resolveWireModelId(modelId: string, thinkingEnabled: boolean): string {
   if (/^gemini-3\.[6-9]-flash$/.test(modelId)) {
     return thinkingEnabled ? `${modelId}-medium` : `${modelId}-low`;
   }
+  // Fallback for deprecated 3.5 flash: transparently route to 3.8 flash
   if (modelId === "gemini-3.5-flash") {
-    return thinkingEnabled ? "gemini-3-flash-agent" : "gemini-3.5-flash-extra-low";
+    return thinkingEnabled ? "gemini-3.8-flash-medium" : "gemini-3.8-flash-low";
   }
   if (modelId === "gemini-3.1-pro") {
     return thinkingEnabled ? "gemini-pro-agent" : "gemini-3.1-pro-low";

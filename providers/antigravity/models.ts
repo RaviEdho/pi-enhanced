@@ -44,7 +44,12 @@ export function saveCachedAntigravityModels(models: ProviderModelConfig[]): void
   }
 }
 
-/** Default offline/pre-fetch fallback catalog */
+/**
+ * Default offline/pre-fetch fallback catalog.
+ * Synced against live fetchAvailableModels probes (2026-10-22):
+ * gemini-3.7-flash and the gemini-3.1-pro / gemini-pro-agent tier now return
+ * HTTP 404 (removed by Google), so they are absent here.
+ */
 export const DEFAULT_ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
   {
     id: "gemini-3.8-flash",
@@ -56,20 +61,11 @@ export const DEFAULT_ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     maxTokens: 65535,
   },
   {
-    id: "gemini-3.7-flash",
-    name: "Gemini 3.7 Flash",
+    id: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image",
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
-    contextWindow: 1048576,
-    maxTokens: 65535,
-  },
-  {
-    id: "gemini-3.1-pro",
-    name: "Gemini 3.1 Pro",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 1.25, output: 5.0, cacheRead: 0.3125, cacheWrite: 1.25 },
     contextWindow: 1048576,
     maxTokens: 65535,
   },
@@ -101,6 +97,42 @@ export const DEFAULT_ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     maxTokens: 8192,
   },
   {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash Lite",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
+    contextWindow: 1048576,
+    maxTokens: 65535,
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash Lite",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
+    contextWindow: 1048576,
+    maxTokens: 65535,
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash Lite",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  },
+  {
+    id: "gemini-3-flash",
+    name: "Gemini 3 Flash",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  },
+  {
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
     reasoning: true,
@@ -115,6 +147,16 @@ const DISCOVERY_DENYLIST: Record<string, true> = {
   chat_20706: true,
   chat_23310: true,
   "gemini-2.5-pro": true,
+  "gemini-3.1-pro": true,
+  "gemini-3.1-pro-low": true,
+  "gemini-3.5-flash": true,
+  "gemini-3.5-flash-extra-low": true,
+  "gemini-3.5-flash-low": true,
+  "gemini-3.7-flash": true,
+  "gemini-3.7-flash-low": true,
+  "gemini-3.7-flash-medium": true,
+  "gemini-3-flash-agent": true,
+  "gemini-pro-agent": true,
   tab_flash_lite_preview: true,
   tab_jump_flash_lite_preview: true,
 };
@@ -139,9 +181,6 @@ export function collapseAntigravityModels(
       logicalId = flashMatch[1]!;
       const rev = logicalId.replace("gemini-", "").replace("-flash", "");
       displayName = `Gemini ${rev} Flash`;
-    } else if (id.startsWith("gemini-3.1-pro") || id === "gemini-pro-agent") {
-      logicalId = "gemini-3.1-pro";
-      displayName = "Gemini 3.1 Pro";
     } else if (id.startsWith("gemini-3-flash")) {
       logicalId = "gemini-3-flash";
       displayName = "Gemini 3 Flash";
