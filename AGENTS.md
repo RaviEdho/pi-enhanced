@@ -195,7 +195,8 @@ pi-enhanced/
 │   │   ├── hyper.ts            # Charm Hyper /v1/credits quota scraper
 │   │   ├── index.ts            # /usage command registration + usage report collection
 │   │   ├── kenari.ts           # Kenari rolling window quota & prepaid balance scraper
-│   │   └── types.ts            # Quota report structures
+│   │   ├── types.ts            # Quota report structures
+│   │   └── windows.ts          # Canonical quota window vocabulary & label mapping
 │   └── index.ts                # registerUX aggregator
 ├── index.ts                    # Root extension entry point
 ├── package.json                # Pi manifest, package metadata, peerDependencies
