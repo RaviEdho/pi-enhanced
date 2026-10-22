@@ -8,6 +8,7 @@ import {
   USAGE_SUMMARY_URL,
 } from "../../providers/commandcode/constants.js";
 import { getPlanDisplayName } from "../../providers/commandcode/plan.js";
+import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
 import type {
   CommandCodeCreditsResponse,
   CommandCodeSubscriptionsResponse,
@@ -91,8 +92,8 @@ export async function fetchCommandCodeUsage(
 
     creditBuckets.push({
       bucketId: "commandcode-credits",
-      displayName: "Monthly Pool",
-      window: "monthly",
+      displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.monthly],
+      window: QUOTA_WINDOW.monthly,
       windowSeconds: 30 * 86400,
       usedFraction,
       remainingFraction,
@@ -104,7 +105,7 @@ export async function fetchCommandCodeUsage(
       creditBuckets.push({
         bucketId: "commandcode-extra",
         displayName: "Extra Credits",
-        window: "on-demand",
+        window: QUOTA_WINDOW.onDemand,
         usedFraction: 0,
         remainingFraction: 1,
         description: `$${purchasedRemaining.toFixed(2)} on-demand (never expires)`,
@@ -126,8 +127,8 @@ export async function fetchCommandCodeUsage(
       const uFrac = Math.min(1, Math.max(0, used / cap));
       limitBuckets.push({
         bucketId: "commandcode-5hour",
-        displayName: "5-Hour Window",
-        window: "5h",
+        displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour],
+        window: QUOTA_WINDOW.fiveHour,
         windowSeconds: 5 * 3600,
         usedFraction: uFrac,
         remainingFraction: Math.max(0, 1 - uFrac),
@@ -141,8 +142,8 @@ export async function fetchCommandCodeUsage(
       const uFrac = Math.min(1, Math.max(0, used / cap));
       limitBuckets.push({
         bucketId: "commandcode-weekly",
-        displayName: "Weekly Window",
-        window: "weekly",
+        displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly],
+        window: QUOTA_WINDOW.weekly,
         windowSeconds: 7 * 86400,
         usedFraction: uFrac,
         remainingFraction: Math.max(0, 1 - uFrac),
@@ -161,7 +162,7 @@ export async function fetchCommandCodeUsage(
     let capacitySummary = `$${totalRemaining.toFixed(2)} remaining`;
     if (windowLimits?.fiveHour && windowLimits.fiveHour.cap > 0) {
       const avail5h = Math.max(0, windowLimits.fiveHour.cap - windowLimits.fiveHour.used);
-      capacitySummary = `$${avail5h.toFixed(2)} / $${windowLimits.fiveHour.cap.toFixed(2)} (5h) · $${totalRemaining.toFixed(2)} total`;
+      capacitySummary = `$${avail5h.toFixed(2)} / $${windowLimits.fiveHour.cap.toFixed(2)} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · $${totalRemaining.toFixed(2)} total`;
     }
 
     return {

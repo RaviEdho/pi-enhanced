@@ -5,6 +5,7 @@ import {
 } from "../../providers/antigravity/constants.js";
 import type { LoadCodeAssistResponse } from "../../providers/antigravity/types.js";
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
+import { normalizeWindowToken, QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
 
 interface RawQuotaBucket {
   bucketId?: string;
@@ -137,7 +138,7 @@ export async function fetchAntigravityUsage(
         return {
           bucketId: b.bucketId ?? "default",
           displayName,
-          window: b.window ?? "default",
+          window: normalizeWindowToken(b.window),
           windowSeconds,
           remainingFraction,
           usedFraction,
@@ -158,12 +159,16 @@ export async function fetchAntigravityUsage(
     if (has5h) {
       const used5h = (1 - min5hRemaining).toFixed(2);
       const left5h = min5hRemaining.toFixed(2);
-      capacityParts.push(`5h → ${used5h}/1 account used (${left5h}× quota left)`);
+      capacityParts.push(
+        `${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]} → ${used5h}/1 account used (${left5h}× quota left)`
+      );
     }
     if (hasWeekly) {
       const usedWeekly = (1 - minWeeklyRemaining).toFixed(2);
       const leftWeekly = minWeeklyRemaining.toFixed(2);
-      capacityParts.push(`7d → ${usedWeekly}/1 account used (${leftWeekly}× quota left)`);
+      capacityParts.push(
+        `${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]} → ${usedWeekly}/1 account used (${leftWeekly}× quota left)`
+      );
     }
 
     const capacitySummary =

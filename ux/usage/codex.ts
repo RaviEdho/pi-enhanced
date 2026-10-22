@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getCodexAccountId, getCodexEmail, getCodexPlanType } from "../../providers/codex/plan.js";
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
+import {
+  quotaWindowLabel,
+  windowLabelForSeconds,
+  windowTokenForSeconds,
+} from "./windows.js";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -60,29 +65,11 @@ interface CapacityStat {
 }
 
 function formatWindowLabel(seconds: number): string {
-  const daySeconds = 86_400;
-  if (seconds >= 28 * daySeconds && seconds <= 31 * daySeconds) {
-    return "Monthly Quota";
-  }
-  if (seconds >= 6 * daySeconds && seconds <= 8 * daySeconds) {
-    return "Weekly Quota";
-  }
-  if (seconds >= daySeconds) {
-    const days = Math.round(seconds / daySeconds);
-    return `${days}-Day Quota`;
-  }
-  const hours = Math.max(1, Math.round(seconds / 3600));
-  return `${hours}-Hour Limit`;
+  return windowLabelForSeconds(seconds);
 }
 
 function formatWindowShort(seconds: number): string {
-  const daySeconds = 86_400;
-  if (seconds >= daySeconds) {
-    const days = Math.round(seconds / daySeconds);
-    return `${days}d`;
-  }
-  const hours = Math.max(1, Math.round(seconds / 3600));
-  return `${hours}h`;
+  return windowTokenForSeconds(seconds);
 }
 
 function resolveResetTimeIso(window: RawCodexWindowPayload, nowMs: number): string | undefined {
@@ -358,7 +345,7 @@ export async function fetchCodexUsage(options: FetchCodexUsageOptions): Promise<
       const meterLabel = stat.meter ? ` (${stat.meter})` : "";
       const used = stat.usedFraction.toFixed(2);
       const left = (1 - stat.usedFraction).toFixed(2);
-      return `${stat.window}${meterLabel} → ${used}/1 account used (${left}× quota left)`;
+      return `${quotaWindowLabel(stat.window)}${meterLabel} → ${used}/1 account used (${left}× quota left)`;
     });
 
     const capacitySummary =

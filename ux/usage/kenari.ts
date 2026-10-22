@@ -7,6 +7,7 @@ import {
   PROVIDER_NAME,
 } from "../../providers/kenari/constants.js";
 import { updateCachedKenariBilling } from "../../providers/kenari/plan.js";
+import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
 import type {
   KenariBalanceResponse,
   KenariQuotaResponse,
@@ -80,8 +81,8 @@ export async function fetchKenariUsage(
         const w = planWindows.five_hour;
         quotaBuckets.push({
           bucketId: "kenari-5hour",
-          displayName: "5-Hour Window",
-          window: "5-hour",
+          displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour],
+          window: QUOTA_WINDOW.fiveHour,
           windowSeconds: 5 * 3600,
           usedFraction: w.used_frac,
           remainingFraction: Math.max(0, 1 - w.used_frac),
@@ -94,8 +95,8 @@ export async function fetchKenariUsage(
         const w = planWindows.week;
         quotaBuckets.push({
           bucketId: "kenari-weekly",
-          displayName: "Weekly Window",
-          window: "weekly",
+          displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly],
+          window: QUOTA_WINDOW.weekly,
           windowSeconds: 7 * 86400,
           usedFraction: w.used_frac,
           remainingFraction: Math.max(0, 1 - w.used_frac),
@@ -108,8 +109,8 @@ export async function fetchKenariUsage(
         const w = planWindows.month;
         quotaBuckets.push({
           bucketId: "kenari-monthly",
-          displayName: "Monthly Window",
-          window: "monthly",
+          displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.monthly],
+          window: QUOTA_WINDOW.monthly,
           windowSeconds: 30 * 86400,
           usedFraction: w.used_frac,
           remainingFraction: Math.max(0, 1 - w.used_frac),
@@ -135,7 +136,7 @@ export async function fetchKenariUsage(
       const balanceBucket: QuotaBucket = {
         bucketId: "kenari-balance",
         displayName: "Prepaid Balance",
-        window: "prepaid",
+        window: QUOTA_WINDOW.prepaid,
         displayMode: "value",
         usedFraction: 0,
         remainingFraction: 1,
@@ -158,7 +159,7 @@ export async function fetchKenariUsage(
           {
             bucketId: "kenari-coupon",
             displayName: c.name || "Coupon",
-            window: "coupon",
+            window: QUOTA_WINDOW.coupon,
             displayMode: "value",
             usedFraction: 0,
             remainingFraction: 1,
@@ -171,9 +172,9 @@ export async function fetchKenariUsage(
 
     let capacitySummary = `Rp ${Math.round(availableIdr).toLocaleString("id-ID")} available`;
     if (planWindows?.five_hour && planWindows.five_hour.budget_rp > 0) {
-      capacitySummary = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (5h) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummary = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
     } else if (planWindows?.week && planWindows.week.budget_rp > 0) {
-      capacitySummary = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (weekly) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummary = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
     }
 
     return {

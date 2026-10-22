@@ -18,6 +18,7 @@ import {
   makeProgressBar,
 } from "./format.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
+import { quotaWindowLabel, QUOTA_WINDOW } from "./windows.js";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -159,9 +160,9 @@ function extractKeyBuckets(
     (b) =>
       b.bucketId.toLowerCase().includes("balance") ||
       b.bucketId.toLowerCase().includes("credit") ||
-      b.window === "prepaid" ||
-      b.window === "balance" ||
-      b.window === "on-demand"
+      b.window === QUOTA_WINDOW.prepaid ||
+      b.window === QUOTA_WINDOW.balance ||
+      b.window === QUOTA_WINDOW.onDemand
   );
   const windowBuckets = allBuckets.filter((b) => b !== balanceBucket);
   const primary =
@@ -268,7 +269,7 @@ function renderProgressBar(
   let secondarySegment = "";
   for (const secondary of secondaries ?? []) {
     const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel = secondary.window || secondary.displayName;
+    const secLabel = quotaWindowLabel(secondary.window) || secondary.displayName;
     secondarySegment += ` · ${secLabel}: ${secPct}%`;
   }
 
