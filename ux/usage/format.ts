@@ -237,6 +237,19 @@ function formatBucketEntry(
   const warning = (s: string) => theme.fg("warning", s);
   const error = (s: string) => theme.fg("error", s);
 
+  // Value buckets (balances, credits, coupons) carry no consumed fraction, so a
+  // progress bar would always render as an untouched `100% · ready` window.
+  // Show the amount as plain text instead.
+  if (bucket.displayMode === "value") {
+    const valueText = bucket.description || "—";
+    const resetSuffix =
+      bucket.resetTime && !valueText.includes("expires")
+        ? ` · ${formatRelativeTime(bucket.resetTime, now)}`
+        : "";
+    const metric = dim(`${valueText}${resetSuffix}`);
+    return { bar: "", metric, full: metric, visibleLen: visibleWidth(metric) };
+  }
+
   const timeElapsed = computeTimeElapsedFraction(
     bucket.resetTime,
     bucket.windowSeconds,

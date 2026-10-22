@@ -7,6 +7,13 @@ export interface QuotaBucket {
   usedFraction: number;
   resetTime?: string;
   description?: string;
+  /**
+   * How this bucket is rendered in `/usage`. Defaults to `"bar"`.
+   * Use `"value"` for balances, credits and coupons: they have no meaningful
+   * consumed fraction, so a progress bar would always read as an untouched
+   * `100% · ready` window. Value buckets render their description as plain text.
+   */
+  displayMode?: "bar" | "value";
 }
 
 export interface QuotaGroup {
