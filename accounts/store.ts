@@ -6,6 +6,14 @@ import type { AccountCredential, AccountStoreData } from "./types.js";
 const STORE_VERSION = 1;
 export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode", "kenari"]);
 
+/**
+ * Providers whose login mints a long-lived API key and returns it as `access`.
+ * Pi's OAuth login adapter always persists such credentials as
+ * `{ type: "oauth", access: <key> }`, so the key has to be recovered from
+ * `access` when the mirrored auth.json entry is imported back into the store.
+ */
+const PERSISTENT_KEY_PROVIDERS = new Set(["kenari", "commandcode"]);
+
 export class AccountStore {
   private static instance?: AccountStore;
   private filePath: string;
@@ -387,8 +395,13 @@ export class AccountStore {
             const projectId = typeof cred.projectId === "string" ? cred.projectId : undefined;
             const key = typeof cred.key === "string" ? cred.key : undefined;
             const clientId = typeof cred.clientId === "string" ? cred.clientId : undefined;
+            // Persistent-key providers store the API key itself in `access` once Pi mirrors
+            // the login credential into auth.json, so treat it as the account key. Skipping
+            // this produced a token-suffix identity and a duplicate account per login.
+            const persistentKey =
+              key ?? (PERSISTENT_KEY_PROVIDERS.has(provider) && access ? access : undefined);
             const tokenSuffix = refresh ? `token-${refresh.slice(-8)}` : access ? `tok-${access.slice(-8)}` : undefined;
-            const identity = email || accountId || (projectId && projectId !== "aicode-consumers" ? projectId : undefined) || (key ? `key-${key.slice(-6)}` : undefined) || tokenSuffix || "default";
+            const identity = email || accountId || (projectId && projectId !== "aicode-consumers" ? projectId : undefined) || (persistentKey ? `key-${persistentKey.slice(-6)}` : undefined) || tokenSuffix || "default";
             const id = AccountStore.generateAccountId(provider, identity);
 
             const planType =
@@ -398,10 +411,16 @@ export class AccountStore {
               (provider === "google-antigravity" ? "free-tier" : undefined) ||
               (provider === "kenari" ? "PAYG" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
-            const existing = findExisting(provider, email, accountId, id, refresh, key);
+
+            // Pi mirrors persistent-key logins into auth.json as `oauth` credentials. Rewrite
+            // that entry in its canonical API-key shape so the store and Pi agree on the
+            // credential type (a mismatch alone is enough to keep the account from syncing).
+            if (PERSISTENT_KEY_PROVIDERS.has(provider) && persistentKey && cred.type !== "api_key") {
+              modified = true;
+            }
 
             // For API key providers, prune any prior accounts whose key does not match the current key in auth.json
-            if (cred.type === "api_key" || key) {
+            if (cred.type === "api_key" || persistentKey) {
               const envKeyVal =
                 provider === "hyper"
                   ? process.env.HYPER_API_KEY?.trim()
@@ -410,23 +429,41 @@ export class AccountStore {
                   : provider === "kenari"
                   ? process.env.KENARI_API_KEY?.trim()
                   : undefined;
+              // Only the account that Pi mirrored into auth.json can go stale here: auth.json
+              // holds a single credential per provider, so other stored accounts are deliberate
+              // multi-account logins and must survive an import.
+              const previousMirrorId = this.data.activeAccounts[provider];
               const priorCount = this.data.accounts.length;
               this.data.accounts = this.data.accounts.filter((a) => {
-                if (a.provider !== provider || a.type !== "api_key") return true;
-                if (key && (a.apiKey === key || a.access === key)) return true;
-                if (envKeyVal && (a.apiKey === envKeyVal || a.access === envKeyVal)) return true;
-                return false;
+                if (a.provider !== provider) return true;
+                const isSameKey =
+                  (persistentKey && (a.apiKey === persistentKey || a.access === persistentKey)) ||
+                  (envKeyVal && (a.apiKey === envKeyVal || a.access === envKeyVal));
+                // Persistent-key providers used to import their mirrored auth.json entry as
+                // `oauth` (Pi stores the minted key as `access`), leaving one shadow duplicate
+                // of the same key per login. Drop those.
+                if (PERSISTENT_KEY_PROVIDERS.has(provider) && a.type === "oauth" && isSameKey) {
+                  return false;
+                }
+                if (a.type === "api_key" && !isSameKey) {
+                  return a.id !== previousMirrorId;
+                }
+                return true;
               });
               if (this.data.accounts.length !== priorCount) {
                 modified = true;
               }
             }
 
+            // Resolve the surviving account only after pruning so a removed duplicate is
+            // never treated as the merge target.
+            const existing = findExisting(provider, email, accountId, id, refresh, persistentKey);
+
             if (!existing) {
               const account: AccountCredential = {
                 id,
                 provider,
-                type: isOAuth ? "oauth" : "api_key",
+                type: isOAuth && !persistentKey ? "oauth" : "api_key",
                 email,
                 accountId,
                 projectId,
@@ -437,7 +474,7 @@ export class AccountStore {
                 access,
                 refresh,
                 expires: typeof cred.expires === "number" ? cred.expires : undefined,
-                apiKey: key,
+                apiKey: persistentKey,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
               };
@@ -451,7 +488,8 @@ export class AccountStore {
               if (clientId && !existing.clientId) existing.clientId = clientId;
               if (teamId && !existing.orgId) existing.orgId = teamId;
               if (teamName && !existing.orgName) existing.orgName = teamName;
-              if (key && !existing.apiKey) existing.apiKey = key;
+              if (persistentKey && !existing.apiKey) existing.apiKey = persistentKey;
+              if (persistentKey && !existing.access) existing.access = persistentKey;
               if (planType && !existing.planType) existing.planType = planType;
               const credExpires = typeof cred.expires === "number" ? cred.expires : undefined;
               const isPiAuthNewer =

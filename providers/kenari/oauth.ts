@@ -374,10 +374,12 @@ export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuth
     store.setActive(PROVIDER_ID, accountId);
 
     return {
+      type: "api_key",
+      key: finalApiKey,
       access: finalApiKey,
       refresh: "",
       expires: 0,
-    };
+    } as unknown as OAuthCredentials;
   } finally {
     shutdown();
   }
