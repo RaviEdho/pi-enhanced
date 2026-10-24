@@ -5,7 +5,7 @@ import {
 } from "../../providers/antigravity/constants.js";
 import type { LoadCodeAssistResponse } from "../../providers/antigravity/types.js";
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
-import { normalizeWindowToken, QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
+import { normalizeWindowToken, QUOTA_WINDOW, QUOTA_WINDOW_LABEL, QUOTA_WINDOW_SHORT_LABEL } from "./windows.js";
 
 interface RawQuotaBucket {
   bucketId?: string;
@@ -131,9 +131,9 @@ export async function fetchAntigravityUsage(
 
         let displayName = b.displayName ?? b.bucketId ?? "Quota";
         if (b.bucketId === "gemini-weekly") displayName = "Gemini (Weekly)";
-        else if (b.bucketId === "gemini-5h") displayName = "Gemini (5 Hour)";
+        else if (b.bucketId === "gemini-5h") displayName = "Gemini (5-Hour)";
         else if (b.bucketId === "3p-weekly") displayName = "Claude & GPT (Weekly)";
-        else if (b.bucketId === "3p-5h") displayName = "Claude & GPT (5 Hour)";
+        else if (b.bucketId === "3p-5h") displayName = "Claude & GPT (5-Hour)";
 
         return {
           bucketId: b.bucketId ?? "default",
@@ -156,11 +156,15 @@ export async function fetchAntigravityUsage(
 
     // Build capacity summary line matching omp format
     const capacityParts: string[] = [];
+    const capacityPartsShort: string[] = [];
     if (has5h) {
       const used5h = (1 - min5hRemaining).toFixed(2);
       const left5h = min5hRemaining.toFixed(2);
       capacityParts.push(
         `${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]} → ${used5h}/1 account used (${left5h}× quota left)`
+      );
+      capacityPartsShort.push(
+        `${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.fiveHour]} → ${used5h}/1 account used (${left5h}× quota left)`
       );
     }
     if (hasWeekly) {
@@ -169,10 +173,15 @@ export async function fetchAntigravityUsage(
       capacityParts.push(
         `${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]} → ${usedWeekly}/1 account used (${leftWeekly}× quota left)`
       );
+      capacityPartsShort.push(
+        `${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.weekly]} → ${usedWeekly}/1 account used (${leftWeekly}× quota left)`
+      );
     }
 
     const capacitySummary =
       capacityParts.length > 0 ? `capacity: ${capacityParts.join(" · ")}` : undefined;
+    const capacitySummaryShort =
+      capacityPartsShort.length > 0 ? `capacity: ${capacityPartsShort.join(" · ")}` : undefined;
 
     return {
       providerId: "google-antigravity",
@@ -182,6 +191,7 @@ export async function fetchAntigravityUsage(
       fetchedAt,
       groups,
       capacitySummary,
+      capacitySummaryShort,
     };
   } catch (err) {
     return {

@@ -8,7 +8,7 @@ import {
   USAGE_SUMMARY_URL,
 } from "../../providers/commandcode/constants.js";
 import { getPlanDisplayName } from "../../providers/commandcode/plan.js";
-import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
+import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL, QUOTA_WINDOW_SHORT_LABEL } from "./windows.js";
 import type {
   CommandCodeCreditsResponse,
   CommandCodeSubscriptionsResponse,
@@ -160,9 +160,11 @@ export async function fetchCommandCodeUsage(
     }
 
     let capacitySummary = `$${totalRemaining.toFixed(2)} remaining`;
+    let capacitySummaryShort = capacitySummary;
     if (windowLimits?.fiveHour && windowLimits.fiveHour.cap > 0) {
       const avail5h = Math.max(0, windowLimits.fiveHour.cap - windowLimits.fiveHour.used);
       capacitySummary = `$${avail5h.toFixed(2)} / $${windowLimits.fiveHour.cap.toFixed(2)} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · $${totalRemaining.toFixed(2)} total`;
+      capacitySummaryShort = `$${avail5h.toFixed(2)} / $${windowLimits.fiveHour.cap.toFixed(2)} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.fiveHour]}) · $${totalRemaining.toFixed(2)} total`;
     }
 
     return {
@@ -173,6 +175,7 @@ export async function fetchCommandCodeUsage(
       fetchedAt,
       groups,
       capacitySummary,
+      capacitySummaryShort,
     };
   } catch (err) {
     return {

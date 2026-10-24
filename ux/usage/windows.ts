@@ -5,6 +5,11 @@
  * (`"5h"`, `"5-hour"`, `"5 Hour"`, `"N-Hour Limit"`). To keep `/usage` and the
  * status footer consistent, every scraper normalizes its windows to the tokens
  * below and renders them with the canonical labels.
+ *
+ * Two label vocabularies exist on purpose:
+ * - `QUOTA_WINDOW_LABEL` (long form) is used by `/usage`, e.g. `5-Hour`.
+ * - `QUOTA_WINDOW_SHORT_LABEL` (compact form) is used by the status footer,
+ *   e.g. `5h`, so the single-line footer stays narrow.
  */
 
 /** Canonical machine-readable window tokens. */
@@ -22,6 +27,8 @@ export const QUOTA_WINDOW = {
 
 export type QuotaWindowToken = (typeof QUOTA_WINDOW)[keyof typeof QUOTA_WINDOW];
 
+const DAY_SECONDS = 86_400;
+
 /**
  * Canonical user-facing labels for the shared window concepts.
  *
@@ -30,10 +37,22 @@ export type QuotaWindowToken = (typeof QUOTA_WINDOW)[keyof typeof QUOTA_WINDOW];
  * deliberately absent from this map.
  */
 export const QUOTA_WINDOW_LABEL: Record<string, string> = {
-  [QUOTA_WINDOW.fiveHour]: "5 Hour",
+  [QUOTA_WINDOW.fiveHour]: "5-Hour",
   [QUOTA_WINDOW.weekly]: "Weekly",
   [QUOTA_WINDOW.monthly]: "Monthly",
   [QUOTA_WINDOW.daily]: "Daily",
+};
+
+/**
+ * Compact labels used by the single-line status footer, where horizontal space
+ * is scarce. Kept separate from `QUOTA_WINDOW_LABEL` so `/usage` keeps the
+ * long, descriptive naming.
+ */
+export const QUOTA_WINDOW_SHORT_LABEL: Record<string, string> = {
+  [QUOTA_WINDOW.fiveHour]: "5h",
+  [QUOTA_WINDOW.weekly]: "weekly",
+  [QUOTA_WINDOW.monthly]: "monthly",
+  [QUOTA_WINDOW.daily]: "daily",
 };
 
 /**
@@ -42,10 +61,54 @@ export const QUOTA_WINDOW_LABEL: Record<string, string> = {
  */
 export function quotaWindowLabel(token: string | undefined): string {
   if (!token) return "";
-  return QUOTA_WINDOW_LABEL[token] || token;
+  const mapped = QUOTA_WINDOW_LABEL[token];
+  if (mapped) return mapped;
+  const hourMatch = token.match(/^(\d+)-hour$/);
+  if (hourMatch) return `${hourMatch[1]}-Hour`;
+  const dayMatch = token.match(/^(\d+)-day$/);
+  if (dayMatch) return `${dayMatch[1]}-Day`;
+  return token;
 }
 
-const DAY_SECONDS = 86_400;
+/**
+ * Resolves the compact footer label for a window token.
+ *
+ * Falls back to the duration when the provider reports a non-canonical token
+ * (e.g. `default`), so the footer still shows a meaningful period name.
+ */
+export function quotaWindowShortLabel(
+  token: string | undefined,
+  seconds?: number
+): string {
+  if (!token) return "";
+  const mapped = QUOTA_WINDOW_SHORT_LABEL[token];
+  if (mapped) return mapped;
+  const hourMatch = token.match(/^(\d+)-hour$/);
+  if (hourMatch) return `${hourMatch[1]}h`;
+  const dayMatch = token.match(/^(\d+)-day$/);
+  if (dayMatch) return `${dayMatch[1]}d`;
+  if (seconds && seconds > 0) return windowShortForSeconds(seconds);
+  return token;
+}
+
+/**
+ * Maps a window duration to a compact footer label.
+ */
+export function windowShortForSeconds(seconds: number): string {
+  if (seconds >= 28 * DAY_SECONDS && seconds <= 31 * DAY_SECONDS) {
+    return QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.monthly];
+  }
+  if (seconds >= 6 * DAY_SECONDS && seconds <= 8 * DAY_SECONDS) {
+    return QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.weekly];
+  }
+  if (seconds >= 0.9 * DAY_SECONDS && seconds <= 1.1 * DAY_SECONDS) {
+    return QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.daily];
+  }
+  if (seconds >= 1.5 * DAY_SECONDS) {
+    return `${Math.round(seconds / DAY_SECONDS)}d`;
+  }
+  return `${Math.max(1, Math.round(seconds / 3600))}h`;
+}
 
 /**
  * Normalizes a provider-reported window string into a canonical token.
@@ -97,5 +160,8 @@ export function windowLabelForSeconds(seconds: number): string {
   if (seconds >= 0.9 * DAY_SECONDS && seconds <= 1.1 * DAY_SECONDS) {
     return QUOTA_WINDOW_LABEL[QUOTA_WINDOW.daily];
   }
-  return `${Math.max(1, Math.round(seconds / 3600))} Hour`;
+  if (seconds >= 1.5 * DAY_SECONDS) {
+    return `${Math.round(seconds / DAY_SECONDS)}-Day`;
+  }
+  return `${Math.max(1, Math.round(seconds / 3600))}-Hour`;
 }

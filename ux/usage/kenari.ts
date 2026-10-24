@@ -7,7 +7,7 @@ import {
   PROVIDER_NAME,
 } from "../../providers/kenari/constants.js";
 import { updateCachedKenariBilling } from "../../providers/kenari/plan.js";
-import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL } from "./windows.js";
+import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL, QUOTA_WINDOW_SHORT_LABEL } from "./windows.js";
 import type {
   KenariBalanceResponse,
   KenariQuotaResponse,
@@ -171,10 +171,13 @@ export async function fetchKenariUsage(
     }
 
     let capacitySummary = `Rp ${Math.round(availableIdr).toLocaleString("id-ID")} available`;
+    let capacitySummaryShort = capacitySummary;
     if (planWindows?.five_hour && planWindows.five_hour.budget_rp > 0) {
       capacitySummary = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummaryShort = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.fiveHour]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
     } else if (planWindows?.week && planWindows.week.budget_rp > 0) {
       capacitySummary = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummaryShort = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.weekly]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
     }
 
     return {
@@ -185,6 +188,7 @@ export async function fetchKenariUsage(
       fetchedAt,
       groups,
       capacitySummary,
+      capacitySummaryShort,
     };
   } catch (err) {
     return {

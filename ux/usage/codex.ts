@@ -5,6 +5,7 @@ import { getCodexAccountId, getCodexEmail, getCodexPlanType } from "../../provid
 import type { ProviderUsageReport, QuotaBucket, QuotaGroup } from "./types.js";
 import {
   quotaWindowLabel,
+  quotaWindowShortLabel,
   windowLabelForSeconds,
   windowTokenForSeconds,
 } from "./windows.js";
@@ -348,8 +349,17 @@ export async function fetchCodexUsage(options: FetchCodexUsageOptions): Promise<
       return `${quotaWindowLabel(stat.window)}${meterLabel} → ${used}/1 account used (${left}× quota left)`;
     });
 
+    const capacityPartsShort = capacityStats.map((stat) => {
+      const meterLabel = stat.meter ? ` (${stat.meter})` : "";
+      const used = stat.usedFraction.toFixed(2);
+      const left = (1 - stat.usedFraction).toFixed(2);
+      return `${quotaWindowShortLabel(stat.window, stat.durationSeconds)}${meterLabel} → ${used}/1 account used (${left}× quota left)`;
+    });
+
     const capacitySummary =
       capacityParts.length > 0 ? `capacity: ${capacityParts.join(" · ")}` : undefined;
+    const capacitySummaryShort =
+      capacityPartsShort.length > 0 ? `capacity: ${capacityPartsShort.join(" · ")}` : undefined;
 
     const groups: QuotaGroup[] =
       buckets.length > 0
@@ -370,6 +380,7 @@ export async function fetchCodexUsage(options: FetchCodexUsageOptions): Promise<
       fetchedAt,
       groups,
       capacitySummary,
+      capacitySummaryShort,
     };
   } catch (err) {
     return {

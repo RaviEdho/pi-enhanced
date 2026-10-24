@@ -18,7 +18,7 @@ import {
   makeProgressBar,
 } from "./format.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
-import { quotaWindowLabel, QUOTA_WINDOW } from "./windows.js";
+import { quotaWindowShortLabel, QUOTA_WINDOW } from "./windows.js";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -269,7 +269,9 @@ function renderProgressBar(
   let secondarySegment = "";
   for (const secondary of secondaries ?? []) {
     const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel = quotaWindowLabel(secondary.window) || secondary.displayName;
+    const secLabel =
+      quotaWindowShortLabel(secondary.window, secondary.windowSeconds) ||
+      secondary.displayName;
     secondarySegment += ` · ${secLabel}: ${secPct}%`;
   }
 
@@ -285,7 +287,7 @@ function renderBalance(
   now: number
 ): string {
   if (report.providerId === "hyper") {
-    const balancePart = report.capacitySummary || balance?.description || "Hypercredits";
+    const balancePart = report.capacitySummaryShort || report.capacitySummary || balance?.description || "Hypercredits";
     const resetPart = balance?.resetTime
       ? ` · resets ${formatRelativeTime(balance.resetTime, now)}`
       : "";
@@ -295,6 +297,9 @@ function renderBalance(
   if (report.providerId === "kenari") {
     if (balance?.description) {
       return balance.description;
+    }
+    if (report.capacitySummaryShort) {
+      return report.capacitySummaryShort;
     }
     if (report.capacitySummary) {
       return report.capacitySummary;
@@ -310,6 +315,9 @@ function renderBalance(
       const cleanDesc = target.description.replace(/\s*\([^)]*\)$/, "");
       return cleanDesc;
     }
+    if (report.capacitySummaryShort) {
+      return report.capacitySummaryShort;
+    }
     if (report.capacitySummary) {
       return report.capacitySummary;
     }
@@ -317,6 +325,7 @@ function renderBalance(
 
   return (
     balance?.description ||
+    report.capacitySummaryShort ||
     report.capacitySummary ||
     balance?.displayName ||
     "Active balance"

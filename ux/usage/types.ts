@@ -35,6 +35,12 @@ export interface ProviderUsageReport {
   fetchedAt: number;
   groups: QuotaGroup[];
   capacitySummary?: string;
+  /**
+   * Compact variant of `capacitySummary` using the footer vocabulary
+   * (`5h`, `weekly`, `monthly`). Used by the single-line status footer so it
+   * stays narrow; `/usage` keeps the descriptive `capacitySummary`.
+   */
+  capacitySummaryShort?: string;
   error?: string;
 }
 
