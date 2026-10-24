@@ -26,7 +26,7 @@ export interface ModelPricing {
 
 export interface ModelMetadata {
   efforts: string[];
-  cost: ModelPricing;
+  cost?: ModelPricing;
 }
 
 export const COMMANDCODE_MODEL_METADATA: Record<string, ModelMetadata> = {
@@ -1117,6 +1117,21 @@ export const COMMANDCODE_MODEL_METADATA: Record<string, ModelMetadata> = {
       "cacheRead": 0.5,
       "cacheWrite": 0
     }
+  },
+  // The model catalog omits effort capabilities; these are from model-publisher docs.
+  "moonshotai/Kimi-K3.1-Pro": { efforts: ["low", "high", "max"] },
+  "minimax/minimax-m3.1-flash": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  "Qwen/Qwen3.8-Max-Prime": { efforts: ["low", "medium", "xhigh"] },
+  "nvidia/nemotron-3.5-super-vl": {
+    efforts: ["none", "low", "medium", "high", "xhigh"],
+  },
+  "reflection/beam:free": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  "meta/muse-spark-open": {
+    efforts: ["low", "medium", "high", "xhigh"],
   }
 };
 
@@ -1137,7 +1152,7 @@ export function isDeepSeekPeakHours(now = new Date()): boolean {
  */
 export function resolveModelCost(modelId: string, now = new Date()): ModelPricing {
   const meta = COMMANDCODE_MODEL_METADATA[modelId];
-  if (!meta) {
+  if (!meta?.cost) {
     return { input: 0.5, output: 2.0, cacheRead: 0.05, cacheWrite: 0 };
   }
   const base = { ...meta.cost };
@@ -1162,7 +1177,7 @@ export function buildThinkingLevelMap(efforts?: string[]): ThinkingLevelMap | un
   if (!efforts || efforts.length === 0) return undefined;
   const set = new Set(efforts);
   return {
-    off: set.has("off") ? "off" : null,
+    off: set.has("off") ? "off" : set.has("none") ? "none" : null,
     minimal: null,
     low: set.has("low") ? "low" : null,
     medium: set.has("medium") ? "medium" : null,
@@ -1458,7 +1473,19 @@ export function loadCachedModels(): Model<any>[] | null {
     if (!existsSync(CACHE_FILE_PATH)) return null;
     const content = readFileSync(CACHE_FILE_PATH, "utf-8");
     const parsed = JSON.parse(content) as Model<any>[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return parsed.map((model) => {
+      const meta = COMMANDCODE_MODEL_METADATA[model.id];
+      if (!meta) return model;
+
+      const thinkingLevelMap = buildThinkingLevelMap(meta.efforts);
+      const { thinkingLevelMap: _cachedThinkingLevelMap, ...cachedModel } = model;
+      return {
+        ...cachedModel,
+        reasoning: Boolean(thinkingLevelMap),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+      };
+    });
   } catch {
     return null;
   }
