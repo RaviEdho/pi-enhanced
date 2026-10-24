@@ -75,6 +75,21 @@ export async function handlePlanApprovalGate(
 
   if (choice?.startsWith("Execute")) {
     manager.disable(ctx, true);
+
+    // Follow-ups queued from agent_end continue directly without another
+    // before_agent_start event. Put the mode transition in that same queue so
+    // the model does not execute under the previous Plan Mode instructions.
+    const directive = manager.consumeDirective();
+    if (directive) {
+      pi.sendMessage(
+        {
+          ...directive,
+          display: false,
+        },
+        { deliverAs: "followUp" }
+      );
+    }
+
     pi.sendUserMessage("Execute the approved implementation plan. Start with step 1.", {
       deliverAs: "followUp",
     });

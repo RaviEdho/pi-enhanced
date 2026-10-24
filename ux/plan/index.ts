@@ -93,19 +93,17 @@ export function registerPlanMode(pi: ExtensionAPI): void {
     return manager.checkToolCall(event.toolName, event.input as Record<string, unknown>);
   });
 
-  // Inject plan mode directive at the tail before user prompts
+  // Inject the active mode directive before a run. Leaving Plan Mode emits a
+  // one-shot Implement Mode directive to supersede the old read-only rules.
   pi.on(
     "before_agent_start",
     async (_event: BeforeAgentStartEvent): Promise<BeforeAgentStartEventResult | undefined> => {
-      if (!manager.isEnabled()) return undefined;
-
-      const directive = manager.getDirective();
+      const directive = manager.consumeDirective();
       if (!directive) return undefined;
 
       return {
         message: {
-          customType: "plan-mode-directive",
-          content: directive,
+          ...directive,
           display: false,
         },
       };
@@ -128,7 +126,8 @@ export function registerPlanMode(pi: ExtensionAPI): void {
     if (pi.getFlag("plan") === true) {
       manager.enable(ctx, false);
     } else {
-      const entries = ctx.sessionManager?.getEntries?.() || [];
+      const entries =
+        ctx.sessionManager?.getBranch?.() || ctx.sessionManager?.getEntries?.() || [];
       manager.restoreFromSession(entries, ctx);
     }
     manager.updateStatus(ctx);

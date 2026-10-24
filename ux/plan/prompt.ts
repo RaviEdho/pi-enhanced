@@ -67,4 +67,5 @@ ${clarifyRule}
 export const PLAN_MODE_DIRECTIVE = getPlanModeDirective(true);
 
 export const IMPLEMENT_MODE_DIRECTIVE = `[IMPLEMENT MODE ACTIVE]
-Write access is restored. Proceed with executing the approved implementation plan step-by-step.`;
+Plan Mode is no longer active. This directive supersedes all earlier [PLAN MODE ACTIVE] instructions.
+Write access and mutating shell commands are restored. Proceed with the user's current implementation request instead of drafting another plan, unless the user explicitly asks for further planning.`;

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getPlanModeDirective, PLAN_MODE_DIRECTIVE } from "./prompt.js";
+import { getPlanModeDirective, IMPLEMENT_MODE_DIRECTIVE } from "./prompt.js";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
 import { isWebActive } from "../../tools/web/index.js";
@@ -7,6 +7,8 @@ import { isSafeBashCommand } from "./safe-bash.js";
 import type { PlanModeState } from "./types.js";
 
 export const PLAN_MODE_ENTRY_TYPE = "plan-mode";
+export const PLAN_MODE_DIRECTIVE_TYPE = "plan-mode-directive";
+export const IMPLEMENT_MODE_DIRECTIVE_TYPE = "implement-mode-directive";
 export const STATUS_KEY = "plan-mode";
 
 /**
@@ -67,6 +69,7 @@ const BLUEPRINT_LIGHT_COLORS: Record<string, string> = {
 export class PlanModeManager {
   private static instance?: PlanModeManager;
   private enabled = false;
+  private implementDirectivePending = false;
   private pi?: ExtensionAPI;
   private listeners: Set<() => void> = new Set();
 
@@ -201,6 +204,7 @@ export class PlanModeManager {
    */
   public enable(ctx?: ExtensionContext, notify = true): void {
     this.enabled = true;
+    this.implementDirectivePending = false;
     this.updateStatus(ctx);
     this.persistState();
 
@@ -213,6 +217,11 @@ export class PlanModeManager {
    * Disables Plan Mode / Enables Implement Mode (write access restored).
    */
   public disable(ctx?: ExtensionContext, notify = true): void {
+    if (this.enabled) {
+      // The old plan directive remains in model context. Explicitly supersede it
+      // on the next run instead of silently changing only tool enforcement.
+      this.implementDirectivePending = true;
+    }
     this.enabled = false;
     this.updateStatus(ctx);
     this.persistState();
@@ -275,15 +284,37 @@ export class PlanModeManager {
   }
 
   /**
-   * Returns directive to inject before agent prompt when Plan Mode is active.
+   * Returns the directive for the next run. Implement Mode is included only
+   * when it must supersede an earlier Plan Mode directive.
    */
   public getDirective(): string | undefined {
-    if (!this.enabled) return undefined;
-    return getPlanModeDirective({
-      askUserEnabled: isFeedbackToolActive(),
-      scoutEnabled: isScoutActive(),
-      webEnabled: isWebActive(),
-    });
+    if (this.enabled) {
+      return getPlanModeDirective({
+        askUserEnabled: isFeedbackToolActive(),
+        scoutEnabled: isScoutActive(),
+        webEnabled: isWebActive(),
+      });
+    }
+
+    return this.implementDirectivePending ? IMPLEMENT_MODE_DIRECTIVE : undefined;
+  }
+
+  /**
+   * Takes the next directive and acknowledges its delivery to model context.
+   * Plan Mode directives repeat on each run; the Implement Mode transition
+   * directive is one-shot so ordinary later prompts are not biased to an old plan.
+   */
+  public consumeDirective(): { customType: string; content: string } | undefined {
+    const content = this.getDirective();
+    if (!content) return undefined;
+
+    const customType = this.enabled
+      ? PLAN_MODE_DIRECTIVE_TYPE
+      : IMPLEMENT_MODE_DIRECTIVE_TYPE;
+    if (!this.enabled) {
+      this.implementDirectivePending = false;
+    }
+    return { customType, content };
   }
 
   /**
@@ -316,9 +347,26 @@ export class PlanModeManager {
           (e.customType === PLAN_MODE_ENTRY_TYPE || (e as any).name === PLAN_MODE_ENTRY_TYPE)
       );
 
-    if (lastPlanEntry?.data && typeof (lastPlanEntry.data as any).enabled === "boolean") {
-      this.enabled = (lastPlanEntry.data as any).enabled;
-    }
+    this.enabled =
+      lastPlanEntry?.data && typeof (lastPlanEntry.data as any).enabled === "boolean"
+        ? (lastPlanEntry.data as any).enabled
+        : false;
+
+    // Resume old or interrupted sessions safely: if the newest mode directive
+    // still says Plan Mode while restored state says Implement Mode, queue one
+    // explicit superseding directive before the next model request.
+    let lastPlanDirectiveIndex = -1;
+    let lastImplementDirectiveIndex = -1;
+    entries.forEach((entry, index) => {
+      if (entry.type !== "custom_message") return;
+      if (entry.customType === PLAN_MODE_DIRECTIVE_TYPE) {
+        lastPlanDirectiveIndex = index;
+      } else if (entry.customType === IMPLEMENT_MODE_DIRECTIVE_TYPE) {
+        lastImplementDirectiveIndex = index;
+      }
+    });
+    this.implementDirectivePending =
+      !this.enabled && lastPlanDirectiveIndex > lastImplementDirectiveIndex;
 
     this.updateStatus(ctx);
   }
