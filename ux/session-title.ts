@@ -12,7 +12,6 @@ Start with an imperative verb. Capitalize only the first word unless the user's 
 Preserve ticket references exactly. Write in the user's language.
 Do not use quotes, markdown, or trailing punctuation. Do not answer the request.`;
 const MAX_SOURCE_BYTES = 960;
-const MAX_TITLE_LENGTH = 36;
 const TITLE_TIMEOUT_MS = 20_000;
 
 function extractUserText(message: { role: string; content?: unknown }): string {
@@ -59,8 +58,7 @@ function cleanTitle(text: string): string | undefined {
     .replace(/[.!?]+$/u, "")
     .trim();
 
-  const clipped = Array.from(title).slice(0, MAX_TITLE_LENGTH).join("").trim();
-  return clipped || undefined;
+  return title || undefined;
 }
 
 function firstUserPrompt(ctx: ExtensionContext, currentMessage: MessageEndEvent["message"]): string {
