@@ -3,7 +3,12 @@ import {
   type ExtensionContext,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import {
+  truncateToWidth,
+  visibleWidth,
+  type EditorTheme,
+  type TUI,
+} from "@earendil-works/pi-tui";
 import { PlanModeManager } from "./manager.js";
 
 /**
@@ -52,5 +57,30 @@ export class PlanModeEditor extends CustomEditor {
     PlanModeManager.getInstance().onModeChange(() => {
       tui.requestRender();
     });
+  }
+
+  protected renderTopBorder(width: number, hiddenLineCount: number): string {
+    const sessionName = this.ctx?.sessionManager?.getSessionName?.();
+    if (!sessionName || width <= 0) {
+      return super.renderTopBorder(width, hiddenLineCount);
+    }
+
+    // Reserve a small left-side border/status area and two border cells after the label.
+    const maxNameWidth = width - 7;
+    if (maxNameWidth <= 0) {
+      return super.renderTopBorder(width, hiddenLineCount);
+    }
+    const label = ` ${truncateToWidth(sessionName, maxNameWidth, "")} `;
+    const labelWidth = visibleWidth(label);
+    const trailingBorderWidth = 2;
+    const borderWidth = width - labelWidth - trailingBorderWidth;
+    if (borderWidth <= 0) {
+      return super.renderTopBorder(width, hiddenLineCount);
+    }
+
+    return (
+      super.renderTopBorder(borderWidth, hiddenLineCount) +
+      this.borderColor(`${label}${"─".repeat(trailingBorderWidth)}`)
+    );
   }
 }

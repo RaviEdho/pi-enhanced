@@ -189,7 +189,7 @@ function extractKeyBuckets(
 
 /**
  * Builds Line 1:
- * - Left: PWD (gitBranch) • sessionName
+ * - Left: PWD (gitBranch)
  * - Far Right: Model ID • thinking: level
  */
 function renderFooterLine1(
@@ -204,9 +204,7 @@ function renderFooterLine1(
     process.env.HOME || process.env.USERPROFILE
   );
   const branchStr = branch ? ` (${branch})` : "";
-  const sessionName = ctx.sessionManager?.getSessionName?.();
-  const sessionStr = sessionName ? ` • ${sessionName}` : "";
-  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}${sessionStr}`);
+  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}`);
   const leftText = `${modeIndicator}${leftDetails}`;
 
   // Right-side: Model and thinking effort
@@ -506,7 +504,7 @@ function buildStatsLeft(
 
 /**
  * Builds the standard directory line (matching Pi native layout Line 1):
- * - pwd (branch) • sessionName
+ * - pwd (branch)
  */
 function renderStandardPwdLine(
   ctx: ExtensionContext,
@@ -520,9 +518,7 @@ function renderStandardPwdLine(
     process.env.HOME || process.env.USERPROFILE
   );
   const branchStr = branch ? ` (${branch})` : "";
-  const sessionName = ctx.sessionManager?.getSessionName?.();
-  const sessionStr = sessionName ? ` • ${sessionName}` : "";
-  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}${sessionStr}`);
+  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}`);
   const pwd = `${modeIndicator}${leftDetails}`;
   return truncateToWidth(pwd, width, theme.fg("dim", "..."));
 }
@@ -695,7 +691,7 @@ async function refreshSessionAccountQuota(
 
 /**
  * Registers the custom footer displaying:
- * - Line 1: Directory & session on left, Model ID & thinking level on far right.
+ * - Line 1: Directory on left, Model ID & thinking level on far right.
  * - Line 2: Token stats on left, Active account usage bar on far right (under model).
  * Also registers automated background quota monitoring (idle polling, tool_call throttled checks,
  * turn settlement refreshes, and model selection updates).
