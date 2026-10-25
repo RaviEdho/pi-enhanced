@@ -9,6 +9,7 @@ export interface DiscordGatewayConfig {
   allowedChannelIds: string[];
   allowDirectMessages: boolean;
   allowServerMessages: boolean;
+  homeChannelId?: string;
   cwd: string;
   model?: { provider: string; id: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -89,6 +90,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     !isDiscordAllowlist(value.allowedChannelIds) ||
     (value.allowDirectMessages !== undefined && typeof value.allowDirectMessages !== "boolean") ||
     (value.allowServerMessages !== undefined && typeof value.allowServerMessages !== "boolean") ||
+    (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
     typeof value.cwd !== "string" ||
     !value.cwd.trim() ||
     (value.model !== undefined &&
@@ -109,6 +111,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     allowedChannelIds: [...new Set(value.allowedChannelIds)],
     allowDirectMessages: value.allowDirectMessages !== false,
     allowServerMessages: value.allowServerMessages !== false,
+    ...(typeof value.homeChannelId === "string" ? { homeChannelId: value.homeChannelId } : {}),
     cwd: value.cwd,
     ...(value.model ? { model: value.model } : {}),
     ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel as DiscordGatewayConfig["thinkingLevel"] } : {}),

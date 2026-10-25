@@ -25,6 +25,7 @@ const restartRequestPath = process.env.PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH;
 const logPath = process.env.PI_ENHANCED_DISCORD_LOG_PATH;
 const piExecutable = process.env.PI_ENHANCED_DISCORD_PI_EXECUTABLE || "pi";
 const piArgs = parseJsonArray(process.env.PI_ENHANCED_DISCORD_PI_ARGS);
+const startReason = process.env.PI_ENHANCED_DISCORD_START_REASON || "start";
 const MAX_ACTIVE_RUNS = 3;
 const MAX_OPEN_SESSIONS = 20;
 const SESSION_IDLE_MS = 20 * 60 * 1000;
@@ -45,6 +46,7 @@ if (
   !isValidAllowlist(config.allowedChannelIds) ||
   (config.allowDirectMessages !== undefined && typeof config.allowDirectMessages !== "boolean") ||
   (config.allowServerMessages !== undefined && typeof config.allowServerMessages !== "boolean") ||
+  (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
   typeof config.cwd !== "string"
 ) {
   throw new Error("Discord gateway configuration is invalid");
@@ -93,6 +95,7 @@ const client = new Client({
 client.on("clientReady", (readyClient) => {
   updateStatus("ready", { botTag: readyClient.user.tag, lastError: undefined });
   log(`Connected as ${readyClient.user.tag}`);
+  void sendHomeNotification(startReason === "start" ? "Discord gateway started and is online." : "Discord gateway restarted and is online.");
 });
 client.on("shardDisconnect", (event) => {
   updateStatus("disconnected", {
@@ -128,7 +131,9 @@ if (restartRequestPath) {
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("uncaughtException", (error) => {
-  log(`Uncaught error: ${safeErrorName(error)}`);
+  const summary = `Uncaught error: ${safeErrorName(error)}`;
+  updateStatus("failed", { lastError: summary });
+  log(summary);
   void shutdown("uncaughtException", 1);
 });
 process.on("unhandledRejection", (error) => {
@@ -671,30 +676,42 @@ async function shutdown(reason, exitCode = 0, restart = false) {
   for (const pending of pendingUiAnswers.values()) pending.finish(undefined);
   await Promise.all([...piSessions.values()].map((session) => session.stop()));
   piSessions.clear();
-  try {
-    await client.destroy();
-  } catch {
-    // The Discord client may not have completed login.
-  }
 
   if (restart && exitCode === 0) {
     try {
       const replacementPid = await spawnReplacementGateway();
       log(`Started replacement Discord gateway (PID ${replacementPid})`);
+      await destroyDiscordClient();
       process.exit(0);
     } catch (error) {
       const summary = `Could not restart Discord gateway: ${error instanceof Error ? error.message : String(error)}`;
       log(summary);
       updateStatus("failed", { lastError: summary });
+      await sendHomeNotification(`Discord gateway restart failed: ${summary}`);
+      await destroyDiscordClient();
       removeOwnPid();
       process.exit(1);
     }
   }
 
-  if (exitCode === 0) updateStatus("stopped", { lastError: undefined });
-  else updateStatus("failed", { lastError: failureMessage });
+  if (exitCode === 0) {
+    updateStatus("stopped", { lastError: undefined });
+    await sendHomeNotification("Discord gateway stopped.");
+  } else {
+    updateStatus("failed", { lastError: failureMessage });
+    await sendHomeNotification(`Discord gateway failed: ${failureMessage}`);
+  }
+  await destroyDiscordClient();
   removeOwnPid();
   process.exit(exitCode);
+}
+
+async function destroyDiscordClient() {
+  try {
+    await client.destroy();
+  } catch {
+    // The Discord client may not have completed login.
+  }
 }
 
 async function spawnReplacementGateway() {
@@ -706,7 +723,7 @@ async function spawnReplacementGateway() {
       cwd: process.cwd(),
       detached: true,
       stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
-      env: process.env,
+      env: { ...process.env, PI_ENHANCED_DISCORD_START_REASON: "replacement" },
       windowsHide: true,
     });
   } finally {
@@ -725,11 +742,16 @@ async function spawnReplacementGateway() {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error("replacement process exited before initializing");
     }
+    let status;
     try {
-      const status = JSON.parse(readFileSync(statusPath, "utf8"));
-      if (status?.pid === child.pid) return child.pid;
+      status = JSON.parse(readFileSync(statusPath, "utf8"));
     } catch {
       // The replacement has not written its startup status yet.
+    }
+    if (status?.pid === child.pid && status.state === "ready") return child.pid;
+    if (status?.pid === child.pid && status.state === "failed") {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      throw new Error(status.lastError || "replacement process failed to initialize");
     }
     await delay(100);
   }
@@ -747,6 +769,29 @@ function removeOwnPid() {
     if (recordedPid === process.pid) unlinkSync(pidPath);
   } catch {
     // The launcher or replacement process may have already changed the PID file.
+  }
+}
+
+async function sendHomeNotification(text) {
+  let homeChannelId = config.homeChannelId;
+  try {
+    const latestConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    homeChannelId = typeof latestConfig.homeChannelId === "string" && /^\d{17,20}$/.test(latestConfig.homeChannelId)
+      ? latestConfig.homeChannelId
+      : undefined;
+  } catch {
+    // Keep the in-memory destination when the config file is temporarily unavailable.
+  }
+  if (!homeChannelId) return;
+  try {
+    const channel = await client.channels.fetch(homeChannelId);
+    if (!channel || typeof channel.send !== "function") {
+      throw new Error("configured home channel is unavailable or cannot receive messages");
+    }
+    await channel.send({ content: text, allowedMentions: { parse: [] } });
+    log(`Sent home-channel notification: ${text}`);
+  } catch (error) {
+    log(`Could not send home-channel notification: ${safeErrorName(error)}`);
   }
 }
 

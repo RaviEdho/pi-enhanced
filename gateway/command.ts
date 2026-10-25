@@ -67,8 +67,8 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
           ctx,
           [
             "/discord          Open the gateway menu (or setup if unconfigured)",
-            "/discord setup    Configure the bot, access allowlists, and workspace",
-            "/discord configure Open bot, whitelist, and access-path settings",
+            "/discord setup    Configure the bot, access allowlists, workspace, and optional home channel",
+            "/discord configure Open bot, whitelist, home-channel, workspace, and access-path settings",
             "/discord start    Start the independent background gateway",
             "/discord restart  Restart the background gateway",
             "/discord stop     Stop the gateway",
@@ -160,11 +160,12 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
 
     const selected = await selectDiscordOption(ctx, {
       title: "Configure Discord Gateway",
-      description: `DM access: ${config.allowDirectMessages ? "On" : "Off"} · Server access: ${config.allowServerMessages ? "On" : "Off"}`,
+      description: `DM access: ${config.allowDirectMessages ? "On" : "Off"} · Server access: ${config.allowServerMessages ? "On" : "Off"} · Home notifications: ${config.homeChannelId ? "On" : "Off"}`,
       options: [
         "Configure bot token",
         "Configure user whitelist",
         "Configure server channel whitelist",
+        "Configure home notification channel",
         "Configure gateway workspace",
         "Configure access paths",
       ],
@@ -178,6 +179,9 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         break;
       case "Configure server channel whitelist":
         await configureWhitelist(ctx, config, "channels");
+        break;
+      case "Configure home notification channel":
+        await configureHomeChannel(ctx, config);
         break;
       case "Configure gateway workspace":
         await configureWorkspace(ctx, config);
@@ -245,6 +249,19 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     return;
   }
 
+  const homeChannelInput = await promptDiscordInput(ctx, {
+    title: "Home Notification Channel",
+    instruction: "Optional: enter a Discord text channel ID for gateway start, restart, stop, and failure notices. Leave blank to disable.",
+    initialValue: existing?.homeChannelId || "",
+    placeholder: "Optional Discord text channel ID",
+  });
+  if (homeChannelInput === undefined) return;
+  const homeChannelId = homeChannelInput.trim() || undefined;
+  if (homeChannelId && !isDiscordSnowflake(homeChannelId)) {
+    notify(ctx, "The home notification channel must be a 17–20 digit Discord channel ID.", "error");
+    return;
+  }
+
   const defaultWorkspace = existing?.cwd || join(homedir(), "pi-workspaces", "discord-gateway");
   const cwdInput = await promptDiscordInput(ctx, {
     title: "Gateway Workspace",
@@ -284,6 +301,10 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     notify(ctx, "Discord rejected that bot token. Check it and try /discord setup again.", "error");
     return;
   }
+  if (homeChannelId && !(await validateHomeChannel(token, homeChannelId))) {
+    notify(ctx, "Discord could not verify that home channel. Check the channel ID and ensure the bot can view it.", "error");
+    return;
+  }
 
   const usersAreWildcard = allowedUserIds.includes("*");
   const channelsAreWildcard = allowedChannelIds.includes("*");
@@ -304,6 +325,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     dmAccessLine,
     serverAccessLine,
     "Mention the bot to start a server thread.",
+    `Home notifications: ${homeChannelId || "disabled"}`,
     "",
     "UNATTENDED TOOLS",
     "Pi tools can edit files and run shell commands without local approval.",
@@ -331,6 +353,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     allowedChannelIds,
     allowDirectMessages: existing?.allowDirectMessages ?? true,
     allowServerMessages: existing?.allowServerMessages ?? true,
+    ...(homeChannelId ? { homeChannelId } : {}),
     cwd,
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
@@ -425,6 +448,38 @@ async function configureWhitelist(
     config,
     isUsers ? { allowedUserIds: allowlist } : { allowedChannelIds: allowlist },
     `${isUsers ? "User" : "Server channel"} whitelist updated.`
+  );
+}
+
+async function configureHomeChannel(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const input = await promptDiscordInput(ctx, {
+    title: "Configure Home Notification Channel",
+    instruction: "Enter a Discord text channel ID, or 'off' to disable notifications. Leave blank to keep the current setting.",
+    initialValue: "",
+    placeholder: config.homeChannelId || "Optional Discord text channel ID",
+  });
+  if (input === undefined || !input.trim()) return;
+
+  const value = input.trim();
+  const homeChannelId = value.toLowerCase() === "off" ? undefined : value;
+  if (homeChannelId && !isDiscordSnowflake(homeChannelId)) {
+    notify(ctx, "The home notification channel must be a 17–20 digit Discord channel ID, or enter 'off'.", "error");
+    return;
+  }
+  if (homeChannelId && !(await validateHomeChannel(config.token, homeChannelId))) {
+    notify(ctx, "Discord could not verify that home channel. Check the channel ID and ensure the bot can view it.", "error");
+    return;
+  }
+  if (homeChannelId === config.homeChannelId) {
+    notify(ctx, "Home notification channel is unchanged.", "info");
+    return;
+  }
+
+  saveGatewayConfig(
+    ctx,
+    config,
+    { homeChannelId },
+    homeChannelId ? `Home notification channel set to ${homeChannelId}.` : "Home channel notifications disabled."
   );
 }
 
@@ -604,6 +659,20 @@ async function promptForBotToken(ctx: ExtensionCommandContext): Promise<string |
   }))?.trim() || undefined;
 }
 
+async function validateHomeChannel(token: string, channelId: string): Promise<boolean> {
+  try {
+    const response = await fetch(`https://discord.com/api/v10/channels/${channelId}`, {
+      headers: { Authorization: `Bot ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return false;
+    const channel = (await response.json()) as { id?: unknown; type?: unknown };
+    return channel.id === channelId && (channel.type === 0 || channel.type === 5);
+  } catch {
+    return false;
+  }
+}
+
 async function validateBotToken(token: string): Promise<{ id: string; username: string } | undefined> {
   try {
     const response = await fetch("https://discord.com/api/v10/users/@me", {
@@ -633,7 +702,7 @@ function parseAllowlist(input: string): string[] {
   return [...new Set(tokens)];
 }
 
-async function startGateway(ctx: ExtensionCommandContext): Promise<void> {
+async function startGateway(ctx: ExtensionCommandContext, startReason: "start" | "restart" = "start"): Promise<void> {
   const config = readDiscordGatewayConfig();
   if (!config) {
     notify(ctx, "No Discord gateway configuration found. Run /discord setup first.", "error");
@@ -691,6 +760,7 @@ async function startGateway(ctx: ExtensionCommandContext): Promise<void> {
       PI_ENHANCED_DISCORD_SESSION_ROOT: paths.sessions,
       PI_ENHANCED_DISCORD_THREADS_PATH: paths.threads,
       PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH: paths.restartRequest,
+      PI_ENHANCED_DISCORD_START_REASON: startReason,
       PI_ENHANCED_DISCORD_PI_EXECUTABLE: invocation.executable,
       PI_ENHANCED_DISCORD_PI_ARGS: JSON.stringify(invocation.args),
     },
@@ -799,28 +869,21 @@ async function restartGateway(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getDiscordGatewayPaths();
   const pid = readPid(paths.pid);
   if (pid && isProcessAlive(pid)) {
-    const status = readJson<DiscordGatewayStatus>(paths.status);
-    if (status) writePrivateJson(paths.status, { ...status, state: "stopping", updatedAt: new Date().toISOString() });
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (error) {
-      if (isProcessAlive(pid)) {
-        notify(ctx, `Could not restart gateway PID ${pid}: ${error instanceof Error ? error.message : String(error)}`, "error");
-        return;
-      }
-    }
-
-    for (let attempt = 0; attempt < 40 && isProcessAlive(pid); attempt++) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-    }
-    if (isProcessAlive(pid)) {
-      notify(ctx, `Gateway PID ${pid} is still stopping; restart cancelled. Run /discord stop and try again.`, "error");
+    if (existsSync(paths.restartRequest)) {
+      notify(ctx, "A Discord gateway restart is already pending.", "info");
       return;
     }
+    writePrivateJson(paths.restartRequest, {
+      type: "restart",
+      requestedAt: new Date().toISOString(),
+      reason: "Requested via /discord restart",
+    });
+    notify(ctx, "Graceful Discord gateway restart requested. Accepted work will finish before it reconnects.", "info");
+    return;
   }
 
   if (existsSync(paths.pid)) unlinkSync(paths.pid);
-  await startGateway(ctx);
+  await startGateway(ctx, "restart");
 }
 
 function stopGateway(ctx: ExtensionCommandContext): void {
