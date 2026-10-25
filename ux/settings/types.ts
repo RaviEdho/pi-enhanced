@@ -165,7 +165,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     key: "session.autoTitle",
     label: "Automatic Session Titles",
     category: "UX & Telemetry",
-    description: "Generate a concise title from the first user message using the configured model (extra model call)",
+    description: "Generate a short, action-oriented title from the first user message using the configured model (extra model call)",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
