@@ -92,6 +92,10 @@ interface TurnMetrics {
 /** Telemetry accumulated across every turn/call of a single agent run. */
 export interface RunMetrics {
   startedAtMs: number;
+  /** Time spent waiting on blocking UI prompts, excluded from the live working clock. */
+  waitingMs?: number;
+  /** Start of the current blocking UI prompt, if one is active. */
+  waitingSinceMs?: number;
   /** Cumulative prompt tokens (input + cache reads + cache writes). */
   input: number;
   /** Cumulative output tokens. */
@@ -152,6 +156,7 @@ function createTurnMetrics(now: number): TurnMetrics {
 function createRunMetrics(now: number): RunMetrics {
   return {
     startedAtMs: now,
+    waitingMs: 0,
     input: 0,
     output: 0,
     decodeMs: 0,
@@ -174,10 +179,13 @@ function liveTurnOutput(turn: TurnMetrics): number {
 
 /**
  * Builds the `Working (...)` status line with live turn telemetry appended:
- * elapsed time, cumulative tokens in/out, TTFT, and tokens per second.
+ * active elapsed time, cumulative tokens in/out, TTFT, and tokens per second.
+ * Time spent waiting on a blocking UI prompt is excluded from elapsed time.
  */
 export function buildWorkingMessage(run: RunMetrics, now: number): string {
-  const elapsedSeconds = Math.floor((now - run.startedAtMs) / 1000);
+  const currentWaitMs = run.waitingSinceMs === undefined ? 0 : Math.max(0, now - run.waitingSinceMs);
+  const elapsedMs = Math.max(0, now - run.startedAtMs - (run.waitingMs ?? 0) - currentWaitMs);
+  const elapsedSeconds = Math.floor(elapsedMs / 1000);
   const parts: string[] = [formatWorkingDuration(elapsedSeconds)];
 
   const totalInput = run.input + run.turn.usageInput;
@@ -317,7 +325,8 @@ export function registerTurnSummaryRenderer(pi: ExtensionAPI): void {
  * `Working (20s · ↑15.2k ↓3.1k · TTFT 0.9s · 38 tok/s)`.
  *
  * Token totals sum across every turn and call of the current agent run and are
- * shown while the model is still working. Metrics reset once the run settles.
+ * shown while the model is still working. Blocking UI prompt time is excluded
+ * from the live working clock; metrics reset once the run settles.
  */
 export function registerWorkingTimer(pi: ExtensionAPI): void {
   registerTurnSummaryRenderer(pi);
@@ -326,13 +335,32 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   let run: RunMetrics | undefined;
   let turnActive = false;
   let activeCtx: ExtensionContext | undefined;
+  const waitingStatusKey = "pi-enhanced-working";
 
   const isWorkingTelemetryEnabled = (): boolean => {
     return EnhancedSettingsStore.getInstance().get("timer.showWorkingTelemetry");
   };
 
-  const updateMessage = (ctx: ExtensionContext) => {
+  const clearWorkingMessage = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
+    if (ctx.mode === "rpc") {
+      ctx.ui.setStatus(waitingStatusKey, undefined);
+    } else {
+      ctx.ui.setWorkingMessage();
+    }
+  };
+
+  const setWaitingMessage = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || !isWorkingTelemetryEnabled()) return;
+    if (ctx.mode === "rpc") {
+      ctx.ui.setStatus(waitingStatusKey, "Waiting for your response…");
+    } else {
+      ctx.ui.setWorkingMessage("Waiting for your response…");
+    }
+  };
+
+  const updateMessage = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
     if (!isWorkingTelemetryEnabled()) {
       ctx.ui.setWorkingMessage();
       return;
@@ -342,7 +370,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   };
 
   const startTimer = (ctx: ExtensionContext) => {
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
     if (!isWorkingTelemetryEnabled()) {
       pauseTimer();
       ctx.ui.setWorkingMessage();
@@ -369,22 +397,20 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     run = undefined;
     turnActive = false;
     activeCtx = undefined;
-    if (ctx.hasUI) {
-      ctx.ui.setWorkingMessage();
-    }
+    clearWorkingMessage(ctx);
   };
 
   EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
     if (changedKey === "timer.showWorkingTelemetry" && activeCtx) {
       if (isWorkingTelemetryEnabled()) {
-        if (run && turnActive) {
+        if (run?.waitingSinceMs !== undefined) {
+          setWaitingMessage(activeCtx);
+        } else if (run && turnActive) {
           startTimer(activeCtx);
         }
       } else {
         pauseTimer();
-        if (activeCtx.hasUI) {
-          activeCtx.ui.setWorkingMessage();
-        }
+        clearWorkingMessage(activeCtx);
       }
     }
   });
@@ -406,6 +432,24 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     run.turn = createTurnMetrics(now);
     turnActive = true;
     startTimer(ctx);
+  });
+
+  pi.on("ui_prompt_start", async (_event, ctx) => {
+    activeCtx = ctx;
+    if (!run || run.waitingSinceMs !== undefined) return;
+    run.waitingSinceMs = Date.now();
+    pauseTimer();
+    setWaitingMessage(ctx);
+  });
+
+  pi.on("ui_prompt_end", async (_event, ctx) => {
+    activeCtx = ctx;
+    if (!run || run.waitingSinceMs === undefined) return;
+    run.waitingMs = (run.waitingMs ?? 0) + Math.max(0, Date.now() - run.waitingSinceMs);
+    run.waitingSinceMs = undefined;
+    clearWorkingMessage(ctx);
+    if (turnActive) startTimer(ctx);
+    else updateMessage(ctx);
   });
 
   // Refine the request start time as close to dispatch as possible for TTFT.
