@@ -132,7 +132,11 @@ export class EnhancedSettingsStore {
               } else if (rawVal === "disabled" || rawVal === "false") {
                 target[key] = false;
               }
-            } else if (key === "git.commitModel" && typeof rawVal === "string" && rawVal.trim()) {
+            } else if (
+              (key === "git.commitModel" || key === "session.titleModel") &&
+              typeof rawVal === "string" &&
+              rawVal.trim()
+            ) {
               target[key] = rawVal.trim();
             } else if (key === "usage.contextFormat" && (rawVal === "default" || rawVal === "alternate")) {
               target[key] = rawVal === "default" ? "pi" : "pi-enhanced";

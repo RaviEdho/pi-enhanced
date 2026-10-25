@@ -71,7 +71,10 @@ export function formatSettingValue(key: EnhancedSettingKey, value: any): string 
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
   }
-  if (key === "git.commitModel" && value === COMMIT_MODEL_SESSION_VALUE) {
+  if (
+    (key === "git.commitModel" || key === "session.titleModel") &&
+    value === COMMIT_MODEL_SESSION_VALUE
+  ) {
     return "same as session model";
   }
   return String(value);

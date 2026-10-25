@@ -72,7 +72,8 @@ export class EnhancedSettingsComponent implements Component {
     const subagentActive = isSubagentActive();
     const webActive = isWebActive();
     const configuredCommitModel = this.store.get("git.commitModel");
-    const commitModelChoices: SelectItem[] = [
+    const configuredTitleModel = this.store.get("session.titleModel");
+    const modelChoices: SelectItem[] = [
       {
         value: COMMIT_MODEL_SESSION_LABEL,
         label: COMMIT_MODEL_SESSION_LABEL,
@@ -81,7 +82,7 @@ export class EnhancedSettingsComponent implements Component {
     ];
     try {
       const availableModels = this.ctx?.modelRegistry.getAvailable() ?? [];
-      commitModelChoices.push(...availableModels
+      modelChoices.push(...availableModels
         .map((model) => ({
           value: `${model.provider}/${model.id}`,
           label: `${model.provider}/${model.id}`,
@@ -91,15 +92,17 @@ export class EnhancedSettingsComponent implements Component {
     } catch {
       // Keep the session-model option available if the registry cannot be read.
     }
-    if (
-      configuredCommitModel !== COMMIT_MODEL_SESSION_VALUE &&
-      !commitModelChoices.some((choice) => choice.value === configuredCommitModel)
-    ) {
-      commitModelChoices.push({
-        value: configuredCommitModel,
-        label: `${configuredCommitModel} (unavailable)`,
-        description: "This saved model is not currently available",
-      });
+    for (const configuredModel of [configuredCommitModel, configuredTitleModel]) {
+      if (
+        configuredModel !== COMMIT_MODEL_SESSION_VALUE &&
+        !modelChoices.some((choice) => choice.value === configuredModel)
+      ) {
+        modelChoices.push({
+          value: configuredModel,
+          label: `${configuredModel} (unavailable)`,
+          description: "This saved model is not currently available",
+        });
+      }
     }
 
     // Build setting items mapped from definitions
@@ -130,12 +133,13 @@ export class EnhancedSettingsComponent implements Component {
       let description = def.description;
       let submenu: SettingItem["submenu"];
 
-      if (def.key === "git.commitModel") {
+      if (def.key === "git.commitModel" || def.key === "session.titleModel") {
+        const isTitleModel = def.key === "session.titleModel";
         options = [];
         const selectedValue = String(currentRaw) === COMMIT_MODEL_SESSION_VALUE
           ? COMMIT_MODEL_SESSION_LABEL
           : String(currentRaw);
-        const selectedChoice = commitModelChoices.find((choice) => choice.value === selectedValue);
+        const selectedChoice = modelChoices.find((choice) => choice.value === selectedValue);
         currentValue = selectedChoice?.label ?? selectedValue;
         submenu = (_value, done) => {
           const listTheme = {
@@ -153,8 +157,8 @@ export class EnhancedSettingsComponent implements Component {
 
           const createSelectList = (query: string) => {
             const choices = query
-              ? fuzzyFilter(commitModelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
-              : commitModelChoices;
+              ? fuzzyFilter(modelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
+              : modelChoices;
             selectList = new SelectList(choices, Math.min(choices.length, 10), listTheme);
             const selectedIndex = query
               ? -1
@@ -166,7 +170,8 @@ export class EnhancedSettingsComponent implements Component {
           createSelectList("");
 
           const container = new Container();
-          container.addChild(new Text(this.theme.fg("accent", this.theme.bold("Select Git Commit Model"))));
+          const title = isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model";
+          container.addChild(new Text(this.theme.fg("accent", this.theme.bold(title))));
           container.addChild(new Spacer(1));
           container.addChild(searchInput);
           container.addChild(new Spacer(1));
@@ -644,7 +649,7 @@ export class EnhancedSettingsComponent implements Component {
       }
     }
 
-    if (key === "git.commitModel") {
+    if (key === "git.commitModel" || key === "session.titleModel") {
       this.store.set(
         key,
         (newValue === COMMIT_MODEL_SESSION_LABEL ? COMMIT_MODEL_SESSION_VALUE : newValue) as any

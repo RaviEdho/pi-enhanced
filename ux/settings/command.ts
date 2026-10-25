@@ -122,14 +122,14 @@ export async function handleSettingsEnhancedCommand(
     }
 
     const def = SETTING_DEFINITIONS[key];
-    if (key === "git.commitModel") {
+    if (key === "git.commitModel" || key === "session.titleModel") {
       if (rawVal === COMMIT_MODEL_SESSION_VALUE) {
-        store.set(key, COMMIT_MODEL_SESSION_VALUE);
+        store.set(key, COMMIT_MODEL_SESSION_VALUE as any);
       } else if (
         rawValue &&
         ctx.modelRegistry.getAvailable().some((model) => `${model.provider}/${model.id}` === rawValue)
       ) {
-        store.set(key, rawValue);
+        store.set(key, rawValue as any);
       } else {
         const msg = "Choose 'session' or an available provider/model from /settings-enhanced.";
         if (ctx.hasUI) ctx.ui.notify(msg, "error");

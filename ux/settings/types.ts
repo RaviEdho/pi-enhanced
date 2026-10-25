@@ -32,6 +32,10 @@ export interface EnhancedSettings {
   "timer.showWorkingTelemetry": boolean;
   /** Enable literal dot "." prompt continuation shortcut. */
   "continue.dotShortcut": boolean;
+  /** Generate a session title once from its first user message. */
+  "session.autoTitle": boolean;
+  /** Model used to generate session titles, or "session" for the active Pi model. */
+  "session.titleModel": string;
   /** Automatically failover to next eligible account on HTTP 429 rate limit. */
   "balancer.failoverOn429": boolean;
   /** Balance account selection using weekly reset pace and perishable credits. */
@@ -157,6 +161,22 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
+  "session.autoTitle": {
+    key: "session.autoTitle",
+    label: "Automatic Session Titles",
+    category: "UX & Telemetry",
+    description: "Generate a concise title from the first user message using the configured model (extra model call)",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "session.titleModel": {
+    key: "session.titleModel",
+    label: "Title Generation Model",
+    category: "UX & Telemetry",
+    description: "Model for automatic session titles; choose Use session model to follow the active Pi model",
+    defaultValue: COMMIT_MODEL_SESSION_VALUE,
+    options: [COMMIT_MODEL_SESSION_VALUE],
+  },
 
   // ── Multi-Account ──
   "balancer.failoverOn429": {
@@ -191,6 +211,8 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "timer.showSummary": SETTING_DEFINITIONS["timer.showSummary"].defaultValue,
   "timer.showWorkingTelemetry": SETTING_DEFINITIONS["timer.showWorkingTelemetry"].defaultValue,
   "continue.dotShortcut": SETTING_DEFINITIONS["continue.dotShortcut"].defaultValue,
+  "session.autoTitle": SETTING_DEFINITIONS["session.autoTitle"].defaultValue,
+  "session.titleModel": SETTING_DEFINITIONS["session.titleModel"].defaultValue,
   "balancer.failoverOn429": SETTING_DEFINITIONS["balancer.failoverOn429"].defaultValue,
   "balancer.paceBalancing": SETTING_DEFINITIONS["balancer.paceBalancing"].defaultValue,
 };
