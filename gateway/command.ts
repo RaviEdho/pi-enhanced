@@ -85,52 +85,56 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
 }
 
 async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
-  const config = readDiscordGatewayConfig();
-  if (!config) {
-    if (ctx.hasUI) await setupGateway(ctx);
-    else notify(ctx, "Discord gateway is not configured. Run /discord setup in an interactive Pi session.", "info");
-    return;
-  }
+  while (true) {
+    const config = readDiscordGatewayConfig();
+    if (!config) {
+      if (ctx.hasUI) await setupGateway(ctx);
+      else notify(ctx, "Discord gateway is not configured. Run /discord setup in an interactive Pi session.", "info");
+      return;
+    }
 
-  const paths = getDiscordGatewayPaths();
-  const pid = readPid(paths.pid);
-  const running = pid !== undefined && isProcessAlive(pid);
-  if (!running && existsSync(paths.pid)) unlinkSync(paths.pid);
-  const status = readJson<DiscordGatewayStatus>(paths.status);
-  const statusLabel = running
-    ? status?.botTag ? `running as ${status.botTag}` : `running (${status?.state || "connecting"})`
-    : status?.state === "failed" && status.lastError ? `stopped — ${status.lastError}` : "stopped";
+    const paths = getDiscordGatewayPaths();
+    const pid = readPid(paths.pid);
+    const running = pid !== undefined && isProcessAlive(pid);
+    if (!running && existsSync(paths.pid)) unlinkSync(paths.pid);
+    const status = readJson<DiscordGatewayStatus>(paths.status);
+    const statusLabel = running
+      ? status?.botTag ? `running as ${status.botTag}` : `running (${status?.state || "connecting"})`
+      : status?.state === "failed" && status.lastError ? `stopped — ${status.lastError}` : "stopped";
 
-  if (!ctx.hasUI) {
-    showStatus(ctx);
-    notify(ctx, "Use /discord start, /discord stop, /discord setup, /discord configure, or /discord logs.", "info");
-    return;
-  }
+    if (!ctx.hasUI) {
+      showStatus(ctx);
+      notify(ctx, "Use /discord start, /discord stop, /discord setup, /discord configure, or /discord logs.", "info");
+      return;
+    }
 
-  const actions = running
-    ? ["Stop gateway", "Configure", "Tear down gateway", "View logs"]
-    : ["Start gateway", "Configure", "Tear down gateway", "View logs"];
-  const selected = await selectDiscordOption(ctx, {
-    title: "Discord Gateway",
-    description: `Status: ${statusLabel}`,
-    options: actions,
-  });
-  switch (selected) {
-    case "Start gateway":
-      await startGateway(ctx);
-      return;
-    case "Stop gateway":
-      stopGateway(ctx);
-      return;
-    case "Configure":
-      await showConfigureMenu(ctx);
-      return;
-    case "Tear down gateway":
-      await teardownGateway(ctx);
-      return;
-    case "View logs":
-      showLogs(ctx);
-      return;
+    const actions = running
+      ? ["Stop gateway", "Configure", "Tear down gateway", "View logs"]
+      : ["Start gateway", "Configure", "Tear down gateway", "View logs"];
+    const selected = await selectDiscordOption(ctx, {
+      title: "Discord Gateway",
+      description: `Status: ${statusLabel}`,
+      options: actions,
+    });
+    switch (selected) {
+      case "Start gateway":
+        await startGateway(ctx);
+        return;
+      case "Stop gateway":
+        stopGateway(ctx);
+        return;
+      case "Configure":
+        await showConfigureMenu(ctx);
+        continue;
+      case "Tear down gateway":
+        await teardownGateway(ctx);
+        return;
+      case "View logs":
+        showLogs(ctx);
+        return;
+      default:
+        return;
+    }
   }
 }
 
@@ -139,35 +143,44 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
     notify(ctx, "Run /discord configure in an interactive Pi session to change gateway settings.", "error");
     return;
   }
-  const config = readDiscordGatewayConfig();
-  if (!config) {
-    await setupGateway(ctx);
-    return;
-  }
 
-  const selected = await selectDiscordOption(ctx, {
-    title: "Configure Discord Gateway",
-    description: `DM access: ${config.allowDirectMessages ? "On" : "Off"} · Server access: ${config.allowServerMessages ? "On" : "Off"}`,
-    options: [
-      "Configure bot token",
-      "Configure user whitelist",
-      "Configure server channel whitelist",
-      "Configure access paths",
-    ],
-  });
-  switch (selected) {
-    case "Configure bot token":
-      await configureBotToken(ctx, config);
+  while (true) {
+    const config = readDiscordGatewayConfig();
+    if (!config) {
+      await setupGateway(ctx);
       return;
-    case "Configure user whitelist":
-      await configureWhitelist(ctx, config, "users");
-      return;
-    case "Configure server channel whitelist":
-      await configureWhitelist(ctx, config, "channels");
-      return;
-    case "Configure access paths":
-      await configureAccessPaths(ctx, config);
-      return;
+    }
+
+    const selected = await selectDiscordOption(ctx, {
+      title: "Configure Discord Gateway",
+      description: `DM access: ${config.allowDirectMessages ? "On" : "Off"} · Server access: ${config.allowServerMessages ? "On" : "Off"}`,
+      options: [
+        "Configure bot token",
+        "Configure user whitelist",
+        "Configure server channel whitelist",
+        "Configure gateway workspace",
+        "Configure access paths",
+      ],
+    });
+    switch (selected) {
+      case "Configure bot token":
+        await configureBotToken(ctx, config);
+        break;
+      case "Configure user whitelist":
+        await configureWhitelist(ctx, config, "users");
+        break;
+      case "Configure server channel whitelist":
+        await configureWhitelist(ctx, config, "channels");
+        break;
+      case "Configure gateway workspace":
+        await configureWorkspace(ctx, config);
+        break;
+      case "Configure access paths":
+        await configureAccessPaths(ctx, config);
+        break;
+      default:
+        return;
+    }
   }
 }
 
@@ -341,7 +354,7 @@ async function configureBotToken(ctx: ExtensionCommandContext, config: DiscordGa
     title: "Configure Bot Token",
     instruction: "Input is visible. The new token will replace the saved token in private local config.",
     initialValue: "",
-    placeholder: "Paste the new bot token",
+    placeholder: "Saved token configured; leave blank to keep it",
   });
   const normalizedToken = token?.trim();
   if (!normalizedToken) return;
@@ -371,15 +384,15 @@ async function configureWhitelist(
   const currentValues = isUsers ? config.allowedUserIds : config.allowedChannelIds;
   const title = isUsers ? "Configure User Whitelist" : "Configure Server Channel Whitelist";
   const instruction = isUsers
-    ? 'Enter "*" to allow everyone; otherwise, enter comma-separated user IDs.'
-    : 'Enter "*" to allow all server channels; otherwise, enter comma-separated channel IDs.';
+    ? 'Enter "*" to allow everyone; otherwise, enter comma-separated user IDs. Leave blank to keep the current setting.'
+    : 'Enter "*" to allow all server channels; otherwise, enter comma-separated channel IDs. Leave blank to keep the current setting.';
   const value = await promptDiscordInput(ctx, {
     title,
     instruction,
-    initialValue: currentValues.join(", "),
-    placeholder: isUsers ? "Comma-separated user IDs or *" : "Comma-separated channel IDs or *",
+    initialValue: "",
+    placeholder: currentValues.join(", "),
   });
-  if (value === undefined) return;
+  if (value === undefined || !value.trim()) return;
 
   const allowlist = parseAllowlist(value);
   if (allowlist.length === 0) {
@@ -406,6 +419,38 @@ async function configureWhitelist(
     isUsers ? { allowedUserIds: allowlist } : { allowedChannelIds: allowlist },
     `${isUsers ? "User" : "Server channel"} whitelist updated.`
   );
+}
+
+async function configureWorkspace(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const input = await promptDiscordInput(ctx, {
+    title: "Configure Gateway Workspace",
+    instruction: "Enter the default working directory for the gateway. Leave blank to keep the current setting.",
+    initialValue: "",
+    placeholder: config.cwd,
+  });
+  if (input === undefined || !input.trim()) return;
+
+  const cwd = resolve(input.trim().replace(/^~(?=$|[\\/])/, homedir()));
+  if (!existsSync(cwd)) {
+    const createWorkspace = await confirmDiscordAction(ctx, {
+      title: "Create Gateway Workspace?",
+      content: [`Create ${cwd}?`, "The workspace is a starting directory, not a filesystem sandbox."],
+      confirmLabel: "Create workspace",
+      rejectLabel: "Keep current workspace",
+    });
+    if (!createWorkspace) return;
+    mkdirSync(cwd, { recursive: true, mode: 0o700 });
+  }
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    notify(ctx, `Workspace is not a directory: ${cwd}`, "error");
+    return;
+  }
+  if (cwd === config.cwd) {
+    notify(ctx, "Gateway workspace is unchanged.", "info");
+    return;
+  }
+
+  saveGatewayConfig(ctx, config, { cwd }, `Gateway workspace updated to ${cwd}.`);
 }
 
 async function configureAccessPaths(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
