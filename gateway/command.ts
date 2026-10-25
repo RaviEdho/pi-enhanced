@@ -654,6 +654,7 @@ async function startGateway(ctx: ExtensionCommandContext): Promise<void> {
     return;
   }
   if (existsSync(paths.pid)) unlinkSync(paths.pid);
+  if (existsSync(paths.restartRequest)) unlinkSync(paths.restartRequest);
 
   const invocation = resolvePiInvocation();
   if (!invocation) {
@@ -689,6 +690,7 @@ async function startGateway(ctx: ExtensionCommandContext): Promise<void> {
       PI_ENHANCED_DISCORD_LOG_PATH: paths.log,
       PI_ENHANCED_DISCORD_SESSION_ROOT: paths.sessions,
       PI_ENHANCED_DISCORD_THREADS_PATH: paths.threads,
+      PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH: paths.restartRequest,
       PI_ENHANCED_DISCORD_PI_EXECUTABLE: invocation.executable,
       PI_ENHANCED_DISCORD_PI_ARGS: JSON.stringify(invocation.args),
     },

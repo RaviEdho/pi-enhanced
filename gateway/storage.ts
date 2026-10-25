@@ -17,7 +17,7 @@ export interface DiscordGatewayConfig {
 
 export interface DiscordGatewayStatus {
   pid: number;
-  state: "starting" | "ready" | "disconnected" | "stopping" | "stopped" | "failed";
+  state: "starting" | "ready" | "disconnected" | "restarting" | "stopping" | "stopped" | "failed";
   startedAt: string;
   updatedAt: string;
   botTag?: string;
@@ -33,6 +33,7 @@ export interface DiscordGatewayPaths {
   log: string;
   sessions: string;
   threads: string;
+  restartRequest: string;
 }
 
 export function getDiscordGatewayPaths(): DiscordGatewayPaths {
@@ -46,6 +47,7 @@ export function getDiscordGatewayPaths(): DiscordGatewayPaths {
     log: join(directory, "gateway.log"),
     sessions: join(directory, "sessions"),
     threads: join(directory, "threads.json"),
+    restartRequest: join(directory, "restart-request.json"),
   };
 }
 

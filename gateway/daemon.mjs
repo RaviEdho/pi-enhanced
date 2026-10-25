@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 
@@ -18,6 +21,8 @@ const pidPath = process.env.PI_ENHANCED_DISCORD_PID_PATH;
 const statusPath = process.env.PI_ENHANCED_DISCORD_STATUS_PATH;
 const sessionRoot = process.env.PI_ENHANCED_DISCORD_SESSION_ROOT;
 const threadsPath = process.env.PI_ENHANCED_DISCORD_THREADS_PATH;
+const restartRequestPath = process.env.PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH;
+const logPath = process.env.PI_ENHANCED_DISCORD_LOG_PATH;
 const piExecutable = process.env.PI_ENHANCED_DISCORD_PI_EXECUTABLE || "pi";
 const piArgs = parseJsonArray(process.env.PI_ENHANCED_DISCORD_PI_ARGS);
 const MAX_ACTIVE_RUNS = 3;
@@ -57,15 +62,22 @@ const pendingUiAnswers = new Map();
 const pendingThreadTitleRenames = new Set();
 const runQueue = [];
 let activeRuns = 0;
+let activeMessageHandlers = 0;
+let pendingMessageTasks = 0;
+let restartRequested = false;
+let restartStarted = false;
 let shuttingDown = false;
 let idleCleanupTimer;
+let restartRequestPollTimer;
 
+const startedAt = new Date().toISOString();
 let gatewayStatus = {
   pid: process.pid,
   state: "starting",
-  startedAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
+  startedAt,
+  updatedAt: startedAt,
 };
+writePrivateJson(pidPath, { pid: process.pid, startedAt });
 writeStatus();
 
 const client = new Client({
@@ -93,15 +105,25 @@ client.on("error", (error) => {
   log(`Discord client error: ${summarizeDiscordError(error)}`);
 });
 client.on("messageCreate", (message) => {
-  void handleMessage(message).catch((error) => {
-    log(`Message handling failed: ${safeErrorName(error)}`);
-  });
+  activeMessageHandlers += 1;
+  void handleMessage(message)
+    .catch((error) => {
+      log(`Message handling failed: ${safeErrorName(error)}`);
+    })
+    .finally(() => {
+      activeMessageHandlers -= 1;
+      maybeStartRequestedRestart();
+    });
 });
 
 idleCleanupTimer = setInterval(() => {
   void closeIdleSessions();
 }, 60_000);
 idleCleanupTimer.unref();
+if (restartRequestPath) {
+  restartRequestPollTimer = setInterval(checkRestartRequest, 250);
+  restartRequestPollTimer.unref();
+}
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
@@ -133,6 +155,11 @@ async function handleMessage(message) {
   const pendingUi = pendingUiAnswers.get(pendingKey);
   if (pendingUi) {
     pendingUi.accept(stripBotMention(message.content || ""));
+    return;
+  }
+
+  if (restartRequested) {
+    await sendText(message.channel, "The gateway is restarting after the current work finishes. Please send this again once the bot reconnects.");
     return;
   }
 
@@ -182,7 +209,8 @@ async function handleMessage(message) {
   }
 
   const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${content}`;
-  enqueueForSession(sessionKey, async () => {
+  pendingMessageTasks += 1;
+  const queuedRun = enqueueForSession(sessionKey, async () => {
     const stopTyping = startTyping(target);
     try {
       const result = await withRunSlot(async () => {
@@ -203,9 +231,15 @@ async function handleMessage(message) {
     } finally {
       stopTyping();
     }
-  }).catch((error) => {
-    log(`Queued Pi run failed: ${safeErrorName(error)}`);
   });
+  void queuedRun
+    .catch((error) => {
+      log(`Queued Pi run failed: ${safeErrorName(error)}`);
+    })
+    .finally(() => {
+      pendingMessageTasks -= 1;
+      maybeStartRequestedRestart();
+    });
 }
 
 function classifyMessage(message) {
@@ -307,6 +341,8 @@ class PiRpcSession {
     delete agentEnvironment.PI_ENHANCED_DISCORD_THREADS_PATH;
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_EXECUTABLE;
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_ARGS;
+    delete agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD;
+    agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD = "1";
 
     const sessionArgs = [
       ...piArgs,
@@ -579,30 +615,139 @@ async function closeLeastRecentlyUsedIdleSession() {
   await candidate.session.stop();
 }
 
-async function shutdown(reason, exitCode = 0) {
+function checkRestartRequest() {
+  if (shuttingDown || restartRequested || !restartRequestPath || !existsSync(restartRequestPath)) return;
+
+  let request;
+  try {
+    request = JSON.parse(readFileSync(restartRequestPath, "utf8"));
+  } catch (error) {
+    log(`Could not read gateway restart request: ${safeErrorName(error)}`);
+    try { unlinkSync(restartRequestPath); } catch { /* best-effort cleanup */ }
+    return;
+  }
+  if (request?.type !== "restart") {
+    log("Ignored an invalid gateway control request");
+    return;
+  }
+
+  restartRequested = true;
+  updateStatus("restarting", { lastError: undefined });
+  log(`Graceful restart requested${typeof request.reason === "string" && request.reason ? `: ${request.reason.slice(0, 200)}` : ""}; draining accepted messages`);
+  maybeStartRequestedRestart();
+}
+
+function maybeStartRequestedRestart() {
+  if (
+    !restartRequested ||
+    restartStarted ||
+    shuttingDown ||
+    activeMessageHandlers > 0 ||
+    pendingMessageTasks > 0 ||
+    activeRuns > 0 ||
+    sessionQueues.size > 0
+  ) {
+    return;
+  }
+
+  restartStarted = true;
+  void shutdown("Discord agent requested restart", 0, true).catch((error) => {
+    const summary = `Gateway restart failed: ${safeErrorName(error)}`;
+    log(summary);
+    updateStatus("failed", { lastError: summary });
+    removeOwnPid();
+    process.exit(1);
+  });
+}
+
+async function shutdown(reason, exitCode = 0, restart = false) {
   if (shuttingDown) return;
   shuttingDown = true;
   const failureMessage = exitCode !== 0 ? gatewayStatus.lastError || "Gateway process terminated unexpectedly." : undefined;
   clearInterval(idleCleanupTimer);
-  updateStatus("stopping", { lastError: undefined });
+  clearInterval(restartRequestPollTimer);
+  if (!restart) updateStatus("stopping", { lastError: undefined });
   log(`Shutting down (${reason})`);
   for (const pending of pendingUiAnswers.values()) pending.finish(undefined);
   await Promise.all([...piSessions.values()].map((session) => session.stop()));
   piSessions.clear();
   try {
-    client.destroy();
+    await client.destroy();
   } catch {
     // The Discord client may not have completed login.
   }
+
+  if (restart && exitCode === 0) {
+    try {
+      const replacementPid = await spawnReplacementGateway();
+      log(`Started replacement Discord gateway (PID ${replacementPid})`);
+      process.exit(0);
+    } catch (error) {
+      const summary = `Could not restart Discord gateway: ${error instanceof Error ? error.message : String(error)}`;
+      log(summary);
+      updateStatus("failed", { lastError: summary });
+      removeOwnPid();
+      process.exit(1);
+    }
+  }
+
   if (exitCode === 0) updateStatus("stopped", { lastError: undefined });
   else updateStatus("failed", { lastError: failureMessage });
+  removeOwnPid();
+  process.exit(exitCode);
+}
+
+async function spawnReplacementGateway() {
+  if (restartRequestPath && existsSync(restartRequestPath)) unlinkSync(restartRequestPath);
+  const logFd = logPath ? openSync(logPath, "a", 0o600) : undefined;
+  let child;
+  try {
+    child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
+      env: process.env,
+      windowsHide: true,
+    });
+  } finally {
+    if (logFd !== undefined) closeSync(logFd);
+  }
+
+  await new Promise((resolveSpawn, rejectSpawn) => {
+    child.once("spawn", resolveSpawn);
+    child.once("error", rejectSpawn);
+  });
+  if (!child.pid) throw new Error("replacement process did not receive a PID");
+  child.unref();
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error("replacement process exited before initializing");
+    }
+    try {
+      const status = JSON.parse(readFileSync(statusPath, "utf8"));
+      if (status?.pid === child.pid) return child.pid;
+    } catch {
+      // The replacement has not written its startup status yet.
+    }
+    await delay(100);
+  }
+
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGTERM");
+    await Promise.race([onceExit(child), delay(3000)]);
+  }
+  throw new Error("replacement process did not initialize within 15 seconds");
+}
+
+function removeOwnPid() {
   try {
     const recordedPid = JSON.parse(readFileSync(pidPath, "utf8"))?.pid;
     if (recordedPid === process.pid) unlinkSync(pidPath);
   } catch {
-    // The launcher may have removed the PID file already.
+    // The launcher or replacement process may have already changed the PID file.
   }
-  process.exit(exitCode);
 }
 
 function startTyping(channel) {
