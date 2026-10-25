@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { QuestionnaireComponent, type QuestionnaireResult } from "./component.js";
 import { isFeedbackToolActive } from "./index.js";
 import {
@@ -202,51 +202,102 @@ export function createAskUserToolDefinition(): ToolDefinition<
         opts.timeout = Math.round(params.timeout_seconds * 1000);
       }
 
-      for (let i = 0; i < total; i++) {
-        if (signal?.aborted) break;
-        const item = normalizedQuestions[i];
-        const stepPrefix = total > 1 ? ` [${i + 1}/${total}]` : "";
-        const wrappedQuestion = item.question
-          .split(/\r?\n/)
-          .flatMap((line) => wrapTextWithAnsi(line, 68))
-          .join("\n");
-        const promptTitle = `Ask User${stepPrefix}\n${wrappedQuestion}`;
+      const askQuestion = async (index: number): Promise<SingleAnswerDetail | undefined> => {
+        if (signal?.aborted) return undefined;
+        const item = normalizedQuestions[index];
+        const stepPrefix = total > 1 ? ` [${index + 1}/${total}]` : "";
+        const promptTitle = `Ask User${stepPrefix}\n${item.question}`;
 
         if (Array.isArray(item.choices) && item.choices.length > 0) {
           const options = [...item.choices];
           if (params.allow_custom ?? true) options.push(CUSTOM_CHOICE_LABEL);
           const selected = await ctx.ui.select(promptTitle, options, opts);
-          if (selected === undefined) break;
+          if (selected === undefined) return undefined;
 
           if (selected === CUSTOM_CHOICE_LABEL) {
             const custom = await ctx.ui.input(promptTitle, item.placeholder || "Enter your custom choice...", opts);
-            if (custom === undefined) break;
-            answers.push({
+            if (custom === undefined) return undefined;
+            return {
               question: item.question,
               response: custom.trim() || "(Empty custom response)",
               isChoice: true,
               isCustom: true,
               cancelled: false,
-            });
-          } else {
-            answers.push({
-              question: item.question,
-              response: selected,
-              isChoice: true,
-              isCustom: false,
-              cancelled: false,
-            });
+            };
           }
-        } else {
-          const ans = await ctx.ui.input(promptTitle, item.placeholder, opts);
-          if (ans === undefined) break;
-          answers.push({
+
+          return {
             question: item.question,
-            response: ans.trim() || "(Empty response)",
-            isChoice: false,
+            response: selected,
+            isChoice: true,
             isCustom: false,
             cancelled: false,
-          });
+          };
+        }
+
+        const answer = await ctx.ui.input(promptTitle, item.placeholder, opts);
+        if (answer === undefined) return undefined;
+        return {
+          question: item.question,
+          response: answer.trim() || "(Empty response)",
+          isChoice: false,
+          isCustom: false,
+          cancelled: false,
+        };
+      };
+
+      for (let i = 0; i < total; i++) {
+        const answer = await askQuestion(i);
+        if (!answer) break;
+        answers.push(answer);
+      }
+
+      if (answers.length === total && shouldRecap) {
+        while (true) {
+          const reviewLines: string[] = [];
+          for (let i = 0; i < answers.length; i++) {
+            const answer = answers[i];
+            reviewLines.push(`${i + 1}. ${answer.question}`);
+            reviewLines.push(`   Answer: ${answer.response || ""}`);
+          }
+          let reviewText = reviewLines.join("\n");
+          if (reviewText.length > 1500) reviewText = `${reviewText.slice(0, 1497)}…`;
+
+          const reviewTitle = "Ask User";
+          const action = await ctx.ui.select(
+            `${reviewTitle}\n\n${reviewText}\n\nSubmit or choose an answer to edit.`,
+            ["Submit response", "Edit answer"],
+            opts
+          );
+          if (action === "Submit response") break;
+          if (action !== "Edit answer") {
+            return {
+              content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
+              details: { answers: [], cancelled: true },
+            };
+          }
+
+          let editIndex = 0;
+          if (total > 1) {
+            const editOptions = answers.map((answer, index) => `${index + 1}. ${answer.question}`);
+            const selectedQuestion = await ctx.ui.select("Ask User — Choose an answer to edit:", editOptions, opts);
+            editIndex = editOptions.indexOf(selectedQuestion || "");
+            if (editIndex < 0) {
+              return {
+                content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
+                details: { answers: [], cancelled: true },
+              };
+            }
+          }
+
+          const revisedAnswer = await askQuestion(editIndex);
+          if (!revisedAnswer) {
+            return {
+              content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
+              details: { answers: [], cancelled: true },
+            };
+          }
+          answers[editIndex] = revisedAnswer;
         }
       }
 
