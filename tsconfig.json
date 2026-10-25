@@ -12,6 +12,7 @@
   "include": [
     "index.ts",
     "accounts/**/*",
+    "gateway/**/*.ts",
     "providers/**/*",
     "tools/**/*",
     "ux/**/*"

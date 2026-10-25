@@ -3,6 +3,7 @@ import { installLogoutHook } from "./accounts/index.js";
 import { registerProviders } from "./providers/index.js";
 import { registerTools } from "./tools/index.js";
 import { registerUX } from "./ux/index.js";
+import { registerDiscordGateway } from "./gateway/index.js";
 
 export default async function (pi: ExtensionAPI) {
   // Register custom inference providers & dynamic model catalogs (Antigravity, Hyper, Codex)
@@ -13,6 +14,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register agent capabilities & tools (scout search, web search/fetch, commit sub-agent, output compressor)
   registerTools(pi);
+  registerDiscordGateway(pi);
 
   // Hook into Pi's ModelRuntime.logout to present native account selector on multi-account logout
   pi.on("session_start", async (_event, ctx) => {

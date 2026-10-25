@@ -1,7 +1,7 @@
 {
   "name": "pi-enhanced",
   "version": "0.1.0",
-  "description": "Enhanced Pi extension package providing Google Antigravity, Charm Hyper inference provider, autonomous commit, output compression, codebase search, unified web search, and quota monitoring.",
+  "description": "Enhanced Pi extension package with providers, tools, and a persistent Discord agent gateway.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -21,6 +21,7 @@
     "providers",
     "tools",
     "ux",
+    "gateway",
     "README.md"
   ],
   "pi": {
@@ -45,5 +46,8 @@
     "@types/node": "^22.0.0",
     "typebox": "^1.3.34",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0"
   }
 }

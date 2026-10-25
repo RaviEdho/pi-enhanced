@@ -24,6 +24,7 @@ Guidance and instructions for AI agents working in this repository.
 - **Unified Web Search & Fetch Tools (`tools/web/`)**: Multi-provider search and extraction subsystem exposing `web_search` and `web_fetch` tools. Features automatic priority routing and transparent failover across Brave Search, Tavily, Google Antigravity Grounding, TinyFish, Exa, and Parallel. Supports Google-style search operators (`site:`, `before:`, `after:`, `-exclusions`, `"quotes"`), clean Markdown extraction with anti-bot/SPA handling, lenient constraint enforcement, canonical redirect resolution, and API key management directly via `/login` and `/logout` (`/login brave`, `/login tavily`, `/login exa`, `/login parallel`, `/login tinyfish`).
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: Zero-overhead in-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
 - **Interactive User Feedback Tool (`tools/feedback/`)**: Direct, native user feedback tool exposing `ask_user`. Polymorphically supports single open-ended prompts via freeform text input (`ctx.ui.input`), structured 3-choice decision selectors (`ctx.ui.select`) with customizable response fallback (`✎ Type custom answer...`), and multi-question sequential questionnaires (`questions: [...]`) in a single tool turn. Features clean TUI renderers, mid-flow dismissal preservation, non-interactive environment resilience (`hasUI`), signal and timeout integration, and safe-execution compatibility with Plan Mode.
+- **Background Discord Gateway (`gateway/`)**: Standalone detached Discord bot managed by `/discord setup|configure|start|stop|teardown|status|logs` and an interactive `/discord` menu. Configure bot tokens, user/channel allowlists, and DM/server access toggles. Restricts messages to configured routes, creates a thread for each top-level server mention, runs the configured Pi CLI with full configured tools, and persists isolated sessions per Discord thread/user.
 
 ---
 
@@ -77,6 +78,15 @@ pi-enhanced/
 │   │   ├── stream.ts           # Streaming client via OpenAI Chat Completions compatibility
 │   │   └── types.ts            # Kenari protocol, model, balance, and quota schemas
 │   └── index.ts                # registerProviders aggregator
+├── gateway/                    # Detached Discord bot, Pi RPC sessions, private config and lifecycle commands
+│   ├── confirm-dialog.ts       # Themed confirmation dialog for all Discord gateway actions
+│   ├── input-dialog.ts         # Themed text input dialog for gateway setup
+│   ├── select-dialog.ts        # Themed selector for gateway menu and setup choices
+│   ├── toggle-dialog.ts        # DM/server access path toggles
+│   ├── command.ts              # /discord menu, setup/configure/start/stop/teardown/status/logs commands
+│   ├── daemon.mjs              # Discord Gateway client and Pi RPC session router
+│   ├── index.ts                # Gateway command registration
+│   └── storage.ts              # Private config, status and process paths
 ├── tools/                      # Agent capability tools
 │   ├── git/                    # Autonomous Git assistant & commit sub-agent
 │   │   ├── branch-runner.ts    # Smart branch name recommendations & worktrees
