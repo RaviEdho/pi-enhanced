@@ -1,7 +1,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
-import { formatCost, formatDuration } from "./format.js";
+import { formatCommitFiles, formatCost, formatDuration } from "./format.js";
 import type {
   CommitActionEntry,
   CommitConfirmationResult,
@@ -165,12 +165,9 @@ export class CommitConfirmationDialog implements Component {
 
         lines.push(`  ${boldFn(textFn(stageTitle))}${countStr ? mutedFn(countStr) : ""}`);
 
-        for (const file of stage.files ?? []) {
-          lines.push(`     ${mutedFn(`file: ${truncateToWidth(file, Math.max(10, width - 12), "…")}`)}`);
-        }
-        for (const selection of stage.hunks ?? []) {
-          const selected = `${selection.filePath} [${selection.hunkIds.join(", ")}]`;
-          lines.push(`     ${mutedFn(`hunks: ${truncateToWidth(selected, Math.max(10, width - 13), "…")}`)}`);
+        const files = formatCommitFiles(stage);
+        if (files) {
+          lines.push(`     ${mutedFn(`Files: ${truncateToWidth(files, Math.max(10, width - 12), "…")}`)}`);
         }
         if (stage.body?.trim()) {
           const firstBodyLine = stage.body.trim().split("\n")[0].trim().replace(/^[-*•]\s*/, "");
@@ -191,12 +188,9 @@ export class CommitConfirmationDialog implements Component {
 
       if (single?.files?.length || single?.hunks?.length) {
         lines.push("");
-        for (const file of single.files ?? []) {
-          lines.push(`  ${mutedFn(`file: ${truncateToWidth(file, Math.max(10, width - 10), "…")}`)}`);
-        }
-        for (const selection of single.hunks ?? []) {
-          const selected = `${selection.filePath} [${selection.hunkIds.join(", ")}]`;
-          lines.push(`  ${mutedFn(`hunks: ${truncateToWidth(selected, Math.max(10, width - 11), "…")}`)}`);
+        const files = formatCommitFiles(single);
+        if (files) {
+          lines.push(`  ${mutedFn(`Files: ${truncateToWidth(files, Math.max(10, width - 9), "…")}`)}`);
         }
       }
 

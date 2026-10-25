@@ -29,6 +29,7 @@ import {
 import { CommitStatusBroadcaster } from "./editor.js";
 import { CommitConfirmationDialog } from "./dialog.js";
 import {
+  formatCommitFiles,
   formatCost,
   formatCostBadge,
   formatDuration,
@@ -37,6 +38,8 @@ import {
 } from "./format.js";
 import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
+import { COMMIT_MODEL_SESSION_VALUE } from "../../ux/settings/types.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -82,14 +85,19 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         }
       }
 
-      // 2. Ensure an active model is available
-      const model = ctx.model;
+      // 2. Resolve the configured commit model (or use the active session model).
+      const configuredCommitModel = EnhancedSettingsStore.getInstance().get("git.commitModel");
+      const model = configuredCommitModel === COMMIT_MODEL_SESSION_VALUE
+        ? ctx.model
+        : ctx.modelRegistry.getAvailable().find(
+            (candidate) => `${candidate.provider}/${candidate.id}` === configuredCommitModel
+          );
       if (!model) {
-        if (ctx.hasUI) {
-          ctx.ui.notify("No active model selected in Pi session.", "error");
-        } else {
-          process.stderr.write("No active model selected in Pi session.\n");
-        }
+        const message = configuredCommitModel === COMMIT_MODEL_SESSION_VALUE
+          ? "No active model selected in Pi session."
+          : `Configured commit model '${configuredCommitModel}' is unavailable. Choose an available model in /settings-enhanced.`;
+        if (ctx.hasUI) ctx.ui.notify(message, "error");
+        else process.stderr.write(`${message}\n`);
         return;
       }
 
@@ -896,10 +904,8 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             const stage = commitPlan.stages[i];
             const header = stage.scope ? `${stage.type}(${stage.scope}): ${stage.subject}` : `${stage.type}: ${stage.subject}`;
             process.stdout.write(`  ${i + 1}. ${header}\n`);
-            for (const file of stage.files ?? []) process.stdout.write(`     file: ${file}\n`);
-            for (const selection of stage.hunks ?? []) {
-              process.stdout.write(`     hunks: ${selection.filePath} [${selection.hunkIds.join(", ")}]\n`);
-            }
+            const files = formatCommitFiles(stage);
+            if (files) process.stdout.write(`     Files: ${files}\n`);
           }
           process.stdout.write("[commit] No commit made: selective commits require interactive review and confirmation.\n");
           return;
@@ -910,8 +916,11 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           for (let i = 0; i < commitPlan.stages.length; i++) {
             const s = commitPlan.stages[i];
             const h = s.scope ? `${s.type}(${s.scope}): ${s.subject}` : `${s.type}: ${s.subject}`;
-            const f = s.files?.length ? ` (${s.files.length} file${s.files.length === 1 ? "" : "s"})` : "";
+            const files = formatCommitFiles(s);
+            const fileCount = (s.files?.length ?? 0) + new Set((s.hunks ?? []).map((selection) => selection.filePath)).size;
+            const f = fileCount ? ` (${fileCount} file${fileCount === 1 ? "" : "s"})` : "";
             process.stdout.write(`  ${i + 1}. ${h}${f}\n`);
+            if (files) process.stdout.write(`     Files: ${files}\n`);
           }
           process.stdout.write("\n");
           try {
@@ -931,6 +940,8 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         } else {
           const single = commitPlan.stages[0];
           const fullMessage = single.body?.trim() ? `${firstHeaderLine}\n\n${single.body.trim()}` : firstHeaderLine;
+          const files = formatCommitFiles(single);
+          if (files) process.stdout.write(`[commit] Files: ${files}\n`);
           process.stdout.write(`[commit] Message:\n  ${fullMessage.split("\n").join("\n  ")}\n\n`);
           try {
             await createCommit(fullMessage, cwd);

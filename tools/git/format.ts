@@ -50,6 +50,18 @@ export function formatCostBadge(usage: CommitUsageCost): string {
 }
 
 /**
+ * Formats whole-file and partial-hunk selections as a single-line file list.
+ */
+export function formatCommitFiles(stage: Pick<CommitProposal, "files" | "hunks">): string {
+  const wholeFiles = [...new Set(stage.files ?? [])];
+  const wholeFileSet = new Set(wholeFiles);
+  const partialFiles = [...new Set((stage.hunks ?? []).map((selection) => selection.filePath))]
+    .filter((file) => !wholeFileSet.has(file))
+    .map((file) => `${file} (partial hunks)`);
+  return [...wholeFiles, ...partialFiles].join(", ");
+}
+
+/**
  * Formats a multi-stage or single-stage commit plan for the interactive text editor.
  */
 export function formatPlanForEditor(stages: CommitProposal[]): string {
