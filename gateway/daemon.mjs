@@ -25,7 +25,15 @@ const restartRequestPath = process.env.PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH;
 const logPath = process.env.PI_ENHANCED_DISCORD_LOG_PATH;
 const piExecutable = process.env.PI_ENHANCED_DISCORD_PI_EXECUTABLE || "pi";
 const piArgs = parseJsonArray(process.env.PI_ENHANCED_DISCORD_PI_ARGS);
-const startReason = process.env.PI_ENHANCED_DISCORD_START_REASON || "start";
+let previousGatewayState;
+try {
+  previousGatewayState = JSON.parse(readFileSync(statusPath, "utf8"))?.state;
+} catch {
+  // No previous status is expected on a first start.
+}
+const startReason = previousGatewayState === "restarting"
+  ? "restart"
+  : process.env.PI_ENHANCED_DISCORD_START_REASON || "start";
 const MAX_ACTIVE_RUNS = 3;
 const MAX_OPEN_SESSIONS = 20;
 const SESSION_IDLE_MS = 20 * 60 * 1000;
@@ -328,6 +336,7 @@ class PiRpcSession {
     this.pendingRequests = new Map();
     this.runWaiter = undefined;
     this.interaction = undefined;
+    this.statusMessages = new Map();
     this.closed = false;
     this.running = false;
     this.lastUsedAt = Date.now();
@@ -464,6 +473,7 @@ class PiRpcSession {
       return typeof response.data?.text === "string" ? response.data.text : "";
     } finally {
       if (this.runWaiter) this.runWaiter = undefined;
+      await this.clearStatusMessages();
       this.interaction = undefined;
       this.running = false;
       this.lastUsedAt = Date.now();
@@ -475,6 +485,29 @@ class PiRpcSession {
     const method = request.method;
     if (method === "notify") {
       if (interaction?.channel && request.message) await sendText(interaction.channel, String(request.message));
+      return;
+    }
+    if (method === "setStatus" && request.statusKey === "pi-enhanced-working") {
+      const key = request.statusKey;
+      const text = typeof request.statusText === "string" ? request.statusText.trim() : "";
+      const existing = this.statusMessages.get(key);
+      if (!text) {
+        this.statusMessages.delete(key);
+        if (existing) await existing.delete().catch(() => undefined);
+        return;
+      }
+      if (!interaction?.channel) return;
+      if (existing && existing.channelId === interaction.channelId) {
+        try {
+          await existing.edit({ content: text, allowedMentions: { parse: [] } });
+          return;
+        } catch {
+          this.statusMessages.delete(key);
+        }
+      }
+      if (existing) await existing.delete().catch(() => undefined);
+      const statusMessage = await interaction.channel.send({ content: text, allowedMentions: { parse: [] } });
+      this.statusMessages.set(key, statusMessage);
       return;
     }
     if (!["select", "confirm", "input", "editor"].includes(method)) return;
@@ -530,6 +563,12 @@ class PiRpcSession {
     this.child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id, ...response })}\n`);
   }
 
+  async clearStatusMessages() {
+    const messages = [...this.statusMessages.values()];
+    this.statusMessages.clear();
+    await Promise.all(messages.map((message) => message.delete().catch(() => undefined)));
+  }
+
   fail(error) {
     for (const [id, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
@@ -553,6 +592,7 @@ class PiRpcSession {
       pending.reject(new Error("Pi RPC session stopped"));
       this.pendingRequests.delete(id);
     }
+    await this.clearStatusMessages();
     if (!this.child) return;
     try {
       this.child.stdin.end();
