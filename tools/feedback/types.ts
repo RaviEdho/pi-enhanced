@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 export const QuestionItemSchema = Type.Object({
   question: Type.String({
     description:
-      "The specific question, clarification prompt, or architectural decision to present to the user.",
+      "A short, direct question to show the user. Include only the question itself—not reasoning, rationale, analysis, or a preamble. Add only essential context if needed.",
   }),
   choices: Type.Optional(
     Type.Array(Type.String(), {
@@ -27,7 +27,7 @@ export const AskUserParametersSchema = Type.Object({
   question: Type.Optional(
     Type.String({
       description:
-        "Single question to ask the user. (Provide either 'question' for a single question or 'questions' for multiple questions).",
+        "A short, direct question to show the user. Include only the question itself—not reasoning, rationale, analysis, or a preamble. Provide either 'question' for one question or 'questions' for several.",
     })
   ),
   choices: Type.Optional(
@@ -48,7 +48,7 @@ export const AskUserParametersSchema = Type.Object({
       minItems: 1,
       maxItems: 6,
       description:
-        "Optional list of multiple questions to ask sequentially in a single turn. Each question can independently be freeform text or a 3-choice selector.",
+        "Optional list of short, direct questions to ask sequentially in a single turn. Each question can independently be freeform text or a 3-choice selector; include no reasoning or preamble in the question text.",
     })
   ),
   allow_custom: Type.Optional(

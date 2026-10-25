@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { QuestionnaireComponent, type QuestionnaireResult } from "./component.js";
 import { isFeedbackToolActive } from "./index.js";
 import {
@@ -27,12 +27,13 @@ export function createAskUserToolDefinition(): ToolDefinition<
 > {
   return {
     name: "ask_user",
-    label: "ask_user",
+    label: "Ask User",
     description:
-      "Ask the user for feedback, clarification, or decisions. Pauses execution and prompts the user in the interactive terminal. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Reviews responses before submitting.",
+      "Ask the user for feedback, clarification, or decisions. Keep each displayed question short and direct; include only the question, with no reasoning, rationale, or preamble. Pauses execution and prompts through Pi's interactive TUI or a supported RPC dialog client. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Reviews responses before submitting.",
     promptSnippet: "ask_user(question?, choices?, questions?): Prompt user for feedback, 3 choices, or multiple questions",
     promptGuidelines: [
       "Use 'ask_user' when you need information, preferences, clarification, or architectural direction before proceeding.",
+      "Keep each question short, direct, and focused on what the user needs to answer. Put only the question in the displayed question text—do not include your reasoning, rationale, analysis, or a preamble. Include only essential context when needed.",
       "To ask a single question, provide 'question'. For trade-offs or design choices, provide 'choices' with 3 distinct options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']). Do NOT prefix with 'Option 1:' or 'Option 2:'.",
       "To ask multiple questions in one go without back-and-forth turns, provide 'questions' with an array of questions (each with its own question text, optional choices, and placeholder).",
       "Do not invent synthetic [Cancel] or [Back] options in choices; the user can dismiss via Esc at any time.",
@@ -104,7 +105,7 @@ export function createAskUserToolDefinition(): ToolDefinition<
       const shouldRecap = params.recap !== false;
 
       // 3. Primary: Dedicated interactive questionnaire component with Left/Right navigation
-      if (typeof (ctx.ui as any)?.custom === "function") {
+      if (ctx.mode === "tui" && typeof (ctx.ui as any)?.custom === "function") {
         try {
           const result = await (ctx.ui as any).custom(
             (tui: any, theme: any, _kb: any, done: (res: QuestionnaireResult | undefined) => void) => {
@@ -204,8 +205,12 @@ export function createAskUserToolDefinition(): ToolDefinition<
       for (let i = 0; i < total; i++) {
         if (signal?.aborted) break;
         const item = normalizedQuestions[i];
-        const stepPrefix = total > 1 ? `[${i + 1}/${total}] ` : "";
-        const promptTitle = `${stepPrefix}${item.question}`;
+        const stepPrefix = total > 1 ? ` [${i + 1}/${total}]` : "";
+        const wrappedQuestion = item.question
+          .split(/\r?\n/)
+          .flatMap((line) => wrapTextWithAnsi(line, 68))
+          .join("\n");
+        const promptTitle = `Ask User${stepPrefix}\n${wrappedQuestion}`;
 
         if (Array.isArray(item.choices) && item.choices.length > 0) {
           const options = [...item.choices];
@@ -269,7 +274,7 @@ export function createAskUserToolDefinition(): ToolDefinition<
       };
     },
     renderCall(args, theme, context) {
-      let text = theme.fg("toolTitle", theme.bold("ask_user "));
+      let text = theme.fg("toolTitle", theme.bold("Ask User "));
       if (Array.isArray(args?.questions) && args.questions.length > 1) {
         text += theme.fg("accent", `[${args.questions.length} questions] `);
         const first = args.questions[0]?.question ? args.questions[0].question.slice(0, 40) : "";

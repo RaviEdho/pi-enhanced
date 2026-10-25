@@ -1,13 +1,17 @@
 import {
   Input,
   matchesKey,
-  truncateToWidth,
+  wrapTextWithAnsi,
   type Component,
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { QuestionItem, SingleAnswerDetail } from "./types.js";
 
 const CUSTOM_CHOICE_LABEL = "✎ Type custom answer...";
+
+function wrapQuestion(text: string, width: number): string[] {
+  return text.split(/\r?\n/).flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+}
 
 interface InternalQuestionState {
   item: QuestionItem;
@@ -387,8 +391,12 @@ export class QuestionnaireComponent implements Component {
     const total = this.states.length;
     const isRecap = this.currentIndex === total;
 
-    // Top border
-    lines.push(this.theme.fg("border", "─".repeat(Math.max(1, width))));
+    // Titled top border
+    const title = width >= 11 ? " Ask User " : "";
+    const borderFill = Math.max(0, width - title.length - 1);
+    lines.push(
+      `${this.theme.fg("border", "─")}${title ? this.theme.fg("accent", this.theme.bold(title)) : ""}${this.theme.fg("border", "─".repeat(borderFill))}`
+    );
 
     // Header tabs (if multiple questions)
     if (total > 1) {
@@ -431,8 +439,15 @@ export class QuestionnaireComponent implements Component {
       for (let i = 0; i < total; i++) {
         const s = this.states[i];
         const num = `${i + 1}.`;
-        const qText = truncateToWidth(s.item.question, Math.max(10, width - 8));
-        lines.push(`  ${this.theme.fg("dim", num)} ${this.theme.fg("text", qText)}`);
+        const questionPrefix = `  ${num} `;
+        const wrappedQuestion = wrapQuestion(s.item.question, Math.max(1, width - 8));
+        for (let lineIndex = 0; lineIndex < wrappedQuestion.length; lineIndex++) {
+          const prefix =
+            lineIndex === 0
+              ? `  ${this.theme.fg("dim", num)} `
+              : " ".repeat(questionPrefix.length);
+          lines.push(`${prefix}${this.theme.fg("text", wrappedQuestion[lineIndex] || "")}`);
+        }
 
         if (s.answered) {
           const customTag = s.isCustom ? this.theme.fg("warning", "[custom] ") : "";
@@ -461,15 +476,16 @@ export class QuestionnaireComponent implements Component {
       }
     } else {
       const st = this.states[this.currentIndex];
-      const stepHeader =
-        total > 1
-          ? `[Question ${this.currentIndex + 1} of ${total}] `
-          : "";
-
-      lines.push(
-        "  " +
-          this.theme.fg("accent", this.theme.bold(stepHeader + st.item.question))
-      );
+      if (total > 1) {
+        lines.push(
+          "  " +
+            this.theme.fg("muted", `[Question ${this.currentIndex + 1} of ${total}]`)
+        );
+      }
+      const wrappedQuestion = wrapQuestion(st.item.question, Math.max(1, width - 4));
+      for (const questionLine of wrappedQuestion) {
+        lines.push("  " + this.theme.fg("accent", this.theme.bold(questionLine)));
+      }
       lines.push("");
 
       if (st.isChoiceMode) {

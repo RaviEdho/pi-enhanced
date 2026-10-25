@@ -115,7 +115,7 @@ export function registerFeedbackTools(pi: ExtensionAPI): void {
     }
 
     event.systemPromptOptions.promptGuidelines.push(
-      "When encountering requirements ambiguity, missing information, or architectural forks, do NOT guess or assume. Use 'ask_user' to gather human feedback. For open-ended questions, ask directly; for forks or design alternatives, provide 3 distinct choices in the 'choices' parameter. Do NOT prefix choices with 'Option 1:', 'Option 2:'; provide direct, clean answer labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'])."
+      "When encountering requirements ambiguity, missing information, or architectural forks, do NOT guess or assume. Use 'ask_user' to gather human feedback. Keep displayed questions short and direct: show only the question, without your reasoning, rationale, analysis, or a preamble; include only essential context. For open-ended questions, ask directly; for forks or design alternatives, provide 3 distinct choices in the 'choices' parameter. Do NOT prefix choices with 'Option 1:', 'Option 2:'; provide direct, clean answer labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'])."
     );
   });
 }
