@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
@@ -14,7 +14,23 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client, GatewayIntentBits, Partials } from "discord.js";
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Client,
+  ContainerBuilder,
+  GatewayIntentBits,
+  MessageFlags,
+  ModalBuilder,
+  Partials,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
+  StringSelectMenuBuilder,
+  TextDisplayBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} from "discord.js";
 
 const configPath = process.env.PI_ENHANCED_DISCORD_CONFIG_PATH;
 const pidPath = process.env.PI_ENHANCED_DISCORD_PID_PATH;
@@ -69,6 +85,7 @@ const seenMessages = new Set();
 const piSessions = new Map();
 const sessionQueues = new Map();
 const pendingUiAnswers = new Map();
+const pendingDiscordUi = new Map();
 const pendingThreadTitleRenames = new Set();
 const runQueue = [];
 let activeRuns = 0;
@@ -125,6 +142,12 @@ client.on("messageCreate", (message) => {
       activeMessageHandlers -= 1;
       maybeStartRequestedRestart();
     });
+});
+
+client.on("interactionCreate", (interaction) => {
+  void handleGatewayUiInteraction(interaction).catch((error) => {
+    log(`Discord UI interaction failed: ${safeErrorName(error)}`);
+  });
 });
 
 idleCleanupTimer = setInterval(() => {
@@ -224,7 +247,7 @@ async function handleMessage(message) {
   const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${content}`;
   pendingMessageTasks += 1;
   const queuedRun = enqueueForSession(sessionKey, async () => {
-    const stopTyping = startTyping(target);
+    const typing = startTyping(target);
     try {
       const result = await withRunSlot(async () => {
         const session = await getPiSession(sessionKey);
@@ -232,6 +255,7 @@ async function handleMessage(message) {
           channel: target,
           userId: message.author.id,
           channelId: target.id,
+          typing,
         });
         watchThreadTitle(target, session);
         return result;
@@ -242,7 +266,7 @@ async function handleMessage(message) {
       log(`Pi run failed: ${safeErrorName(error)}`);
       await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.");
     } finally {
-      stopTyping();
+      typing.stop();
     }
   });
   void queuedRun
@@ -336,6 +360,8 @@ class PiRpcSession {
     this.pendingRequests = new Map();
     this.runWaiter = undefined;
     this.interaction = undefined;
+    this.askUserMessage = undefined;
+    this.askUserMessageEditPromise = Promise.resolve();
     this.statusMessages = new Map();
     this.closed = false;
     this.running = false;
@@ -457,6 +483,8 @@ class PiRpcSession {
     this.running = true;
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
+    this.askUserMessage = undefined;
+    this.askUserMessageEditPromise = Promise.resolve();
     let settledPromise;
     try {
       settledPromise = new Promise((resolve, reject) => {
@@ -517,26 +545,37 @@ class PiRpcSession {
     }
 
     const key = `${interaction.channelId}:${interaction.userId}`;
+    const isAskUser = typeof request.title === "string" && request.title.startsWith("Ask User");
+    const isAskUserReview = isAskUser && request.title.startsWith("Ask User\n\n");
+    const isAskUserQuestion = isAskUser && !isAskUserReview && request.title.includes("\n");
+    if (!isAskUser) this.askUserMessage = undefined;
     const timeoutMs = Number.isFinite(request.timeout) && request.timeout > 0
       ? Math.min(request.timeout, 60 * 60 * 1000)
       : UI_DEFAULT_TIMEOUT_MS;
 
     let promptText;
     let parseAnswer;
+    let options = [];
     if (method === "select") {
-      const options = Array.isArray(request.options) ? request.options.map(String) : [];
-      const visibleOptions = options.slice(0, 25);
-      promptText = `${request.title || "Choose an option"}\n${visibleOptions.map((option, index) => `${index + 1}. ${option}`).join("\n")}\nReply with a number or the exact option text.`;
+      options = Array.isArray(request.options) ? request.options.map(String) : [];
+      if (options.length === 0) {
+        this.sendUiResponse(request.id, { cancelled: true });
+        return;
+      }
+      promptText = isAskUserReview
+        ? request.title || "Review your responses"
+        : `${request.title || "Choose an option"}\nSelect an option below, or reply with its number or exact text.`;
       parseAnswer = (answer) => {
-        const selectedIndex = Number.parseInt(answer, 10) - 1;
-        if (/^\d+$/.test(answer.trim()) && selectedIndex >= 0 && selectedIndex < visibleOptions.length) {
-          return { done: true, value: visibleOptions[selectedIndex] };
+        const normalized = answer.trim();
+        const selectedIndex = Number.parseInt(normalized, 10) - 1;
+        if (/^[0-9]+$/.test(normalized) && selectedIndex >= 0 && selectedIndex < options.length) {
+          return { done: true, value: options[selectedIndex] };
         }
-        const exact = visibleOptions.find((option) => option.toLowerCase() === answer.trim().toLowerCase());
+        const exact = options.find((option) => option.toLowerCase() === normalized.toLowerCase());
         return exact ? { done: true, value: exact } : { done: false };
       };
     } else if (method === "confirm") {
-      promptText = `${request.title || "Confirm"}\n${request.message || "Reply yes or no."}\nReply yes or no.`;
+      promptText = `${request.title || "Confirm"}\n${request.message || "Choose yes or no below."}`;
       parseAnswer = (answer) => {
         const normalized = answer.trim().toLowerCase();
         if (["yes", "y", "true", "1"].includes(normalized)) return { done: true, confirmed: true };
@@ -544,11 +583,28 @@ class PiRpcSession {
         return { done: false };
       };
     } else {
-      promptText = `${request.title || "Your response"}${request.placeholder ? `\n${request.placeholder}` : ""}\nReply with your text.`;
+      const title = request.title || (method === "editor" ? "Edit text" : "Your response");
+      const prefill = method === "editor" && typeof request.prefill === "string" ? request.prefill : "";
+      const placeholder = typeof request.placeholder === "string" ? request.placeholder : "";
+      promptText = `${title}${placeholder ? `\n${placeholder}` : ""}\n${method === "editor" ? "Open the editor below to enter your response." : "Open the input below to enter your response."}`;
+      if (prefill) promptText += `\n\nCurrent text:\n${truncateDiscordText(prefill, 900)}`;
       parseAnswer = (answer) => ({ done: true, value: answer });
     }
 
-    const answer = await waitForDiscordAnswer(key, interaction.channel, promptText, parseAnswer, timeoutMs, this);
+    interaction.typing?.pause?.();
+    let answer;
+    try {
+      answer = await waitForDiscordAnswer(key, interaction.channel, promptText, parseAnswer, timeoutMs, this, {
+        method,
+        request,
+        options,
+        isAskUser,
+        isAskUserReview,
+        isAskUserQuestion,
+      });
+    } finally {
+      interaction.typing?.resume?.();
+    }
     if (answer === undefined) {
       this.sendUiResponse(request.id, { cancelled: true });
     } else if (method === "confirm") {
@@ -605,36 +661,418 @@ class PiRpcSession {
   }
 }
 
-function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, session) {
+function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, session, uiRequest) {
   return new Promise((resolve) => {
     const existing = pendingUiAnswers.get(key);
     if (existing) existing.finish(undefined);
 
+    const token = randomUUID();
     let finished = false;
     const pending = {
+      token,
+      key,
       session,
+      method: uiRequest.method,
+      request: uiRequest.request,
+      options: uiRequest.options,
+      isAskUser: uiRequest.isAskUser,
+      isAskUserReview: uiRequest.isAskUserReview,
+      isAskUserQuestion: uiRequest.isAskUserQuestion,
+      userId: session.interaction?.userId,
+      channelId: session.interaction?.channelId,
+      promptText: truncateDiscordText(promptText, 1800),
+      promptMessage: undefined,
+      completionStatus: undefined,
+      result: undefined,
+      page: 0,
+      completing: false,
+      parse(answer) {
+        return finished || pending.completing ? { done: false } : parseAnswer(String(answer ?? ""));
+      },
+      claim() {
+        if (finished || pending.completing) return false;
+        pending.completing = true;
+        clearTimeout(timer);
+        return true;
+      },
       accept(answer) {
-        if (finished) return;
-        const parsed = parseAnswer(answer);
+        if (finished || pending.completing) return false;
+        const parsed = parseAnswer(String(answer ?? ""));
         if (!parsed.done) {
-          void sendText(channel, "That response wasn't recognized. Please follow the format above.");
-          return;
+          void sendText(channel, "That response wasn't recognized. Please use the controls or reply with a valid answer.");
+          return false;
         }
         pending.finish(parsed.value ?? parsed.confirmed);
+        return true;
       },
-      finish(value) {
+      finish(value, { updatePrompt = true, statusText } = {}) {
         if (finished) return;
         finished = true;
+        pending.result = value;
+        pending.completionStatus = statusText || (value === undefined ? "Prompt dismissed or expired." : "Response received.");
         clearTimeout(timer);
         if (pendingUiAnswers.get(key) === pending) pendingUiAnswers.delete(key);
+        if (pendingDiscordUi.get(token) === pending) pendingDiscordUi.delete(token);
+        if (value === undefined && session.askUserMessage === pending.promptMessage) {
+          session.askUserMessage = undefined;
+        }
         resolve(value);
+        if (updatePrompt && pending.promptMessage) {
+          const payload = buildDiscordUiPayload(pending, pending.completionStatus);
+          const edit = pending.isAskUser
+            ? queueAskUserMessageEdit(session, pending.promptMessage, payload)
+            : pending.promptMessage.edit(payload);
+          void edit.catch(() => undefined);
+        }
       },
     };
-    const timer = setTimeout(() => pending.finish(undefined), timeoutMs);
+    const timer = setTimeout(() => pending.finish(undefined, { statusText: "This prompt expired." }), timeoutMs);
     timer.unref?.();
     pendingUiAnswers.set(key, pending);
-    void sendText(channel, promptText).catch(() => pending.finish(undefined));
+    pendingDiscordUi.set(token, pending);
+
+    const payload = buildDiscordUiPayload(pending);
+    const reusableMessage = uiRequest.isAskUser ? session.askUserMessage : undefined;
+    const postPrompt = async () => {
+      if (reusableMessage && reusableMessage.channelId === channel.id) {
+        try {
+          return await queueAskUserMessageEdit(session, reusableMessage, payload);
+        } catch {
+          if (session.askUserMessage === reusableMessage) session.askUserMessage = undefined;
+        }
+      }
+      return channel.send(payload);
+    };
+
+    void postPrompt().then((message) => {
+      pending.promptMessage = message;
+      if (uiRequest.isAskUser && (!finished || pending.result !== undefined)) {
+        session.askUserMessage = message;
+      }
+      if (finished) {
+        if (pending.result === undefined && session.askUserMessage === message) {
+          session.askUserMessage = undefined;
+        }
+        const completedPayload = buildDiscordUiPayload(pending, pending.completionStatus);
+        const edit = pending.isAskUser
+          ? queueAskUserMessageEdit(session, message, completedPayload)
+          : message.edit(completedPayload);
+        void edit.catch(() => undefined);
+      }
+    }).catch(() => pending.finish(undefined));
   });
+}
+
+function queueAskUserMessageEdit(session, message, payload) {
+  const edit = (session.askUserMessageEditPromise || Promise.resolve())
+    .catch(() => undefined)
+    .then(() => message.edit(payload));
+  session.askUserMessageEditPromise = edit.catch(() => undefined);
+  return edit;
+}
+
+function buildDiscordUiPayload(pending, statusText, responseValue = pending.result) {
+  const optionGuide = "Select an option below, or reply with its number or exact text.";
+  const hasDropdownGuide =
+    pending.isAskUser &&
+    pending.method === "select" &&
+    !pending.isAskUserReview &&
+    pending.promptText.endsWith(`\n${optionGuide}`);
+  const reviewInstruction = "\n\nSubmit or choose an answer to edit.";
+  const hasReviewInstruction =
+    pending.isAskUserReview && pending.promptText.endsWith(reviewInstruction);
+  let promptContent = hasDropdownGuide
+    ? pending.promptText.slice(0, -(optionGuide.length + 1))
+    : statusText && hasReviewInstruction
+      ? pending.promptText.slice(0, -reviewInstruction.length)
+      : pending.promptText;
+  if (statusText === "Response received." && pending.isAskUserReview) {
+    const titleEnd = promptContent.indexOf("\n");
+    const title = titleEnd < 0 ? promptContent : promptContent.slice(0, titleEnd);
+    const body = titleEnd < 0 ? "" : promptContent.slice(titleEnd);
+    promptContent = `${title.replace(/ — (?:Review your responses|Response):$/, "")}${body}`;
+  }
+  const responseText =
+    statusText === "Response received." && pending.isAskUserQuestion && responseValue !== undefined
+      ? `\n\n**Your answer:**\n> ${truncateDiscordText(String(responseValue), 500).replace(/\r?\n/g, "\n> ")}`
+      : "";
+  const content = statusText ? `${promptContent}${responseText}\n\n${statusText}` : pending.promptText;
+  const controls = statusText ? [] : buildDiscordUiComponents(pending);
+  if (!pending.isAskUser) {
+    return {
+      content,
+      components: controls,
+      allowedMentions: { parse: [] },
+    };
+  }
+
+  const showDropdownGuide = !statusText && hasDropdownGuide;
+  const cardContent = showDropdownGuide ? promptContent : content;
+  const requestTitle = typeof pending.request?.title === "string" ? pending.request.title : "";
+  const questionBreak = requestTitle.indexOf("\n");
+  let cardText;
+  if (pending.isAskUserReview) {
+    const [reviewTitle, ...reviewLines] = cardContent.split("\n");
+    const formattedReviewLines = reviewLines.map((line) => {
+      const questionMatch = /^(\d+)\.\s+(.+)$/.exec(line);
+      if (questionMatch) return `### ${questionMatch[1]}. ${questionMatch[2]}`;
+      const answerMatch = /^\s+Answer:\s*(.*)$/.exec(line);
+      if (answerMatch) return `> **Answer:** ${answerMatch[1]}`;
+      if (line === "Submit or choose an answer to edit.") return `-# ${line}`;
+      return line;
+    });
+    cardText = `## ${reviewTitle}${formattedReviewLines.length ? `\n${formattedReviewLines.join("\n")}` : ""}`;
+  } else if (
+    requestTitle.startsWith("Ask User") &&
+    questionBreak >= 0 &&
+    cardContent.startsWith(requestTitle)
+  ) {
+    const heading = requestTitle.slice(0, questionBreak);
+    const question = requestTitle.slice(questionBreak + 1).trim();
+    const remainingText = cardContent.slice(requestTitle.length);
+    cardText = `## ${heading}${question ? `\n### ${question}` : ""}${remainingText}`;
+  } else {
+    const firstBreak = cardContent.indexOf("\n");
+    const firstLine = firstBreak < 0 ? cardContent : cardContent.slice(0, firstBreak);
+    const remainingText = firstBreak < 0 ? "" : cardContent.slice(firstBreak + 1);
+    cardText = firstLine.startsWith("Ask User")
+      ? `### ${firstLine}${remainingText ? `\n${remainingText}` : ""}`
+      : cardContent;
+  }
+  const container = new ContainerBuilder()
+    .setAccentColor(0x5865f2)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(cardText));
+
+  if (controls.length > 0) {
+    container.addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
+    );
+    if (showDropdownGuide) {
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(optionGuide));
+    }
+    for (const control of controls) container.addActionRowComponents(control);
+  }
+
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [container],
+    allowedMentions: { parse: [] },
+  };
+}
+
+function buildDiscordUiComponents(pending) {
+  if (pending.isAskUserReview) {
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`piui:${pending.token}:review-submit`)
+        .setLabel("Submit response")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`piui:${pending.token}:review-edit`)
+        .setLabel("Edit answer")
+        .setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  if (pending.method === "select") {
+    const pageSize = 25;
+    const pageCount = Math.ceil(pending.options.length / pageSize);
+    const pageStart = pending.page * pageSize;
+    const visibleOptions = pending.options.slice(pageStart, pageStart + pageSize);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`piui:${pending.token}:select`)
+      .setPlaceholder(truncateDiscordText(pageCount > 1 ? `Choose an option (page ${pending.page + 1}/${pageCount})` : "Choose an option", 150))
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(visibleOptions.map((option, index) => ({
+        label: discordOptionLabel(option),
+        value: String(pageStart + index),
+      })));
+    const rows = [new ActionRowBuilder().addComponents(menu)];
+    const buttons = [];
+    if (pageCount > 1) {
+      buttons.push(new ButtonBuilder()
+        .setCustomId(`piui:${pending.token}:prev`)
+        .setLabel("Previous")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pending.page === 0));
+      buttons.push(new ButtonBuilder()
+        .setCustomId(`piui:${pending.token}:next`)
+        .setLabel("Next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pending.page >= pageCount - 1));
+    }
+    buttons.push(new ButtonBuilder()
+      .setCustomId(`piui:${pending.token}:cancel`)
+      .setLabel("Dismiss")
+      .setStyle(ButtonStyle.Secondary));
+    rows.push(new ActionRowBuilder().addComponents(buttons));
+    return rows;
+  }
+
+  if (pending.method === "confirm") {
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:yes`).setLabel("Yes").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:no`).setLabel("No").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  const buttonLabel = pending.method === "editor" ? "Open editor" : "Enter response";
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`piui:${pending.token}:open`).setLabel(buttonLabel).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
+  )];
+}
+
+function buildDiscordUiModal(pending) {
+  const request = pending.request;
+  const isEditor = pending.method === "editor";
+  const textInput = new TextInputBuilder()
+    .setCustomId("answer")
+    .setLabel(isEditor ? "Your text" : "Your response")
+    .setStyle(isEditor ? TextInputStyle.Paragraph : TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(4000);
+  const placeholder = typeof request.placeholder === "string" ? request.placeholder : "";
+  if (placeholder) textInput.setPlaceholder(truncateDiscordText(placeholder, 100));
+  const prefill = isEditor && typeof request.prefill === "string" ? truncateDiscordText(request.prefill, 4000) : "";
+  if (prefill) textInput.setValue(prefill);
+
+  const rawTitle = typeof request.title === "string" ? request.title.replace(/\s+/g, " ").trim() : "";
+  const modalTitle = truncateDiscordText(rawTitle || (isEditor ? "Edit text" : "Your response"), 45);
+  return new ModalBuilder()
+    .setCustomId(`piui:${pending.token}:submit`)
+    .setTitle(modalTitle)
+    .addComponents(new ActionRowBuilder().addComponents(textInput));
+}
+
+async function handleGatewayUiInteraction(interaction) {
+  const customId = interaction?.customId;
+  if (typeof customId !== "string" || !customId.startsWith("piui:")) return;
+
+  const [, token, action] = customId.split(":");
+  const pending = pendingDiscordUi.get(token);
+  if (!pending || pending.completing) {
+    await replyEphemeral(interaction, "This prompt is no longer active.");
+    return;
+  }
+  if (interaction.user?.id !== pending.userId || interaction.channelId !== pending.channelId) {
+    await replyEphemeral(interaction, "This prompt belongs to a different user or channel.");
+    return;
+  }
+
+  if (interaction.isButton?.() && action === "open" && ["input", "editor"].includes(pending.method)) {
+    await interaction.showModal(buildDiscordUiModal(pending));
+    return;
+  }
+
+  if (interaction.isButton?.() && pending.isAskUserReview && ["review-submit", "review-edit"].includes(action)) {
+    const answer = action === "review-submit" ? "Submit response" : "Edit answer";
+    await completeDiscordUiInteraction(pending, interaction, answer);
+    return;
+  }
+
+  if (interaction.isButton?.() && ["prev", "next"].includes(action) && pending.method === "select") {
+    const pageCount = Math.ceil(pending.options.length / 25);
+    pending.page = action === "prev"
+      ? Math.max(0, pending.page - 1)
+      : Math.min(pageCount - 1, pending.page + 1);
+    await interaction.update(buildDiscordUiPayload(pending));
+    return;
+  }
+
+  if (interaction.isButton?.() && action === "cancel") {
+    if (!pending.claim()) {
+      await replyEphemeral(interaction, "This prompt is no longer active.");
+      return;
+    }
+    try {
+      await interaction.update(buildDiscordUiPayload(pending, "Prompt dismissed."));
+      pending.finish(undefined, { updatePrompt: false });
+    } catch {
+      pending.finish(undefined);
+    }
+    return;
+  }
+
+  if (interaction.isButton?.() && pending.method === "confirm" && ["yes", "no"].includes(action)) {
+    await completeDiscordUiInteraction(pending, interaction, action === "yes" ? "yes" : "no");
+    return;
+  }
+
+  if (interaction.isStringSelectMenu?.() && action === "select" && pending.method === "select") {
+    const selectedIndex = Number(interaction.values?.[0]);
+    const selected = Number.isInteger(selectedIndex) ? pending.options[selectedIndex] : undefined;
+    if (selected === undefined) {
+      await replyEphemeral(interaction, "That option is no longer available.");
+      return;
+    }
+    await completeDiscordUiInteraction(pending, interaction, selected);
+    return;
+  }
+
+  if (interaction.isModalSubmit?.() && action === "submit" && ["input", "editor"].includes(pending.method)) {
+    if (!pending.claim()) {
+      await replyEphemeral(interaction, "This prompt is no longer active.");
+      return;
+    }
+    let value;
+    try {
+      value = interaction.fields.getTextInputValue("answer");
+      await interaction.reply({ content: "Response recorded.", ephemeral: true, allowedMentions: { parse: [] } });
+    } catch {
+      // The interaction may have expired; the pending prompt is still resolved below.
+    }
+    pending.finish(value);
+    return;
+  }
+
+  await replyEphemeral(interaction, "That control doesn't match this prompt.");
+}
+
+async function completeDiscordUiInteraction(pending, interaction, answer) {
+  const parsed = pending.parse(answer);
+  if (!parsed.done) {
+    await replyEphemeral(interaction, "That response wasn't recognized. Please try again.");
+    return;
+  }
+
+  if (!pending.claim()) {
+    await replyEphemeral(interaction, "This prompt is no longer active.");
+    return;
+  }
+  const value = parsed.value ?? parsed.confirmed;
+  try {
+    await interaction.update(buildDiscordUiPayload(pending, "Response received.", value));
+    pending.finish(value, { updatePrompt: false });
+  } catch {
+    pending.finish(value);
+  }
+}
+
+async function replyEphemeral(interaction, content) {
+  try {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
+    }
+  } catch {
+    // The interaction may have expired or already been acknowledged.
+  }
+}
+
+function discordOptionLabel(value) {
+  const label = String(value ?? "").replace(/[\r\n\t]+/g, " ").trim();
+  return truncateDiscordText(label || "(empty option)", 100);
+}
+
+function truncateDiscordText(value, maxLength) {
+  let result = "";
+  for (const character of String(value ?? "")) {
+    if (result.length + character.length > maxLength) break;
+    result += character;
+  }
+  return result;
 }
 
 async function closeIdleSessions() {
@@ -836,11 +1274,30 @@ async function sendHomeNotification(text) {
 }
 
 function startTyping(channel) {
+  let timer;
+  let stopped = false;
   const send = () => channel.sendTyping?.().catch(() => undefined);
-  send();
-  const timer = setInterval(send, 8000);
-  timer.unref();
-  return () => clearInterval(timer);
+  const pause = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const resume = () => {
+    if (stopped || timer) return;
+    send();
+    timer = setInterval(send, 8000);
+    timer.unref?.();
+  };
+  resume();
+  return {
+    pause,
+    resume,
+    stop() {
+      stopped = true;
+      pause();
+    },
+  };
 }
 
 async function sendText(channel, text) {

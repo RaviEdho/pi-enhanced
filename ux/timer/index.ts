@@ -351,12 +351,8 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   };
 
   const setWaitingMessage = (ctx: ExtensionContext) => {
-    if (!ctx.hasUI || !isWorkingTelemetryEnabled()) return;
-    if (ctx.mode === "rpc") {
-      ctx.ui.setStatus(waitingStatusKey, "Waiting for your response…");
-    } else {
-      ctx.ui.setWorkingMessage("Waiting for your response…");
-    }
+    if (!ctx.hasUI || ctx.mode === "rpc" || !isWorkingTelemetryEnabled()) return;
+    ctx.ui.setWorkingMessage("Waiting for your response…");
   };
 
   const updateMessage = (ctx: ExtensionContext) => {
