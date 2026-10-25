@@ -47,6 +47,9 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
       case "start":
         await startGateway(ctx);
         return;
+      case "restart":
+        await restartGateway(ctx);
+        return;
       case "stop":
         stopGateway(ctx);
         return;
@@ -63,14 +66,15 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
         notify(
           ctx,
           [
-            "/discord        Open the gateway menu (or setup if unconfigured)",
-            "/discord setup  Configure the bot, access allowlists, and workspace",
+            "/discord          Open the gateway menu (or setup if unconfigured)",
+            "/discord setup    Configure the bot, access allowlists, and workspace",
             "/discord configure Open bot, whitelist, and access-path settings",
-            "/discord start  Start the independent background gateway",
-            "/discord stop   Stop the gateway",
+            "/discord start    Start the independent background gateway",
+            "/discord restart  Restart the background gateway",
+            "/discord stop     Stop the gateway",
             "/discord teardown Stop it and remove the saved bot config",
-            "/discord status Check gateway health",
-            "/discord logs   Show recent gateway logs",
+            "/discord status   Check gateway health",
+            "/discord logs     Show recent gateway logs",
           ].join("\n"),
           "info"
         );
@@ -104,12 +108,12 @@ async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
 
     if (!ctx.hasUI) {
       showStatus(ctx);
-      notify(ctx, "Use /discord start, /discord stop, /discord setup, /discord configure, or /discord logs.", "info");
+      notify(ctx, "Use /discord start, /discord restart, /discord stop, /discord setup, /discord configure, or /discord logs.", "info");
       return;
     }
 
     const actions = running
-      ? ["Stop gateway", "Configure", "Tear down gateway", "View logs"]
+      ? ["Restart gateway", "Stop gateway", "Configure", "Tear down gateway", "View logs"]
       : ["Start gateway", "Configure", "Tear down gateway", "View logs"];
     const selected = await selectDiscordOption(ctx, {
       title: "Discord Gateway",
@@ -119,6 +123,9 @@ async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
     switch (selected) {
       case "Start gateway":
         await startGateway(ctx);
+        return;
+      case "Restart gateway":
+        await restartGateway(ctx);
         return;
       case "Stop gateway":
         stopGateway(ctx);
@@ -784,6 +791,34 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
   if (existsSync(paths.pid)) unlinkSync(paths.pid);
   unlinkSync(paths.config);
   notify(ctx, `Discord gateway stopped and local bot configuration removed. Conversation sessions remain at ${paths.sessions}.`, "info");
+}
+
+async function restartGateway(ctx: ExtensionCommandContext): Promise<void> {
+  const paths = getDiscordGatewayPaths();
+  const pid = readPid(paths.pid);
+  if (pid && isProcessAlive(pid)) {
+    const status = readJson<DiscordGatewayStatus>(paths.status);
+    if (status) writePrivateJson(paths.status, { ...status, state: "stopping", updatedAt: new Date().toISOString() });
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if (isProcessAlive(pid)) {
+        notify(ctx, `Could not restart gateway PID ${pid}: ${error instanceof Error ? error.message : String(error)}`, "error");
+        return;
+      }
+    }
+
+    for (let attempt = 0; attempt < 40 && isProcessAlive(pid); attempt++) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    }
+    if (isProcessAlive(pid)) {
+      notify(ctx, `Gateway PID ${pid} is still stopping; restart cancelled. Run /discord stop and try again.`, "error");
+      return;
+    }
+  }
+
+  if (existsSync(paths.pid)) unlinkSync(paths.pid);
+  await startGateway(ctx);
 }
 
 function stopGateway(ctx: ExtensionCommandContext): void {
