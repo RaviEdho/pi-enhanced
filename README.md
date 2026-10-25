@@ -215,10 +215,12 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 # Instant Routine Helpers (0 LLM Tokens)
 /git sync                     # Safe pull --rebase & push to upstream
 /git undo                     # Soft-undo last commit, keeping changes in working tree
+/commit "fix login timeout"  # Agent selects relevant files/hunks, then shows a commit proposal
 /git status                   # Interactive status overview
 ```
 
-- **Unstaged Commit Isolation**: When both staged and unstaged changes are detected, choose "Commit only unstaged changes (stash staged)" or pass `-u` / `--unstaged`. Your manual staged changes are safely preserved in git stash while the unstaged changes are committed, and restored to the index automatically upon completion or safely rolled back on cancel.
+- **Instruction-Based Selective Commits**: With `/commit <instruction>`, the instruction goes directly to the isolated agent without the staged/unstaged choice prompt. The agent selects relevant whole files or numbered diff hunks; other changes and their staged/unstaged state are preserved. You still review the proposal before committing.
+- **Unstaged Commit Isolation**: With `/commit` and no instruction, when both staged and unstaged changes are detected, choose "Commit only unstaged changes (stash staged)" or pass `-u` / `--unstaged`. Your manual staged changes are safely preserved in git stash while the unstaged changes are committed, and restored to the index automatically upon completion or safely rolled back on cancel.
 - Spins up an isolated sub-agent with zero conversation context bloat.
 - Transparent live progress and recent action logging in the status box.
 - Only pulls overview statistics and diffs for key changed files, omitting lockfiles and huge generated assets.

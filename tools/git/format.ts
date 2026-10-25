@@ -1,4 +1,4 @@
-import type { CommitProposal, CommitUsageCost } from "./types.js";
+import type { CommitHunkSelection, CommitProposal, CommitUsageCost } from "./types.js";
 
 /**
  * Format token counts compactly (e.g. 850, 1.2k, 25k, 1.5M).
@@ -56,7 +56,7 @@ export function formatPlanForEditor(stages: CommitProposal[]): string {
   const parts: string[] = [];
   parts.push("# Edit your commit stages below.");
   parts.push("# Each commit begins with '=== COMMIT: <type>(<scope>): <subject> ==='");
-  parts.push("# Followed optionally by 'Files: path1, path2' and markdown bullet points.");
+  parts.push("# Followed optionally by 'Files: path1, path2', 'Hunks: <JSON array>', and markdown bullet points.");
   parts.push("# To merge into a single commit, remove extra '=== COMMIT' blocks.");
   parts.push("# Lines starting with '#' are ignored.");
   parts.push("");
@@ -69,6 +69,9 @@ export function formatPlanForEditor(stages: CommitProposal[]): string {
     parts.push(`=== COMMIT: ${header} ===`);
     if (stage.files && stage.files.length > 0) {
       parts.push(`Files: ${stage.files.join(", ")}`);
+    }
+    if (stage.hunks && stage.hunks.length > 0) {
+      parts.push(`Hunks: ${JSON.stringify(stage.hunks)}`);
     }
     if (stage.body?.trim()) {
       parts.push(stage.body.trim());
@@ -86,6 +89,7 @@ export function parsePlanFromEditor(text: string): CommitProposal[] {
   const stages: CommitProposal[] = [];
   let currentHeader = "";
   let currentFiles: string[] = [];
+  let currentHunks: CommitHunkSelection[] = [];
   let currentBodyLines: string[] = [];
 
   const flush = () => {
@@ -101,9 +105,11 @@ export function parsePlanFromEditor(text: string): CommitProposal[] {
       subject,
       body,
       files: currentFiles.length > 0 ? currentFiles : undefined,
+      hunks: currentHunks.length > 0 ? currentHunks : undefined,
     });
     currentHeader = "";
     currentFiles = [];
+    currentHunks = [];
     currentBodyLines = [];
   };
 
@@ -121,6 +127,21 @@ export function parsePlanFromEditor(text: string): CommitProposal[] {
     if (line.toLowerCase().startsWith("files:")) {
       const filesStr = line.slice(6).trim();
       currentFiles = filesStr.split(",").map((f) => f.trim()).filter(Boolean);
+      continue;
+    }
+
+    if (line.toLowerCase().startsWith("hunks:")) {
+      try {
+        const parsed = JSON.parse(line.slice(6).trim());
+        if (Array.isArray(parsed)) {
+          currentHunks = parsed.filter((selection): selection is CommitHunkSelection =>
+            selection && typeof selection.filePath === "string" && Array.isArray(selection.hunkIds) &&
+            selection.hunkIds.every((id: unknown) => Number.isInteger(id))
+          );
+        }
+      } catch {
+        currentHunks = [];
+      }
       continue;
     }
 

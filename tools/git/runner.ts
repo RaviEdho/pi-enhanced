@@ -11,6 +11,8 @@ import {
   createCommit,
   execGit,
   executeMultiCommit,
+  executeSelectiveCommits,
+  getSelectiveDiffSnapshot,
   getStagedOverview,
   getWorkingTreeStatus,
   isGitRepository,
@@ -20,6 +22,8 @@ import {
   stageAllFiles,
   stashStagedChanges,
   unstageAllFiles,
+  validateSelectiveCommitPlan,
+  type SelectiveDiffSnapshot,
   type StashedState,
 } from "./git.js";
 import { CommitStatusBroadcaster } from "./editor.js";
@@ -31,7 +35,7 @@ import {
   formatPlanForEditor,
   parsePlanFromEditor,
 } from "./format.js";
-import { COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
+import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
 import type {
   CommitConfirmationResult,
@@ -49,6 +53,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       const cleanArgs = args
         .replace(/\b(--single|-s|--multi|-m|--unstaged|-u|--only-unstaged)\b/gi, "")
         .trim();
+      const selectiveMode = cleanArgs.length > 0;
 
       // 1. Verify git repository
       const isRepo = await isGitRepository(cwd);
@@ -93,6 +98,21 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       if (staged.length === 0 && unstaged.length === 0) {
         ctx.ui.notify("Working tree clean; no changes to commit.", "info");
         return;
+      }
+
+      let selectiveSnapshot: SelectiveDiffSnapshot | undefined;
+      if (selectiveMode) {
+        try {
+          selectiveSnapshot = await getSelectiveDiffSnapshot(cwd);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Failed to inspect working changes: ${msg}`, "error");
+          return;
+        }
+        if (selectiveSnapshot.files.length === 0) {
+          ctx.ui.notify("No eligible changes were found to commit.", "warning");
+          return;
+        }
       }
 
       type StagingAction =
@@ -179,8 +199,10 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         return undefined;
       };
 
-      // 4. Staging resolution:
-      if (isUnstaged) {
+      // An explicit /commit instruction uses a snapshot of all changes and lets the agent
+      // select files or hunks. Without an instruction, preserve the existing staging flow.
+      // 4. Staging resolution for /commit without an instruction:
+      if (!selectiveMode && isUnstaged) {
         if (unstaged.length === 0) {
           if (ctx.hasUI) {
             ctx.ui.notify("No unstaged changes detected to commit.", "warning");
@@ -231,7 +253,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           await rollbackStagingIfNeeded();
           return;
         }
-      } else if (staged.length === 0) {
+      } else if (!selectiveMode && staged.length === 0) {
         // Nothing is staged yet
         if (!ctx.hasUI) {
           try {
@@ -265,7 +287,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             return;
           }
         }
-      } else if (unstaged.length > 0) {
+      } else if (!selectiveMode && unstaged.length > 0) {
         // Both staged AND unstaged changes exist: ask user preference
         if (ctx.hasUI) {
           const optOnlyStaged = `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
@@ -325,7 +347,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         }
       }
 
-      if (staged.length === 0) {
+      if (!selectiveMode && staged.length === 0) {
         if (ctx.hasUI) {
           ctx.ui.notify("No changes detected to commit.", "warning");
         } else {
@@ -355,9 +377,12 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           description: desc,
         });
       }
+      const changedCount = selectiveMode ? (selectiveSnapshot?.files.length ?? 0) : staged.length;
       broadcaster.addAction({
         type: "overview",
-        description: `Detected ${staged.length} staged file${staged.length === 1 ? "" : "s"}`,
+        description: selectiveMode
+          ? `Detected ${changedCount} changed file${changedCount === 1 ? "" : "s"} for agent selection`
+          : `Detected ${changedCount} staged file${changedCount === 1 ? "" : "s"}`,
       });
 
       let activeSession: any = undefined;
@@ -478,6 +503,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       const diffedFiles: string[] = [];
       const tools = createCommitTools({
         cwd,
+        selectiveSnapshot,
         onPropose: (propPlan) => {
           plan = propPlan;
         },
@@ -498,7 +524,13 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       let totalCost = 0;
 
       let unsubscribe: (() => void) | undefined;
-      let overview = await getStagedOverview(cwd);
+      let overview = selectiveSnapshot
+        ? {
+            stagedFiles: selectiveSnapshot.files,
+            statSummary: selectiveSnapshot.statSummary,
+            label: "Changed",
+          }
+        : await getStagedOverview(cwd);
 
       if (abortController.signal.aborted) {
         cleanupWorkingIndicator();
@@ -513,7 +545,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           cwd,
           agentDir,
           settingsManager,
-          systemPrompt: COMMIT_AGENT_SYSTEM_PROMPT,
+          systemPrompt: selectiveMode ? SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT : COMMIT_AGENT_SYSTEM_PROMPT,
           noExtensions: true,
           noSkills: true,
           noPromptTemplates: true,
@@ -589,14 +621,20 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           }
         });
 
-        let userPrompt = "Inspect staged changes and propose conventional commit(s).";
-        if (cleanArgs) {
+        let userPrompt = selectiveMode
+          ? `User instruction: ${cleanArgs}\nSelect only the changes that fulfill this instruction and propose conventional commit(s).`
+          : "Inspect staged changes and propose conventional commit(s).";
+        if (!selectiveMode && cleanArgs) {
           userPrompt = `User hint/instructions: "${cleanArgs}". Inspect staged changes and propose conventional commit(s).`;
         }
         if (isSingle) {
-          userPrompt += " Please consolidate all staged changes into a single conventional commit proposal (propose_commit).";
+          userPrompt += selectiveMode
+            ? " Select only the instructed changes and make one conventional commit proposal (propose_commit)."
+            : " Please consolidate all staged changes into a single conventional commit proposal (propose_commit).";
         } else if (isMulti) {
-          userPrompt += " Please split staged changes into logical atomic commits (propose_commits).";
+          userPrompt += selectiveMode
+            ? " Select only instructed changes and split them into logical atomic commits (propose_commits)."
+            : " Please split staged changes into logical atomic commits (propose_commits).";
         }
 
         broadcaster.update("Inspecting git diffs…");
@@ -658,6 +696,15 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         return;
       }
       let commitPlan: CommitPlanProposal = capturedPlan;
+      if (selectiveMode && selectiveSnapshot) {
+        try {
+          validateSelectiveCommitPlan(commitPlan.stages, selectiveSnapshot);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.ui.notify(`Commit agent returned an invalid file selection: ${msg}`, "error");
+          return;
+        }
+      }
 
       // Fallback calculation for totalCost if model has rates but was not populated
       if (totalCost === 0 && model.cost && (model.cost.input > 0 || model.cost.output > 0)) {
@@ -685,7 +732,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       };
 
       // Refetch overview for updated details
-      overview = await getStagedOverview(cwd);
+      overview = selectiveSnapshot
+        ? { stagedFiles: selectiveSnapshot.files, statSummary: selectiveSnapshot.statSummary, label: "Changed" }
+        : await getStagedOverview(cwd);
 
       const isMultiStage = commitPlan.isMultiStage && commitPlan.stages.length > 1;
 
@@ -696,8 +745,49 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       const firstSubject = firstStage.subject.trim().replace(/\.$/, "");
       const firstHeaderLine = firstScope ? `${firstType}(${firstScope}): ${firstSubject}` : `${firstType}: ${firstSubject}`;
 
+      const costBadge = formatCostBadge(usage);
+
       // Helper function to execute the commits and optional push
       const executeCommitSequence = async (stages: CommitProposal[], shouldPush: boolean): Promise<boolean> => {
+        if (selectiveMode && selectiveSnapshot) {
+          try {
+            const res = await executeSelectiveCommits(stages, selectiveSnapshot, cwd, (stageIdx, total, header) => {
+              ctx.ui.setWorkingMessage?.(`Committing selected changes ${stageIdx}/${total}: ${header}…`);
+            });
+
+            let pushFailedMsg: string | undefined;
+            if (shouldPush) {
+              try {
+                ctx.ui.setWorkingMessage?.("Pushing commits to remote…");
+                await pushCommit(cwd);
+              } catch (err) {
+                pushFailedMsg = err instanceof Error ? err.message : String(err);
+              } finally {
+                ctx.ui.setWorkingMessage?.();
+              }
+            }
+
+            if (shouldPush && pushFailedMsg) {
+              ctx.ui.notify(`Committed ${res.committedCount} selected stage(s), but push failed: ${pushFailedMsg}`, "error");
+            } else if (shouldPush) {
+              ctx.ui.notify(`Committed and pushed ${res.committedCount} selected stage(s) • ${costBadge}`, "info");
+            } else {
+              ctx.ui.notify(`Committed ${res.committedCount} selected stage(s) • ${costBadge}`, "info");
+            }
+            return true;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.startsWith("Created ")) {
+              ctx.ui.notify(`Selective commit warning: ${msg}`, "warning");
+            } else {
+              ctx.ui.notify(`Selective commit failed: ${msg}`, "error");
+            }
+            return false;
+          } finally {
+            ctx.ui.setWorkingMessage?.();
+          }
+        }
+
         if (stages.length === 1) {
           const single = stages[0];
           const type = single.type.trim().toLowerCase();
@@ -788,7 +878,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       // 6. Non-interactive CLI mode
       if (!ctx.hasUI) {
         process.stdout.write(`\n[commit] Actions Summary:\n`);
-        process.stdout.write(`  • Staged: ${overview.stagedFiles.length} file(s) (${overview.statSummary || "changes"})\n`);
+        process.stdout.write(`  • ${overview.label ?? "Staged"}: ${overview.stagedFiles.length} file(s) (${overview.statSummary || "changes"})\n`);
         if (diffedFiles.length > 0) {
           process.stdout.write(`  • Diffed: ${diffedFiles.join(", ")}\n`);
         }
@@ -799,6 +889,21 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           ? formatCost(usage.totalCost)
           : (usage.isSubscription ? "Included with subscription" : "$0.00");
         process.stdout.write(`  • Cost: ${costStr}\n`);
+
+        if (selectiveMode) {
+          process.stdout.write(`[commit] Agent selected changes for ${commitPlan.stages.length} commit stage(s):\n`);
+          for (let i = 0; i < commitPlan.stages.length; i++) {
+            const stage = commitPlan.stages[i];
+            const header = stage.scope ? `${stage.type}(${stage.scope}): ${stage.subject}` : `${stage.type}: ${stage.subject}`;
+            process.stdout.write(`  ${i + 1}. ${header}\n`);
+            for (const file of stage.files ?? []) process.stdout.write(`     file: ${file}\n`);
+            for (const selection of stage.hunks ?? []) {
+              process.stdout.write(`     hunks: ${selection.filePath} [${selection.hunkIds.join(", ")}]\n`);
+            }
+          }
+          process.stdout.write("[commit] No commit made: selective commits require interactive review and confirmation.\n");
+          return;
+        }
 
         if (isMultiStage) {
           process.stdout.write(`[commit] Planned ${commitPlan.stages.length} atomic stages:\n`);
@@ -844,8 +949,6 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       }
 
       // 7. Interactive UI Mode
-      const costBadge = formatCostBadge(usage);
-
       while (true) {
         const isCurrentMultiStage = commitPlan.stages.length > 1;
         const currentFirstHeader = commitPlan.stages[0]?.scope
@@ -942,6 +1045,13 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           }
 
           const newStages = parsePlanFromEditor(edited);
+          if (selectiveMode && !isCurrentMultiStage && newStages.length === 1) {
+            newStages[0] = {
+              ...newStages[0],
+              files: commitPlan.stages[0]?.files,
+              hunks: commitPlan.stages[0]?.hunks,
+            };
+          }
           if (newStages.length === 0) {
             const rollbackMsg = await rollbackStagingIfNeeded();
             const warnMsg = "No valid commits found in edited text; commit cancelled.";

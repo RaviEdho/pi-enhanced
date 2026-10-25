@@ -1,7 +1,13 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getFileDiff, getStagedOverview } from "./git.js";
-import type { CommitActionEntry, CommitPlanProposal, CommitProposal } from "./types.js";
+import {
+  formatSelectiveFileDiff,
+  getFileDiff,
+  getStagedOverview,
+  MAX_FILE_DIFF_CHARS,
+  type SelectiveDiffSnapshot,
+} from "./git.js";
+import type { CommitActionEntry, CommitHunkSelection, CommitPlanProposal, CommitProposal } from "./types.js";
 
 function parseCommitStage(item: any): CommitProposal | null {
   if (!item || typeof item !== "object") return null;
@@ -28,6 +34,14 @@ function parseCommitStage(item: any): CommitProposal | null {
         .filter((f: any): f is string => typeof f === "string" && f.trim().length > 0)
         .map((f: string) => f.trim())
     : undefined;
+  const hunks: CommitHunkSelection[] | undefined = Array.isArray(item.hunks)
+    ? item.hunks
+        .filter((selection: any) => selection && typeof selection.filePath === "string" && Array.isArray(selection.hunkIds))
+        .map((selection: any) => ({
+          filePath: selection.filePath.trim(),
+          hunkIds: selection.hunkIds.filter((id: any): id is number => Number.isInteger(id)),
+        }))
+    : undefined;
 
   return {
     type: commitType,
@@ -35,11 +49,18 @@ function parseCommitStage(item: any): CommitProposal | null {
     subject,
     body,
     files,
+    hunks,
   };
 }
 
+const HunkSelectionSchema = Type.Object({
+  filePath: Type.String(),
+  hunkIds: Type.Array(Type.Integer()),
+});
+
 const CommitStageSchema = Type.Object({
   files: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+  hunks: Type.Optional(Type.Union([Type.Array(HunkSelectionSchema), Type.Null()])),
   type: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   scope: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   subject: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -52,28 +73,34 @@ export function createCommitTools(options: {
   onPropose: (plan: CommitPlanProposal) => void;
   onAction?: (action: Omit<CommitActionEntry, "timestamp">) => void;
   diffedFiles?: string[];
+  selectiveSnapshot?: SelectiveDiffSnapshot;
   signal?: AbortSignal;
 }): ToolDefinition[] {
-  const { cwd, onPropose, onAction, diffedFiles, signal } = options;
+  const { cwd, onPropose, onAction, diffedFiles, selectiveSnapshot, signal } = options;
 
   const gitOverviewTool: ToolDefinition<any, unknown> = {
     name: "git_overview",
     label: "Git Overview",
-    description: "Retrieve list of all currently staged files and git diff statistics.",
+    description: selectiveSnapshot
+      ? "Retrieve all working-tree changes (staged and unstaged) available for selective commit, with file paths and diff statistics."
+      : "Retrieve list of all currently staged files and git diff statistics.",
     parameters: Type.Object({}),
     async execute() {
       if (signal?.aborted) {
         throw new Error("Commit cancelled by user.");
       }
-      const overview = await getStagedOverview(cwd);
+      const overview = selectiveSnapshot
+        ? { stagedFiles: selectiveSnapshot.files, statSummary: selectiveSnapshot.statSummary }
+        : await getStagedOverview(cwd);
+      const fileLabel = selectiveSnapshot ? "changed" : "staged";
       onAction?.({
         type: "overview",
-        description: `Git overview: ${overview.stagedFiles.length} file(s) staged`,
+        description: `Git overview: ${overview.stagedFiles.length} ${fileLabel} file(s)`,
       });
 
       const text = [
-        `Staged files count: ${overview.stagedFiles.length}`,
-        "Staged files:",
+        `${selectiveSnapshot ? "Changed" : "Staged"} files count: ${overview.stagedFiles.length}`,
+        `${selectiveSnapshot ? "Changed" : "Staged"} files:`,
         ...overview.stagedFiles.map((file) => `  - ${file}`),
         "",
         "Diff stat:",
@@ -90,7 +117,9 @@ export function createCommitTools(options: {
   const gitFileDiffTool: ToolDefinition<any, unknown> = {
     name: "git_file_diff",
     label: "Git File Diff",
-    description: "Get cached git diff for a specific staged file. Automatically omits lockfiles and truncates oversized outputs.",
+    description: selectiveSnapshot
+      ? "Get the diff for a specific changed file. In selective mode, text hunks are numbered for precise file/hunk selection."
+      : "Get cached git diff for a specific staged file. Automatically omits lockfiles and truncates oversized outputs.",
     parameters: Type.Object({
       filePath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     }),
@@ -120,9 +149,16 @@ export function createCommitTools(options: {
         description: `Inspected diff for ${targetPath}`,
       });
 
-      const diff = await getFileDiff(targetPath, cwd);
+      const diff = selectiveSnapshot
+        ? (selectiveSnapshot.files.includes(targetPath)
+            ? formatSelectiveFileDiff(selectiveSnapshot, targetPath)
+            : `(No changes found for ${targetPath})`)
+        : await getFileDiff(targetPath, cwd);
+      const boundedDiff = diff.length > MAX_FILE_DIFF_CHARS
+        ? `${diff.slice(0, MAX_FILE_DIFF_CHARS)}\n... [diff truncated: exceeded ${MAX_FILE_DIFF_CHARS} chars]`
+        : diff;
       return {
-        content: [{ type: "text", text: diff }],
+        content: [{ type: "text", text: boundedDiff }],
         details: undefined,
       };
     },
@@ -139,6 +175,7 @@ export function createCommitTools(options: {
       summary: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       body: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Any()), Type.Null()])),
       files: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+      hunks: Type.Optional(Type.Union([Type.Array(HunkSelectionSchema), Type.Null()])),
       commits: Type.Optional(Type.Union([Type.Array(CommitStageSchema), Type.Null()])),
     }),
     async execute(
@@ -150,6 +187,7 @@ export function createCommitTools(options: {
         summary?: string | null;
         body?: string | unknown[] | null;
         files?: string[] | null;
+        hunks?: CommitHunkSelection[] | null;
         commits?: any[] | null;
       }
     ) {

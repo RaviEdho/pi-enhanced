@@ -155,13 +155,23 @@ export class CommitConfirmationDialog implements Component {
     if (isMulti) {
       for (let i = 0; i < this.plan.stages.length; i++) {
         const stage = this.plan.stages[i];
-        const count = stage.files?.length || 0;
-        const countStr = count ? ` (${count} file${count === 1 ? "" : "s"})` : "";
+        const selectedFileCount = (stage.files?.length ?? 0) + new Set((stage.hunks ?? []).map((selection) => selection.filePath)).size;
+        const selectedHunkCount = (stage.hunks ?? []).reduce((count, selection) => count + selection.hunkIds.length, 0);
+        const countStr = selectedFileCount
+          ? ` (${selectedFileCount} file${selectedFileCount === 1 ? "" : "s"}${selectedHunkCount ? `, ${selectedHunkCount} hunk${selectedHunkCount === 1 ? "" : "s"}` : ""})`
+          : "";
         const typeScope = stage.scope ? `${stage.type}(${stage.scope})` : stage.type;
         const stageTitle = `${i + 1}. ${typeScope}: ${stage.subject}`;
 
         lines.push(`  ${boldFn(textFn(stageTitle))}${countStr ? mutedFn(countStr) : ""}`);
 
+        for (const file of stage.files ?? []) {
+          lines.push(`     ${mutedFn(`file: ${truncateToWidth(file, Math.max(10, width - 12), "…")}`)}`);
+        }
+        for (const selection of stage.hunks ?? []) {
+          const selected = `${selection.filePath} [${selection.hunkIds.join(", ")}]`;
+          lines.push(`     ${mutedFn(`hunks: ${truncateToWidth(selected, Math.max(10, width - 13), "…")}`)}`);
+        }
         if (stage.body?.trim()) {
           const firstBodyLine = stage.body.trim().split("\n")[0].trim().replace(/^[-*•]\s*/, "");
           if (firstBodyLine) {
@@ -177,6 +187,17 @@ export class CommitConfirmationDialog implements Component {
       const headerWrapped = wrapTextWithAnsi(this.headerLine, Math.max(10, width - 4));
       for (const hLine of headerWrapped) {
         lines.push(`  ${boldFn(accentFn(hLine))}`);
+      }
+
+      if (single?.files?.length || single?.hunks?.length) {
+        lines.push("");
+        for (const file of single.files ?? []) {
+          lines.push(`  ${mutedFn(`file: ${truncateToWidth(file, Math.max(10, width - 10), "…")}`)}`);
+        }
+        for (const selection of single.hunks ?? []) {
+          const selected = `${selection.filePath} [${selection.hunkIds.join(", ")}]`;
+          lines.push(`  ${mutedFn(`hunks: ${truncateToWidth(selected, Math.max(10, width - 11), "…")}`)}`);
+        }
       }
 
       if (single?.body?.trim()) {
@@ -213,7 +234,8 @@ export class CommitConfirmationDialog implements Component {
     const stagedCount = this.overview.stagedFiles.length;
     const statSummary = this.overview.statSummary ? ` (${this.overview.statSummary.split("\n")[0].trim()})` : "";
     const turnsInfo = `${this.usage.turns} turn${this.usage.turns === 1 ? "" : "s"} in ${formatDuration(this.usage.durationMs)}`;
-    lines.push(mutedFn(`  Staged: ${stagedCount} file${stagedCount === 1 ? "" : "s"}${statSummary} • ${turnsInfo}`));
+    const overviewLabel = this.overview.label ?? "Staged";
+    lines.push(mutedFn(`  ${overviewLabel}: ${stagedCount} file${stagedCount === 1 ? "" : "s"}${statSummary} • ${turnsInfo}`));
 
     lines.push("");
 

@@ -1,9 +1,15 @@
+export interface CommitHunkSelection {
+  filePath: string;
+  hunkIds: number[];
+}
+
 export interface CommitProposal {
   type: string;
   scope?: string;
   subject: string;
   body?: string;
   files?: string[];
+  hunks?: CommitHunkSelection[];
 }
 
 export interface CommitPlanProposal {
@@ -19,6 +25,7 @@ export interface GitFileStatus {
 export interface GitStagedOverview {
   stagedFiles: string[];
   statSummary: string;
+  label?: string;
 }
 
 export interface CommitActionEntry {

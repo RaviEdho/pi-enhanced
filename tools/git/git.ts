@@ -23,8 +23,12 @@ export const LOCKFILE_PATTERNS = [
 
 export const MAX_FILE_DIFF_CHARS = 4000;
 
-export async function execGit(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+export async function execGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    maxBuffer: 10 * 1024 * 1024,
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+  });
   return stdout;
 }
 
@@ -321,6 +325,157 @@ export async function getStagedOverview(cwd: string): Promise<GitStagedOverview>
   };
 }
 
+export interface SelectiveDiffSnapshot {
+  files: string[];
+  patches: Map<string, string>;
+  hunkCounts: Map<string, number>;
+  statSummary: string;
+  head: string | undefined;
+  indexTree: string;
+}
+
+const LITERAL_EMPTY_STRING = ":(literal)";
+
+function parseNulSeparatedPaths(output: string): string[] {
+  return output.split("\0").filter(Boolean);
+}
+
+function getPatchHunks(patch: string): string[][] {
+  const lines = patch.split("\n");
+  const starts: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^@@\s/.test(lines[i])) starts.push(i);
+  }
+  return starts.map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length));
+}
+
+async function createCandidateIndex(cwd: string, directory: string): Promise<{ indexPath: string; head?: string }> {
+  const indexPath = path.join(directory, "index");
+  let head: string | undefined;
+  try {
+    head = (await execGit(["rev-parse", "--verify", "HEAD"], cwd)).trim() || undefined;
+  } catch {
+    // An unborn branch has no HEAD; start from an empty index.
+  }
+
+  const env = { GIT_INDEX_FILE: indexPath };
+  if (head) await execGit(["read-tree", head], cwd, env);
+  else await execGit(["read-tree", "--empty"], cwd, env);
+  await execGit(["add", "-A"], cwd, env);
+  return { indexPath, head };
+}
+
+export async function getSelectiveDiffSnapshot(cwd: string): Promise<SelectiveDiffSnapshot> {
+  const indexTree = (await execGit(["write-tree"], cwd)).trim();
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-enhanced-commit-"));
+  try {
+    const { indexPath, head } = await createCandidateIndex(cwd, directory);
+    const env = { GIT_INDEX_FILE: indexPath };
+    const baseArgs = head ? [head] : [];
+    const paths = parseNulSeparatedPaths(
+      await execGit(["diff", "--cached", "--name-only", "--no-renames", "-z", ...baseArgs], cwd, env)
+    );
+    const patches = new Map<string, string>();
+    const hunkCounts = new Map<string, number>();
+
+    for (const file of paths) {
+      const patch = await execGit(
+        ["diff", "--cached", "--binary", "--no-renames", "--no-ext-diff", "--no-color", "--unified=0", ...baseArgs, "--", `${LITERAL_EMPTY_STRING}${file}`],
+        cwd,
+        env
+      );
+      if (!patch) continue;
+      patches.set(file, patch);
+      hunkCounts.set(file, getPatchHunks(patch).length);
+    }
+
+    const statSummary = await execGit(["diff", "--cached", "--stat", ...baseArgs], cwd, env);
+    return {
+      files: [...patches.keys()],
+      patches,
+      hunkCounts,
+      statSummary: statSummary.trim(),
+      head,
+      indexTree,
+    };
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+export function formatSelectiveFileDiff(snapshot: SelectiveDiffSnapshot, filePath: string): string {
+  const patch = snapshot.patches.get(filePath);
+  if (!patch) return `(No changes found for ${filePath})`;
+  const lines = patch.split("\n");
+  let hunkIndex = 0;
+  const annotated = lines.map((line) => {
+    if (/^@@\s/.test(line)) {
+      hunkIndex++;
+      return `[HUNK ${hunkIndex}] ${line}`;
+    }
+    return line;
+  });
+  return annotated.join("\n");
+}
+
+export async function assertSelectiveSnapshotUnchanged(
+  snapshot: SelectiveDiffSnapshot,
+  cwd: string
+): Promise<void> {
+  const current = await getSelectiveDiffSnapshot(cwd);
+  const sameFiles = snapshot.files.length === current.files.length &&
+    snapshot.files.every((file, index) => file === current.files[index]);
+  const samePatches = sameFiles && snapshot.files.every((file) => snapshot.patches.get(file) === current.patches.get(file));
+  if (!samePatches || snapshot.head !== current.head || snapshot.indexTree !== current.indexTree) {
+    throw new Error("Working changes changed while the commit was being prepared. Run /commit again to review the latest changes.");
+  }
+}
+
+async function reconcileSelectiveIndex(snapshot: SelectiveDiffSnapshot, cwd: string): Promise<void> {
+  const currentIndexTree = (await execGit(["write-tree"], cwd)).trim();
+  if (currentIndexTree !== snapshot.indexTree) {
+    throw new Error("The git index changed during the commit; it was left untouched to avoid overwriting newer staging changes.");
+  }
+
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-enhanced-index-merge-"));
+  try {
+    const indexPath = path.join(directory, "index");
+    const env = { GIT_INDEX_FILE: indexPath };
+    const newHead = (await execGit(["rev-parse", "--verify", "HEAD"], cwd)).trim();
+    await execGit(["read-tree", newHead], cwd, env);
+
+    let oldTree: string;
+    if (snapshot.head) {
+      oldTree = (await execGit(["rev-parse", `${snapshot.head}^{tree}`], cwd)).trim();
+    } else {
+      await execGit(["read-tree", "--empty"], cwd, env);
+      oldTree = (await execGit(["write-tree"], cwd, env)).trim();
+      await execGit(["read-tree", newHead], cwd, env);
+    }
+
+    const stagedPatch = await execGit(["diff", "--binary", "--no-renames", oldTree, snapshot.indexTree], cwd);
+    if (stagedPatch.trim()) {
+      const patchPath = path.join(directory, "original-staged.patch");
+      await fs.writeFile(patchPath, stagedPatch, "utf8");
+      await execGit(["apply", "--3way", "--cached", "--binary", patchPath], cwd, env);
+    }
+
+    const unmerged = await execGit(["ls-files", "-u"], cwd, env);
+    if (unmerged.trim()) {
+      throw new Error("The committed changes overlap staged changes and Git could not cleanly preserve the remaining staged state.");
+    }
+
+    const mergedTree = (await execGit(["write-tree"], cwd, env)).trim();
+    const latestIndexTree = (await execGit(["write-tree"], cwd)).trim();
+    if (latestIndexTree !== snapshot.indexTree) {
+      throw new Error("The git index changed during the commit; it was left untouched to avoid overwriting newer staging changes.");
+    }
+    await execGit(["read-tree", mergedTree], cwd);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
 export async function getFileDiff(filePath: string, cwd: string): Promise<string> {
   if (!filePath || typeof filePath !== "string") {
     return "(Invalid file path)";
@@ -342,8 +497,8 @@ export async function getFileDiff(filePath: string, cwd: string): Promise<string
   return rawDiff;
 }
 
-export async function createCommit(message: string, cwd: string): Promise<void> {
-  await execGit(["commit", "-m", message], cwd);
+export async function createCommit(message: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  await execGit(["commit", "-m", message], cwd, env);
 }
 
 export async function unstageAllFiles(cwd: string): Promise<void> {
@@ -353,6 +508,172 @@ export async function unstageAllFiles(cwd: string): Promise<void> {
 export async function stageFiles(files: string[], cwd: string): Promise<void> {
   if (files.length === 0) return;
   await execGit(["add", "--", ...files], cwd);
+}
+
+function buildSelectedHunkPatch(patch: string, hunkIds: number[], filePath: string): string {
+  const lines = patch.split("\n");
+  const starts: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^@@\s/.test(lines[i])) starts.push(i);
+  }
+
+  const requested = [...new Set(hunkIds)].sort((a, b) => a - b);
+  if (requested.some((id) => !Number.isInteger(id) || id < 1 || id > starts.length)) {
+    throw new Error(`Invalid hunk selection for ${filePath}; available hunks: ${starts.length}.`);
+  }
+  if (starts.length === 0) {
+    throw new Error(`No selectable text hunks exist for ${filePath}; select the whole file instead.`);
+  }
+
+  const header = lines.slice(0, starts[0]).join("\n");
+  const selected = requested.map((id) => {
+    const start = starts[id - 1];
+    return lines.slice(start, starts[id] ?? lines.length).join("\n");
+  });
+  return `${header}\n${selected.join("\n")}\n`;
+}
+
+interface ValidatedSelectiveStage {
+  files: string[];
+  hunks: Map<string, number[]>;
+}
+
+function validateSelectiveStages(
+  stages: CommitProposal[],
+  snapshot: SelectiveDiffSnapshot
+): ValidatedSelectiveStage[] {
+  const available = new Set(snapshot.files);
+  const wholeFiles = new Set<string>();
+  const hunkFiles = new Set<string>();
+  const assignedHunks = new Map<string, number>();
+
+  return stages.map((stage, stageIndex) => {
+    const files = [...new Set(stage.files ?? [])];
+    const hunks = new Map<string, number[]>();
+    if (files.length === 0 && (stage.hunks?.length ?? 0) === 0) {
+      throw new Error(`Commit stage ${stageIndex + 1} does not specify files or hunks to include.`);
+    }
+
+    for (const file of files) {
+      if (!available.has(file)) throw new Error(`Commit stage ${stageIndex + 1} selected a file not present in the reviewed diff: ${file}`);
+      if (wholeFiles.has(file) || hunkFiles.has(file)) {
+        throw new Error(`The selected changes in ${file} appear in more than one commit stage.`);
+      }
+      if ((stage.hunks ?? []).some((selection) => selection.filePath === file)) {
+        throw new Error(`Commit stage ${stageIndex + 1} selects both the whole file and individual hunks from ${file}.`);
+      }
+      wholeFiles.add(file);
+    }
+
+    for (const selection of stage.hunks ?? []) {
+      const file = selection.filePath;
+      if (!available.has(file)) throw new Error(`Commit stage ${stageIndex + 1} selected a file not present in the reviewed diff: ${file}`);
+      if (wholeFiles.has(file)) throw new Error(`The whole file ${file} is already assigned to another commit stage.`);
+      const count = snapshot.hunkCounts.get(file) ?? 0;
+      const ids = [...new Set(selection.hunkIds ?? [])];
+      if (ids.length === 0) throw new Error(`Commit stage ${stageIndex + 1} has an empty hunk selection for ${file}.`);
+      const existing = new Set(hunks.get(file) ?? []);
+      for (const id of ids) {
+        if (!Number.isInteger(id) || id < 1 || id > count) {
+          throw new Error(`Invalid hunk ${id} for ${file}; available hunks: ${count}.`);
+        }
+        const key = `${file}:${id}`;
+        const assignedStage = assignedHunks.get(key);
+        if (assignedStage !== undefined && assignedStage !== stageIndex) {
+          throw new Error(`Hunk ${id} in ${file} appears in more than one commit stage.`);
+        }
+        assignedHunks.set(key, stageIndex);
+        existing.add(id);
+      }
+      hunks.set(file, [...existing]);
+      hunkFiles.add(file);
+    }
+
+    return { files, hunks };
+  });
+}
+
+export function validateSelectiveCommitPlan(stages: CommitProposal[], snapshot: SelectiveDiffSnapshot): void {
+  validateSelectiveStages(stages, snapshot);
+}
+
+export async function executeSelectiveCommits(
+  stages: CommitProposal[],
+  snapshot: SelectiveDiffSnapshot,
+  cwd: string,
+  onProgress?: (stageIndex: number, total: number, header: string) => void
+): Promise<{ committedCount: number; headers: string[] }> {
+  await assertSelectiveSnapshotUnchanged(snapshot, cwd);
+
+  const selections = validateSelectiveStages(stages, snapshot);
+  const headers: string[] = [];
+  let commitError: unknown;
+
+  try {
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i];
+      const { files, hunks: groupedHunks } = selections[i];
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pi-enhanced-selective-commit-"));
+      try {
+        const indexPath = path.join(directory, "index");
+        const env = { GIT_INDEX_FILE: indexPath };
+        let head: string | undefined;
+        try {
+          head = (await execGit(["rev-parse", "--verify", "HEAD"], cwd)).trim() || undefined;
+        } catch {
+          // Unborn branch.
+        }
+        if (head) await execGit(["read-tree", head], cwd, env);
+        else await execGit(["read-tree", "--empty"], cwd, env);
+
+        if (files.length > 0) {
+          await execGit(["add", "-A", "--", ...files.map((file) => `${LITERAL_EMPTY_STRING}${file}`)], cwd, env);
+        }
+
+        let patchIndex = 0;
+        for (const [file, ids] of groupedHunks) {
+          const patch = buildSelectedHunkPatch(snapshot.patches.get(file) ?? "", ids, file);
+          const patchPath = path.join(directory, `hunks-${patchIndex++}.patch`);
+          await fs.writeFile(patchPath, patch, "utf8");
+          await execGit(["apply", "--cached", "--binary", "--unidiff-zero", patchPath], cwd, env);
+        }
+
+        const stagedFiles = await execGit(["diff", "--cached", "--name-only", "--no-renames"], cwd, env);
+        if (!stagedFiles.trim()) throw new Error(`Commit stage ${i + 1} produced no changes to commit.`);
+
+        const type = stage.type.trim().toLowerCase();
+        const scope = stage.scope?.trim().toLowerCase();
+        const subject = stage.subject.trim().replace(/\.$/, "");
+        const header = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+        const message = stage.body?.trim() ? `${header}\n\n${stage.body.trim()}` : header;
+        onProgress?.(i + 1, stages.length, header);
+        await createCommit(message, cwd, env);
+        headers.push(header);
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }
+  } catch (err) {
+    commitError = err;
+  }
+
+  if (headers.length > 0) {
+    try {
+      await reconcileSelectiveIndex(snapshot, cwd);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Created ${headers.length} commit(s), but could not fully preserve the previous staged state: ${msg}`);
+    }
+  }
+  if (commitError) {
+    const msg = commitError instanceof Error ? commitError.message : String(commitError);
+    if (headers.length > 0) {
+      throw new Error(`Created ${headers.length} commit(s), then a later stage failed: ${msg}`);
+    }
+    throw commitError;
+  }
+
+  return { committedCount: headers.length, headers };
 }
 
 export interface StashedState {

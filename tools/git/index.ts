@@ -10,7 +10,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
 
   // Direct first-class /commit command (backward-compatible)
   pi.registerCommand("commit", {
-    description: "Autonomously inspect git diff and generate an atomic commit (-u/--unstaged, -s/--single, -m/--multi)",
+    description: "Autonomously inspect git changes and propose commits; /commit <instruction> selects relevant files/hunks (-u, -s, -m)",
     handler: async (args, ctx) => {
       if (isGitBusy) {
         ctx.ui.notify("A git operation is already in progress.", "warning");
