@@ -1,4 +1,5 @@
 import {
+  COMMIT_MODEL_SESSION_VALUE,
   SETTING_DEFINITIONS,
   type EnhancedSettingKey,
   type EnhancedSettings,
@@ -49,7 +50,7 @@ export function formatEnhancedSettings(
       if (typeof rawVal === "boolean") {
         valDisplay = rawVal ? green("[enabled]") : dim("[disabled]");
       } else {
-        valDisplay = yellow(`[${rawVal}]`);
+        valDisplay = yellow(`[${formatSettingValue(def.key, rawVal)}]`);
       }
 
       const paddedLabel = def.label.padEnd(26, " ");
@@ -69,6 +70,9 @@ export function formatEnhancedSettings(
 export function formatSettingValue(key: EnhancedSettingKey, value: any): string {
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
+  }
+  if (key === "git.commitModel" && value === COMMIT_MODEL_SESSION_VALUE) {
+    return "same as session model";
   }
   return String(value);
 }

@@ -7,6 +7,7 @@ import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
+  COMMIT_MODEL_SESSION_VALUE,
   SETTING_DEFINITIONS,
   type EnhancedSettingKey,
 } from "./types.js";
@@ -106,7 +107,8 @@ export async function handleSettingsEnhancedCommand(
   // Subcommand: set <key> <value>
   if (action === "set") {
     const key = parts[1] as EnhancedSettingKey;
-    const rawVal = parts[2]?.toLowerCase();
+    const rawValue = parts[2];
+    const rawVal = rawValue?.toLowerCase();
 
     if (!key || !(key in SETTING_DEFINITIONS)) {
       const validKeys = Object.keys(SETTING_DEFINITIONS).join(", ");
@@ -120,7 +122,21 @@ export async function handleSettingsEnhancedCommand(
     }
 
     const def = SETTING_DEFINITIONS[key];
-    if (typeof def.defaultValue === "boolean") {
+    if (key === "git.commitModel") {
+      if (rawVal === COMMIT_MODEL_SESSION_VALUE) {
+        store.set(key, COMMIT_MODEL_SESSION_VALUE);
+      } else if (
+        rawValue &&
+        ctx.modelRegistry.getAvailable().some((model) => `${model.provider}/${model.id}` === rawValue)
+      ) {
+        store.set(key, rawValue);
+      } else {
+        const msg = "Choose 'session' or an available provider/model from /settings-enhanced.";
+        if (ctx.hasUI) ctx.ui.notify(msg, "error");
+        else console.error(msg);
+        return;
+      }
+    } else if (typeof def.defaultValue === "boolean") {
       const isEnabling = rawVal === "true" || rawVal === "enabled" || rawVal === "1" || rawVal === "on";
       const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
 

@@ -1,6 +1,9 @@
 export type SubagentExecutionMode = "background" | "sync";
 export type ContextUsageFormat = "pi" | "pi-enhanced" | "off";
 
+export const COMMIT_MODEL_SESSION_VALUE = "session";
+export const COMMIT_MODEL_SESSION_LABEL = "Use session model";
+
 export interface EnhancedSettings {
   /** In-memory code search engine exposing find and grep tools. */
   "scout.enabled": boolean;
@@ -16,6 +19,8 @@ export interface EnhancedSettings {
   "feedback.askUser": boolean;
   /** Enable token output compressor for noisy bash/powershell outputs. */
   "compressor.enabled": boolean;
+  /** Model used by the autonomous Git commit assistant, or "session" for the active Pi model. */
+  "git.commitModel": string;
 
   /** Display live quota consumption and time progress bars in status footer. */
   "usage.showFooter": boolean;
@@ -102,6 +107,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
+  "git.commitModel": {
+    key: "git.commitModel",
+    label: "Git Commit Model",
+    category: "Agent Tools",
+    description: "Model for /commit and /git commit; choose Use session model to follow the active Pi model",
+    defaultValue: COMMIT_MODEL_SESSION_VALUE,
+    options: [COMMIT_MODEL_SESSION_VALUE],
+  },
 
   // ── UX & Telemetry ──
   "usage.showFooter": {
@@ -172,6 +185,7 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
+  "git.commitModel": SETTING_DEFINITIONS["git.commitModel"].defaultValue,
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,
   "usage.contextFormat": SETTING_DEFINITIONS["usage.contextFormat"].defaultValue,
   "timer.showSummary": SETTING_DEFINITIONS["timer.showSummary"].defaultValue,

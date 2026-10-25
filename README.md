@@ -4,6 +4,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 
 ## Features
 
+- **Background Discord Agent Gateway (`/discord`)**: Run a detached Discord bot independently of the interactive Pi terminal. DMs and server threads are restricted to configured user/channel allowlists; a bot mention in an allowlisted server channel creates a thread with a durable, per-thread/per-user Pi session. The gateway uses your configured Pi model, extensions, and tools, and routes Pi UI questions back through Discord.
 - **Kenari AI Gateway Provider**:
   - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
   - Dual authentication: Browser loopback PKCE OAuth flow (`/login kenari`) and API key via `KENARI_API_KEY`.
@@ -65,6 +66,19 @@ Verify installed packages:
 ```bash
 pi list
 ```
+
+### Background Discord Gateway
+
+1. Create a Discord application and bot in the [Discord Developer Portal](https://discord.com/developers/applications). Enable the **Message Content Intent** and invite the bot with View Channels, Read Message History, Send Messages, Create Public Threads, and Send Messages in Threads permissions.
+2. Enable Developer Mode in Discord and copy your Discord user ID and the server channel IDs where the bot may respond.
+3. In an interactive Pi session, run `/discord` or `/discord setup`. If no gateway is configured, `/discord` opens setup; otherwise it opens a status-and-actions menu. On first setup, enter the bot token, allowlisted user IDs, allowlisted channel IDs, and workspace directory. The workspace defaults to `~/pi-workspaces/discord-gateway` and setup offers to create it; existing configurations keep their saved workspace. This is a starting directory, not a filesystem sandbox. Enter comma-separated IDs, or `*` by itself to allow everyone in that list; the setup UI explains both wildcard fields and asks for confirmation when either is used. A user wildcard permits DMs from any Discord user, while a channel wildcard permits server mentions in any channel (the user allowlist and bot-mention requirement still apply). Reconfiguration can reuse the saved token or accept a replacement. To avoid typing the token into the TUI, set `PI_ENHANCED_DISCORD_BOT_TOKEN` before starting Pi. Setup verifies the token and stores it in `~/.pi/agent/discord-gateway/config.json` with private file permissions.
+4. Run `/discord start`. The gateway runs as a detached background process and continues after the interactive Pi session closes.
+
+In DMs, allowlisted users can message the bot directly. In servers, both the user and channel must be allowlisted, and a top-level message must mention the bot; the gateway creates a thread for that conversation. Replies in a gateway-created thread continue the same session without another mention. Sessions are stored under `~/.pi/agent/discord-gateway/sessions/`. Setup captures the currently selected Pi model and thinking level when available; otherwise, new sessions use Pi's configured defaults.
+
+Manage it from `/discord`, or run `/discord configure` to edit the bot token, user whitelist, server channel whitelist, and DM/server access toggles. Turning a path off makes the gateway ignore messages from that path; existing configurations default both paths to on. You can also use `/discord status`, `/discord stop`, and `/discord logs`. Choose **Tear down gateway** in the menu, or run `/discord teardown`, to stop it and remove the saved local bot token/config while keeping session history and logs. This does not revoke the token in Discord. The process does not automatically restart after a machine reboot.
+
+**Security:** Authorized Discord users can use Pi's configured tools, including file edits and shell commands, without a local approval prompt. Avoid `*` unless you intentionally want to open that allowlist to everyone; using `*` for users can expose the agent to any Discord user who can reach the bot. Project-local Pi resources are trusted for the configured workspace. The gateway stores conversation history locally; treat it as sensitive.
 
 ### 2. Login via OAuth
 
@@ -163,6 +177,7 @@ Configurable options include:
 - `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
 - `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
 - `compressor.enabled`: Output Compressor - terminal noise reduction for bash/powershell (`enabled` / `disabled`)
+- `git.commitModel`: Model used by `/commit` and `/git commit` (choose an available model or `session`; defaults to the active session model)
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
@@ -171,7 +186,7 @@ Configurable options include:
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
 
-Settings persist to `~/.pi/agent/enhanced-settings.json`.
+Settings persist to `~/.pi/agent/enhanced-settings.json`. Use `/settings-enhanced set git.commitModel session` to restore the default session model.
 
 ### 7. Safe Plan Mode & Implement Mode (`/plan`, `/implement`)
 
@@ -201,6 +216,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git                          # Interactive status hub & workflow launcher
 /git commit                   # Autonomous commit (same as /commit)
 /commit                       # Shorthand alias to /git commit
+/commit "fix login timeout"  # Agent selects relevant files/hunks, then shows a commit proposal
 /commit -u                    # Stash staged changes, commit only unstaged, then restore staged
 /commit -s                    # Force a single consolidated commit
 /commit -m                    # Split changes into atomic commit stages
@@ -215,7 +231,6 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 # Instant Routine Helpers (0 LLM Tokens)
 /git sync                     # Safe pull --rebase & push to upstream
 /git undo                     # Soft-undo last commit, keeping changes in working tree
-/commit "fix login timeout"  # Agent selects relevant files/hunks, then shows a commit proposal
 /git status                   # Interactive status overview
 ```
 

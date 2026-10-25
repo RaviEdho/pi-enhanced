@@ -4,8 +4,16 @@ import {
   matchesKey,
   stripTerminalSequences,
   visibleWidth,
+  Container,
+  fuzzyFilter,
+  getKeybindings,
+  Input,
+  SelectList,
   SettingsList,
+  Spacer,
+  Text,
   type Component,
+  type SelectItem,
   type SettingItem,
   type TUI,
   type TuiMouseEvent,
@@ -17,6 +25,8 @@ import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
+  COMMIT_MODEL_SESSION_LABEL,
+  COMMIT_MODEL_SESSION_VALUE,
   SETTING_DEFINITIONS,
   type EnhancedSettingKey,
   type SettingDefinition,
@@ -61,6 +71,36 @@ export class EnhancedSettingsComponent implements Component {
     const feedbackActive = isFeedbackToolActive();
     const subagentActive = isSubagentActive();
     const webActive = isWebActive();
+    const configuredCommitModel = this.store.get("git.commitModel");
+    const commitModelChoices: SelectItem[] = [
+      {
+        value: COMMIT_MODEL_SESSION_LABEL,
+        label: COMMIT_MODEL_SESSION_LABEL,
+        description: "Follow the model currently selected in the Pi session",
+      },
+    ];
+    try {
+      const availableModels = this.ctx?.modelRegistry.getAvailable() ?? [];
+      commitModelChoices.push(...availableModels
+        .map((model) => ({
+          value: `${model.provider}/${model.id}`,
+          label: `${model.provider}/${model.id}`,
+          description: model.name,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)));
+    } catch {
+      // Keep the session-model option available if the registry cannot be read.
+    }
+    if (
+      configuredCommitModel !== COMMIT_MODEL_SESSION_VALUE &&
+      !commitModelChoices.some((choice) => choice.value === configuredCommitModel)
+    ) {
+      commitModelChoices.push({
+        value: configuredCommitModel,
+        label: `${configuredCommitModel} (unavailable)`,
+        description: "This saved model is not currently available",
+      });
+    }
 
     // Build setting items mapped from definitions
     this.items = (
@@ -88,8 +128,78 @@ export class EnhancedSettingsComponent implements Component {
 
       let options = [...def.options];
       let description = def.description;
+      let submenu: SettingItem["submenu"];
 
-      if (def.key === "scout.interceptShell" && !scoutActive) {
+      if (def.key === "git.commitModel") {
+        options = [];
+        const selectedValue = String(currentRaw) === COMMIT_MODEL_SESSION_VALUE
+          ? COMMIT_MODEL_SESSION_LABEL
+          : String(currentRaw);
+        const selectedChoice = commitModelChoices.find((choice) => choice.value === selectedValue);
+        currentValue = selectedChoice?.label ?? selectedValue;
+        submenu = (_value, done) => {
+          const listTheme = {
+            selectedPrefix: (text: string) => this.theme.fg("accent", text),
+            selectedText: (text: string) => this.theme.fg("accent", text),
+            description: (text: string) => this.theme.fg("muted", text),
+            scrollInfo: (text: string) => this.theme.fg("dim", text),
+            noMatch: (text: string) => this.theme.fg("warning", text),
+          };
+          const searchInput = new Input({
+            placeholder: "Search models...",
+            placeholderStyle: (text) => this.theme.fg("dim", text),
+          });
+          let selectList: SelectList;
+
+          const createSelectList = (query: string) => {
+            const choices = query
+              ? fuzzyFilter(commitModelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
+              : commitModelChoices;
+            selectList = new SelectList(choices, Math.min(choices.length, 10), listTheme);
+            const selectedIndex = query
+              ? -1
+              : choices.findIndex((choice) => choice.value === selectedValue);
+            if (selectedIndex >= 0) selectList.setSelectedIndex(selectedIndex);
+            selectList.onSelect = (choice) => done(choice.value);
+            selectList.onCancel = () => done();
+          };
+          createSelectList("");
+
+          const container = new Container();
+          container.addChild(new Text(this.theme.fg("accent", this.theme.bold("Select Git Commit Model"))));
+          container.addChild(new Spacer(1));
+          container.addChild(searchInput);
+          container.addChild(new Spacer(1));
+          container.addChild({
+            render: (width: number) => selectList.render(width),
+            invalidate: () => selectList.invalidate(),
+            handleMouse: (event: TuiMouseEvent) => selectList.handleMouse(event),
+          });
+          container.addChild(new Spacer(1));
+          container.addChild(new Text(this.theme.fg("dim", "↑↓ navigate • Enter select • Esc back")));
+
+          return {
+            render: (width: number) => container.render(width),
+            invalidate: () => container.invalidate(),
+            handleInput: (data: string) => {
+              const keybindings = getKeybindings();
+              if (
+                keybindings.matches(data, "tui.select.up") ||
+                keybindings.matches(data, "tui.select.down") ||
+                keybindings.matches(data, "tui.select.confirm") ||
+                keybindings.matches(data, "tui.select.cancel")
+              ) {
+                selectList.handleInput(data);
+              } else {
+                searchInput.handleInput(data);
+                createSelectList(searchInput.getValue());
+              }
+              this.tui.requestRender();
+            },
+            handleMouse: (event: TuiMouseEvent) => container.handleMouse(event),
+          };
+        };
+      } else if (def.key === "scout.interceptShell" && !scoutActive) {
         description =
           "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
       } else if (def.key === "subagent.defaultMode" && !subagentActive) {
@@ -103,6 +213,7 @@ export class EnhancedSettingsComponent implements Component {
         description,
         currentValue,
         values: options,
+        ...(submenu ? { submenu } : {}),
       };
     });
 
@@ -283,6 +394,11 @@ export class EnhancedSettingsComponent implements Component {
     }
 
     const anyList = this.settingsList as any;
+    if (anyList.submenuComponent) {
+      this.settingsList.handleInput(data);
+      this.tui.requestRender();
+      return true;
+    }
     const searchVal: string = anyList.searchInput?.getValue?.() ?? "";
 
     // Escape handling:
@@ -528,7 +644,12 @@ export class EnhancedSettingsComponent implements Component {
       }
     }
 
-    if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
+    if (key === "git.commitModel") {
+      this.store.set(
+        key,
+        (newValue === COMMIT_MODEL_SESSION_LABEL ? COMMIT_MODEL_SESSION_VALUE : newValue) as any
+      );
+    } else if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
       const enabled = newValue === "enabled";
