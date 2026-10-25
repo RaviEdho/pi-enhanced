@@ -24,6 +24,8 @@ const MAX_ACTIVE_RUNS = 3;
 const MAX_OPEN_SESSIONS = 20;
 const SESSION_IDLE_MS = 20 * 60 * 1000;
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const THREAD_TITLE_WAIT_MS = 25_000;
+const THREAD_TITLE_POLL_MS = 500;
 const DISCORD_TEXT_LIMIT = 1900;
 
 if (!configPath || !pidPath || !statusPath || !sessionRoot || !threadsPath) {
@@ -52,6 +54,7 @@ const seenMessages = new Set();
 const piSessions = new Map();
 const sessionQueues = new Map();
 const pendingUiAnswers = new Map();
+const pendingThreadTitleRenames = new Set();
 const runQueue = [];
 let activeRuns = 0;
 let shuttingDown = false;
@@ -184,11 +187,13 @@ async function handleMessage(message) {
     try {
       const result = await withRunSlot(async () => {
         const session = await getPiSession(sessionKey);
-        return session.promptAndWait(prompt, {
+        const result = await session.promptAndWait(prompt, {
           channel: target,
           userId: message.author.id,
           channelId: target.id,
         });
+        watchThreadTitle(target, session);
+        return result;
       });
       if (result.trim()) await sendText(target, result);
       else await sendText(target, "The agent finished without a text response.");
@@ -639,6 +644,49 @@ function makeThreadName(username, prompt) {
   const summary = prompt.replace(/\s+/g, " ").trim();
   const name = summary ? `${username}: ${summary}` : `${username}: Pi conversation`;
   return name.slice(0, 95);
+}
+
+function watchThreadTitle(channel, session) {
+  if (
+    typeof channel?.isThread !== "function" ||
+    !channel.isThread() ||
+    typeof channel.setName !== "function" ||
+    !threadRegistry[channel.id]?.createdAt ||
+    threadRegistry[channel.id]?.generatedTitle ||
+    pendingThreadTitleRenames.has(channel.id)
+  ) {
+    return;
+  }
+
+  pendingThreadTitleRenames.add(channel.id);
+  void (async () => {
+    const deadline = Date.now() + THREAD_TITLE_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (session.closed) return;
+      try {
+        const state = await session.request("get_state", {}, 5_000);
+        const title = typeof state.data?.sessionName === "string" ? state.data.sessionName.trim() : "";
+        if (title) {
+          const threadName = Array.from(title).slice(0, 100).join("");
+          if (channel.name !== threadName) await channel.setName(threadName);
+          const registration = threadRegistry[channel.id];
+          if (registration) {
+            registration.generatedTitle = threadName;
+            writeThreadRegistry();
+          }
+          log(`Renamed Discord thread ${channel.id} to generated session title`);
+          return;
+        }
+      } catch {
+        if (session.closed) return;
+      }
+      await delay(Math.min(THREAD_TITLE_POLL_MS, Math.max(0, deadline - Date.now())));
+    }
+  })()
+    .catch((error) => {
+      log(`Could not rename Discord thread ${channel.id}: ${safeErrorName(error)}`);
+    })
+    .finally(() => pendingThreadTitleRenames.delete(channel.id));
 }
 
 function readThreadRegistry() {

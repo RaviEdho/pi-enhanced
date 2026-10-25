@@ -322,7 +322,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
   writePrivateJson(paths.config, config);
   notify(
     ctx,
-    `Discord gateway configured for ${bot.username}.\nWorkspace: ${cwd}\nConfig: ${paths.config}\nEnable the Message Content Intent in Discord's Developer Portal, invite the bot with View Channel, Read Message History, Send Messages, Create Public Threads, and Send Messages in Threads.${alreadyRunning ? " The running gateway still has its previous settings; run /discord stop, then /discord start to apply these changes." : ""}`,
+    `Discord gateway configured for ${bot.username}.\nWorkspace: ${cwd}\nConfig: ${paths.config}\nEnable the Message Content Intent in Discord's Developer Portal, invite the bot with View Channel, Read Message History, Send Messages, Create Public Threads, Send Messages in Threads, and Manage Threads so it can rename generated thread titles.${alreadyRunning ? " The running gateway still has its previous settings; run /discord stop, then /discord start to apply these changes." : ""}`,
     "info"
   );
 
