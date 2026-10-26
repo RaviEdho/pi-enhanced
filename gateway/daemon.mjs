@@ -24,8 +24,10 @@ import {
   MessageFlags,
   ModalBuilder,
   Partials,
+  PermissionFlagsBits,
   SeparatorBuilder,
   SeparatorSpacingSize,
+  SlashCommandBuilder,
   StringSelectMenuBuilder,
   TextDisplayBuilder,
   TextInputBuilder,
@@ -120,6 +122,7 @@ const client = new Client({
 client.on("clientReady", (readyClient) => {
   updateStatus("ready", { botTag: readyClient.user.tag, lastError: undefined });
   log(`Connected as ${readyClient.user.tag}`);
+  void registerSlashCommands(readyClient);
   void sendHomeNotification(startReason === "start" ? "Discord gateway started and is online." : "Discord gateway restarted and is online.");
 });
 client.on("shardDisconnect", (event) => {
@@ -145,6 +148,12 @@ client.on("messageCreate", (message) => {
 });
 
 client.on("interactionCreate", (interaction) => {
+  if (interaction.isChatInputCommand?.()) {
+    void handleChatInputCommand(interaction).catch((error) => {
+      log(`Discord slash command failed: ${safeErrorName(error)}`);
+    });
+    return;
+  }
   void handleGatewayUiInteraction(interaction).catch((error) => {
     log(`Discord UI interaction failed: ${safeErrorName(error)}`);
   });
@@ -991,6 +1000,108 @@ function buildDiscordUiModal(pending) {
     .setCustomId(`piui:${pending.token}:submit`)
     .setTitle(modalTitle)
     .addComponents(new ActionRowBuilder().addComponents(textInput));
+}
+
+async function registerSlashCommands(readyClient) {
+  try {
+    const commands = [
+      new SlashCommandBuilder()
+        .setName("sethome")
+        .setDescription("Set the home channel for gateway notifications to this channel")
+        .toJSON(),
+    ];
+    await readyClient.application?.commands.set(commands);
+    log("Discord slash commands registered successfully.");
+  } catch (error) {
+    log(`Failed to register slash commands: ${summarizeDiscordError(error)}`);
+  }
+}
+
+async function handleChatInputCommand(interaction) {
+  if (interaction.commandName !== "sethome") return;
+
+  if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+    await replyEphemeral(interaction, "You are not authorized to configure this bot.");
+    return;
+  }
+
+  if (!interaction.guildId) {
+    await replyEphemeral(interaction, "The home channel must be a server text channel. Please run this command in a server channel.");
+    return;
+  }
+
+  let targetChannel = interaction.channel;
+  let targetChannelId = interaction.channelId;
+  let isThread = false;
+
+  if (targetChannel?.isThread?.()) {
+    isThread = true;
+    targetChannelId = targetChannel.parentId;
+    targetChannel = targetChannel.parent || (targetChannelId ? await client.channels.fetch(targetChannelId).catch(() => null) : null);
+  }
+
+  if (!targetChannel || !targetChannelId) {
+    await replyEphemeral(interaction, "Could not determine the target channel.");
+    return;
+  }
+
+  if (!targetChannel.isTextBased?.() || typeof targetChannel.send !== "function") {
+    await replyEphemeral(interaction, "The home channel must be a text-based server channel where the bot can send messages.");
+    return;
+  }
+
+  const me = interaction.guild?.members?.me || (await interaction.guild?.members?.fetchMe().catch(() => null));
+  if (me) {
+    const permissions = targetChannel.permissionsFor?.(me);
+    if (permissions && (!permissions.has(PermissionFlagsBits.ViewChannel) || !permissions.has(PermissionFlagsBits.SendMessages))) {
+      await replyEphemeral(
+        interaction,
+        `I don't have permission to view or send messages in <#${targetChannelId}>. Please ensure the bot has View Channel and Send Messages permissions.`
+      );
+      return;
+    }
+  }
+
+  if (targetChannelId === config.homeChannelId) {
+    const text = isThread
+      ? `<#${targetChannelId}> (parent channel of this thread) is already configured as the home channel.`
+      : `<#${targetChannelId}> is already configured as the home channel.`;
+    try {
+      await interaction.reply({ content: text, allowedMentions: { parse: [] } });
+    } catch {
+      // Best-effort response.
+    }
+    return;
+  }
+
+  let latestConfig;
+  try {
+    latestConfig = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch {
+    latestConfig = { ...config };
+  }
+
+  latestConfig.homeChannelId = targetChannelId;
+  latestConfig.configuredAt = new Date().toISOString();
+
+  if (!allowedChannels.has("*") && !allowedChannels.has(targetChannelId)) {
+    allowedChannels.add(targetChannelId);
+    latestConfig.allowedChannelIds = [...new Set([...(latestConfig.allowedChannelIds || []), targetChannelId])];
+  }
+
+  writePrivateJson(configPath, latestConfig);
+  config.homeChannelId = targetChannelId;
+  log(`Home channel set to ${targetChannelId} by ${interaction.user?.tag || interaction.user?.id}`);
+
+  const confirmationText = isThread
+    ? `Home channel set to <#${targetChannelId}> (parent channel of this thread).`
+    : `Home channel set to <#${targetChannelId}>.`;
+
+  try {
+    await interaction.reply({ content: confirmationText, allowedMentions: { parse: [] } });
+  } catch (replyError) {
+    log(`Failed to reply to /sethome command: ${safeErrorName(replyError)}`);
+  }
 }
 
 async function handleGatewayUiInteraction(interaction) {
