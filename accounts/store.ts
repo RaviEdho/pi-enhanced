@@ -229,6 +229,17 @@ export class AccountStore {
       }
       if (
         active.type === "api_key" &&
+        PERSISTENT_KEY_PROVIDERS.has(provider) &&
+        existingAuth.type === "oauth" &&
+        existingAuth.access === (active.access || active.apiKey) &&
+        existingAuth.refresh === (active.refresh || "") &&
+        existingAuth.expires === (active.expires ?? 0)
+      ) {
+        return;
+      }
+      if (
+        active.type === "api_key" &&
+        !PERSISTENT_KEY_PROVIDERS.has(provider) &&
         existingAuth.type === "api_key" &&
         existingAuth.key === active.apiKey
       ) {
@@ -263,10 +274,24 @@ export class AccountStore {
         orgId: active.orgId,
       };
     } else if (active.type === "api_key") {
-      currentAuth[provider] = {
-        type: "api_key",
-        key: active.apiKey,
-      };
+      if (PERSISTENT_KEY_PROVIDERS.has(provider)) {
+        // These providers register persistent keys through Pi's OAuth adapter.
+        // Keep auth.json as OAuth so a key added during this session remains
+        // usable even though the provider's startup API-key config was unset.
+        currentAuth[provider] = {
+          type: "oauth",
+          access: active.access || active.apiKey || "",
+          refresh: active.refresh || "",
+          expires: active.expires ?? 0,
+          email: active.email,
+          accountId: active.accountId,
+        };
+      } else {
+        currentAuth[provider] = {
+          type: "api_key",
+          key: active.apiKey,
+        };
+      }
     }
 
     try {
@@ -412,9 +437,9 @@ export class AccountStore {
               (provider === "kenari" ? "PAYG" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
 
-            // Pi mirrors persistent-key logins into auth.json as `oauth` credentials. Rewrite
-            // that entry in its canonical API-key shape so the store and Pi agree on the
-            // credential type (a mismatch alone is enough to keep the account from syncing).
+            // Pi mirrors persistent-key logins into auth.json as `oauth` credentials.
+            // Keep the account-store entry in API-key form while preserving OAuth in
+            // auth.json so the provider's OAuth adapter can resolve the key in-session.
             if (PERSISTENT_KEY_PROVIDERS.has(provider) && persistentKey && cred.type !== "api_key") {
               modified = true;
             }
