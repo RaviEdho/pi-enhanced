@@ -88,6 +88,7 @@ const piSessions = new Map();
 const sessionQueues = new Map();
 const pendingUiAnswers = new Map();
 const pendingDiscordUi = new Map();
+const pendingDiscordCommands = new Map();
 const pendingThreadTitleRenames = new Set();
 const runQueue = [];
 let activeRuns = 0;
@@ -1007,9 +1008,14 @@ async function registerSlashCommands(readyClient) {
     const commands = [
       new SlashCommandBuilder()
         .setName("sethome")
-        .setDescription("Set the home channel for gateway notifications to this channel")
-        .toJSON(),
-    ];
+        .setDescription("Set the home channel for gateway notifications to this channel"),
+      new SlashCommandBuilder()
+        .setName("model")
+        .setDescription("Choose the model for this Discord conversation"),
+      new SlashCommandBuilder()
+        .setName("thinking")
+        .setDescription("Choose the thinking level for this Discord conversation"),
+    ].map((command) => command.toJSON());
     await readyClient.application?.commands.set(commands);
     log("Discord slash commands registered successfully.");
   } catch (error) {
@@ -1018,6 +1024,10 @@ async function registerSlashCommands(readyClient) {
 }
 
 async function handleChatInputCommand(interaction) {
+  if (interaction.commandName === "model" || interaction.commandName === "thinking") {
+    await handleConversationSettingCommand(interaction, interaction.commandName);
+    return;
+  }
   if (interaction.commandName !== "sethome") return;
 
   if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
@@ -1104,9 +1114,207 @@ async function handleChatInputCommand(interaction) {
   }
 }
 
+async function handleConversationSettingCommand(interaction, setting) {
+  if (restartRequested || shuttingDown) {
+    await replyEphemeral(interaction, "The Discord gateway is restarting or stopping. Please try again when it is back online.");
+    return;
+  }
+  if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+    await replyEphemeral(interaction, "You are not authorized to control this bot.");
+    return;
+  }
+
+  const sessionKey = getConversationSessionKey(interaction);
+  if (!sessionKey) {
+    await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread.");
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const session = await getPiSession(sessionKey);
+    if (session.running) {
+      await interaction.editReply("This conversation is currently generating a response. Try again when it finishes.");
+      return;
+    }
+
+    let options;
+    let state;
+    if (setting === "model") {
+      const [modelsResponse, stateResponse] = await Promise.all([
+        session.request("get_available_models"),
+        session.request("get_state"),
+      ]);
+      if (!modelsResponse.success || !stateResponse.success) throw new Error("Could not read model settings");
+      options = Array.isArray(modelsResponse.data?.models) ? modelsResponse.data.models : [];
+      state = stateResponse.data;
+      if (options.length === 0) {
+        await interaction.editReply("No models are currently available to this Pi session.");
+        return;
+      }
+    } else {
+      const [levelsResponse, stateResponse] = await Promise.all([
+        session.request("get_available_thinking_levels"),
+        session.request("get_state"),
+      ]);
+      if (!levelsResponse.success || !stateResponse.success) throw new Error("Could not read thinking settings");
+      options = Array.isArray(levelsResponse.data?.levels) ? levelsResponse.data.levels : [];
+      state = stateResponse.data;
+      if (options.length === 0) {
+        await interaction.editReply("The current model does not support configurable thinking levels.");
+        return;
+      }
+    }
+
+    const token = randomUUID();
+    const pending = {
+      token,
+      setting,
+      session,
+      sessionKey,
+      userId: interaction.user.id,
+      channelId: interaction.channelId,
+      options,
+      current: setting === "model"
+        ? `${state?.model?.provider}/${state?.model?.id}`
+        : state?.thinkingLevel,
+      page: 0,
+    };
+    pending.timer = setTimeout(() => pendingDiscordCommands.delete(token), UI_DEFAULT_TIMEOUT_MS);
+    pending.timer.unref?.();
+    pendingDiscordCommands.set(token, pending);
+    await interaction.editReply(buildConversationSettingPayload(pending));
+  } catch (error) {
+    log(`Discord /${setting} failed: ${safeErrorName(error)}`);
+    await interaction.editReply(`Could not load ${setting} settings from this Pi session.`).catch(() => undefined);
+  }
+}
+
+function getConversationSessionKey(interaction) {
+  const userId = interaction.user?.id;
+  if (!userId || !interaction.channelId) return undefined;
+  if (interaction.guildId == null) {
+    return allowDirectMessages ? `dm:${interaction.channelId}:${userId}` : undefined;
+  }
+  if (!allowServerMessages || !interaction.channel?.isThread?.()) return undefined;
+  const registration = threadRegistry[interaction.channelId];
+  if (!registration || (!allowedChannels.has("*") && !allowedChannels.has(registration.parentChannelId))) return undefined;
+  return `guild:${registration.parentChannelId}:thread:${interaction.channelId}:user:${userId}`;
+}
+
+function buildConversationSettingPayload(pending) {
+  const pageSize = 25;
+  const pageCount = Math.ceil(pending.options.length / pageSize);
+  const start = pending.page * pageSize;
+  const visibleOptions = pending.options.slice(start, start + pageSize);
+  const isModel = pending.setting === "model";
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`picmd:${pending.token}:select`)
+    .setPlaceholder(isModel ? "Choose a model" : "Choose a thinking level")
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(visibleOptions.map((option, index) => {
+      const value = isModel ? `${option?.provider}/${option?.id}` : String(option);
+      const label = isModel ? (option?.name || value) : String(option);
+      const isCurrent = value === pending.current;
+      return {
+        label: discordOptionLabel(`${label}${isCurrent ? " (current)" : ""}`),
+        value: String(start + index),
+        ...(isModel && typeof option?.id === "string" ? { description: discordOptionLabel(value) } : {}),
+        default: isCurrent,
+      };
+    }));
+  const rows = [new ActionRowBuilder().addComponents(menu)];
+  if (pageCount > 1) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`picmd:${pending.token}:prev`)
+        .setLabel("Previous")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pending.page === 0),
+      new ButtonBuilder()
+        .setCustomId(`picmd:${pending.token}:next`)
+        .setLabel("Next")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pending.page >= pageCount - 1),
+    ));
+  }
+  const current = pending.current ? ` Current: ${pending.current}.` : "";
+  return {
+    content: `Choose a ${pending.setting === "model" ? "model" : "thinking level"} for this conversation.${current}${pageCount > 1 ? ` Page ${pending.page + 1}/${pageCount}.` : ""}`,
+    components: rows,
+    allowedMentions: { parse: [] },
+  };
+}
+
+async function handleConversationSettingInteraction(interaction) {
+  const [, token, action] = interaction.customId.split(":");
+  const pending = pendingDiscordCommands.get(token);
+  if (!pending || interaction.user?.id !== pending.userId || interaction.channelId !== pending.channelId) {
+    await replyEphemeral(interaction, "This setting picker is no longer active or belongs to another user.");
+    return;
+  }
+  if (action === "prev" || action === "next") {
+    const pageCount = Math.ceil(pending.options.length / 25);
+    pending.page = action === "prev"
+      ? Math.max(0, pending.page - 1)
+      : Math.min(pageCount - 1, pending.page + 1);
+    await interaction.update(buildConversationSettingPayload(pending));
+    return;
+  }
+  if (!interaction.isStringSelectMenu?.() || action !== "select") {
+    await replyEphemeral(interaction, "That control doesn't match this setting picker.");
+    return;
+  }
+
+  const selectedIndex = Number(interaction.values?.[0]);
+  const selected = Number.isInteger(selectedIndex) ? pending.options[selectedIndex] : undefined;
+  if (selected === undefined) {
+    await replyEphemeral(interaction, "That setting is no longer available.");
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingDiscordCommands.delete(token);
+  await interaction.deferUpdate();
+  pendingMessageTasks += 1;
+  void enqueueForSession(pending.sessionKey, async () => {
+    if (restartRequested || shuttingDown) throw new Error("The gateway is restarting or stopping");
+    if (pending.session.closed || piSessions.get(pending.sessionKey) !== pending.session) {
+      throw new Error("The conversation session is no longer active");
+    }
+    const result = pending.setting === "model"
+      ? await pending.session.request("set_model", { provider: selected.provider, modelId: selected.id })
+      : await pending.session.request("set_thinking_level", { level: selected });
+    if (!result.success) throw new Error(result.error || "Pi rejected the setting");
+    const label = pending.setting === "model"
+      ? `${selected.provider}/${selected.id}`
+      : String(selected);
+    await interaction.editReply({
+      content: `This conversation will use ${pending.setting === "model" ? "model" : "thinking level"} **${label}**.`,
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+  }).catch(async (error) => {
+    log(`Discord /${pending.setting} selection failed: ${safeErrorName(error)}`);
+    await interaction.editReply({
+      content: `Could not apply that ${pending.setting} setting. Run the command again and choose an available option.`,
+      components: [],
+      allowedMentions: { parse: [] },
+    }).catch(() => undefined);
+  }).finally(() => {
+    pendingMessageTasks -= 1;
+    maybeStartRequestedRestart();
+  });
+}
+
 async function handleGatewayUiInteraction(interaction) {
   const customId = interaction?.customId;
-  if (typeof customId !== "string" || !customId.startsWith("piui:")) return;
+  if (typeof customId !== "string") return;
+  if (customId.startsWith("picmd:")) {
+    await handleConversationSettingInteraction(interaction);
+    return;
+  }
+  if (!customId.startsWith("piui:")) return;
 
   const [, token, action] = customId.split(":");
   const pending = pendingDiscordUi.get(token);
@@ -1312,6 +1520,8 @@ async function shutdown(reason, exitCode = 0, restart = false) {
   if (!restart) updateStatus("stopping", { lastError: undefined });
   log(`Shutting down (${reason})`);
   for (const pending of pendingUiAnswers.values()) pending.finish(undefined);
+  for (const pending of pendingDiscordCommands.values()) clearTimeout(pending.timer);
+  pendingDiscordCommands.clear();
   await Promise.all([...piSessions.values()].map((session) => session.stop()));
   piSessions.clear();
 
