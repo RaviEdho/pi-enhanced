@@ -122,10 +122,42 @@ function extractApiKeyFromInput(input: string): string {
 }
 
 /**
- * Authenticates with Command Code via browser redirect loopback or manual API key prompt.
+ * Validates and stores a Command Code API key in the multi-account store.
  */
-export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+export async function validateAndStoreCommandCodeApiKey(
+  apiKey: string,
+  onProgress?: (message: string) => void
+): Promise<void> {
+  const normalizedKey = apiKey.trim();
+  if (!normalizedKey) throw new Error("No Command Code API key provided");
+
+  onProgress?.("Validating Command Code credentials...");
+  const whoami = await validateCommandCodeApiKey(normalizedKey);
+  const billing = await fetchBillingInfo(normalizedKey).catch(() => null);
   const store = AccountStore.getInstance();
+
+  const userId = whoami.user?.id || whoami.user?.userName || "user";
+  const userLabel = whoami.user?.name || whoami.user?.userName || whoami.org?.name || userId;
+  const accountId = AccountStore.generateAccountId(PROVIDER_ID, userId);
+
+  store.upsert({
+    id: accountId,
+    provider: PROVIDER_ID,
+    type: "api_key",
+    label: userLabel,
+    email: whoami.user?.email || whoami.user?.userName,
+    accountId: whoami.user?.id,
+    orgId: whoami.org?.id,
+    orgName: whoami.org?.name,
+    planType: billing?.planId || "individual-provider",
+    apiKey: normalizedKey,
+    access: normalizedKey,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+}
+
+export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   const stateToken = randomBytes(32).toString("base64url");
 
   let server: Server | undefined;
@@ -438,8 +470,8 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
   const promptPromise = callbacks
     .onPrompt({
       message:
-        "Authorize via browser, or enter your Command Code API key from https://commandcode.ai/studio/billing:",
-      placeholder: "Paste Command Code API key...",
+        "Sign in through the browser. If the callback does not complete automatically, paste the final redirect URL:",
+      placeholder: "Paste the Command Code redirect URL...",
     } as any)
     .then((val: string) => {
       if (!val || !val.trim()) {
@@ -463,35 +495,11 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
     shutdownServer();
   }
 
-  callbacks.onProgress?.("Validating Command Code credentials...");
-  const whoami = await validateCommandCodeApiKey(apiKey);
-  const billing = await fetchBillingInfo(apiKey).catch(() => null);
-
-  const userId = whoami.user?.id || whoami.user?.userName || "user";
-  const userLabel = whoami.user?.name || whoami.user?.userName || whoami.org?.name || userId;
-  const accountId = AccountStore.generateAccountId(PROVIDER_ID, userId);
-
-  store.upsert({
-    id: accountId,
-    provider: PROVIDER_ID,
-    type: "api_key",
-    label: userLabel,
-    email: whoami.user?.email || whoami.user?.userName,
-    accountId: whoami.user?.id,
-    orgId: whoami.org?.id,
-    orgName: whoami.org?.name,
-    planType: billing?.planId || "individual-provider",
-    apiKey,
-    access: apiKey,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  });
-
+  await validateAndStoreCommandCodeApiKey(apiKey, (message) => callbacks.onProgress?.(message));
   return {
-    type: "api_key",
     key: apiKey,
     access: apiKey,
     refresh: "",
     expires: 0,
-  } as unknown as OAuthCredentials;
+  };
 }

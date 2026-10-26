@@ -13,14 +13,14 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
   - Live rolling window quota (5-hour, weekly, monthly) and prepaid balance monitoring via `/usage` and interactive status footer.
 - **Command Code Provider**:
   - Direct connection to Command Code's Provider API (`https://api.commandcode.ai/provider/v1`) with access to 80+ open & closed frontier models.
-  - Dual authentication: Browser loopback redirect flow (`/login commandcode`) and API key via `COMMANDCODE_API_KEY`.
+  - Dual authentication: Native Pi login supports account OAuth and interactive API-key sign-in; `COMMANDCODE_API_KEY` is also supported.
   - Dynamic live model discovery (`/provider/v1/models`) with dual-protocol routing (Anthropic Messages API for Claude Sonnet/Opus/Haiku, and OpenAI Completions API for DeepSeek V4/4.1, Gemini, GPT-6/5, Qwen, Kimi, GLM, MiniMax, etc.).
   - Subscription plan gating (GOAT, Pro, Max) and automatic credit bypass rules when on-demand credits exist.
   - Multi-account pooling with transparent 429 rate limit failover.
   - Live quota, monthly pool, and 5-hour/weekly burst window tracking via `/usage` and interactive footer status bar.
 - **Charm Hyper Inference Provider**:
   - Fast, cost-effective inference for coding agents via Charm Hyper (`https://hyper.charm.land`).
-  - Dual authentication: OAuth 2.0 Device Code Flow (`/login hyper`) and API key via `HYPER_API_KEY`.
+  - Dual authentication: OAuth 2.0 Device Code Flow and interactive API-key sign-in; `HYPER_API_KEY` is also supported.
   - Dynamic model discovery from `/v1/provider` with reasoning effort levels, image attachment support, and context window awareness (DeepSeek V4.1 Flash, Qwen 3.8 Max, Kimi K3, GLM 5.3, MiniMax M3, Inkling, etc.).
   - Multi-account pooling with transparent 429 rate limit & 402 billing failover.
   - Live Hypercredit (HC) balance tracking in `/usage` and interactive footer status bar.

@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { AccountStore } from "../../accounts/store.js";
 import {
+  CREDITS_FETCH_TIMEOUT_MS,
+  CREDITS_URL,
   DEFAULT_DEVICE_POLL_INTERVAL_SECONDS,
   DEVICE_AUTH_URL,
   HYPER_BASE_URL,
@@ -162,6 +165,55 @@ function calculateExpiresAt(token: TokenExchangeResponse): number {
     return targetMs - 30_000;
   }
   return now + 3600 * 1000;
+}
+
+/**
+ * Validates and stores a Charm Hyper API key for native Pi API-key login.
+ */
+export async function validateAndStoreHyperApiKey(
+  apiKey: string,
+  signal?: AbortSignal,
+  onProgress?: (message: string) => void
+): Promise<void> {
+  const normalizedKey = apiKey.trim();
+  if (!normalizedKey) throw new Error("No Charm Hyper API key provided");
+
+  onProgress?.("Validating Charm Hyper API key...");
+  const timeoutSignal = AbortSignal.timeout(CREDITS_FETCH_TIMEOUT_MS);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const response = await fetch(CREDITS_URL, {
+    headers: {
+      Authorization: `Bearer ${normalizedKey}`,
+      "User-Agent": HYPER_USER_AGENT,
+    },
+    signal: combinedSignal,
+  });
+  if (!response.ok) {
+    const errorText = (await response.text()).slice(0, 500);
+    throw new Error(`Charm Hyper API key validation failed (${response.status}): ${errorText}`);
+  }
+  await response.body?.cancel().catch(() => {});
+
+  const store = AccountStore.getInstance();
+  const existing = store.list(PROVIDER_ID).find(
+    (account) => account.apiKey === normalizedKey || account.access === normalizedKey
+  );
+  const fingerprint = createHash("sha256").update(normalizedKey).digest("hex").slice(0, 12);
+  const id = existing?.id || AccountStore.generateAccountId(PROVIDER_ID, `api-key-${fingerprint}`);
+  const now = Date.now();
+  store.upsert({
+    ...existing,
+    id,
+    provider: PROVIDER_ID,
+    type: "api_key",
+    label: `API key · ${normalizedKey.slice(-4)}`,
+    email: existing?.email || `api-key-${fingerprint}`,
+    apiKey: normalizedKey,
+    access: normalizedKey,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  });
+  store.setActive(PROVIDER_ID, id);
 }
 
 /**

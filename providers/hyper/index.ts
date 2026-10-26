@@ -1,3 +1,16 @@
+import {
+  createProvider,
+  type Api,
+  type ApiKeyAuth,
+  type ApiKeyCredential,
+  type Model,
+  type OAuthAuth,
+  type OAuthCredential,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+  type StreamOptions,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
@@ -19,6 +32,7 @@ import {
   getHyperApiKey,
   loginHyper,
   refreshHyperToken,
+  validateAndStoreHyperApiKey,
 } from "./oauth.js";
 import { streamHyper } from "./stream.js";
 
@@ -104,61 +118,157 @@ export async function registerHyperProvider(pi: ExtensionAPI): Promise<void> {
   });
 
   // Always load from disk cache first, falling back to offline defaults.
-  // Live discovery happens through refreshModels(): Pi invokes it during model
-  // runtime startup, so a background fetch here would duplicate the request and
-  // could never update the already-registered provider object.
+  // Live discovery happens through the provider's fetchModels callback, so a
+  // background fetch here would duplicate the request and could not update the
+  // already-registered provider object.
   const hyperModels = loadCachedModels() || DEFAULT_HYPER_MODELS;
 
-  // Register Charm Hyper provider with multi-account failover and streaming support
-  pi.registerProvider(HYPER_PROVIDER_ID, {
+  const resolveApiKey = async (
+    credential: ApiKeyCredential | undefined,
+    env: (name: string) => Promise<string | undefined>
+  ): Promise<{ key: string; source: string } | undefined> => {
+    const storedKey = credential?.key?.trim();
+    if (storedKey) return { key: storedKey, source: "stored credential" };
+
+    const contextualKey = (await env("HYPER_API_KEY"))?.trim();
+    if (contextualKey) return { key: contextualKey, source: "HYPER_API_KEY" };
+
+    const envKey = process.env.HYPER_API_KEY?.trim();
+    if (envKey) return { key: envKey, source: "HYPER_API_KEY" };
+
+    const active = store.getActive(HYPER_PROVIDER_ID);
+    const accountKey = active?.type === "api_key" ? active.apiKey || active.access : undefined;
+    return accountKey ? { key: accountKey, source: "account store" } : undefined;
+  };
+
+  const apiKeyAuth: ApiKeyAuth = {
+    name: "Charm Hyper API key",
+    async login(interaction) {
+      const input = await interaction.prompt({
+        type: "secret",
+        message: "Enter your Charm Hyper API key:",
+        placeholder: "Paste Charm Hyper API key...",
+      });
+      const key = input.trim();
+      if (!key) throw new Error("No Charm Hyper API key provided");
+      await validateAndStoreHyperApiKey(key, interaction.signal, (message) =>
+        interaction.notify({ type: "progress", message })
+      );
+      return { type: "api_key", key };
+    },
+    async check({ ctx, credential }) {
+      const resolved = await resolveApiKey(credential, (name) => ctx.env(name));
+      return resolved ? { type: "api_key", source: resolved.source } : undefined;
+    },
+    async resolve({ ctx, credential }) {
+      const resolved = await resolveApiKey(credential, (name) => ctx.env(name));
+      return resolved
+        ? { auth: { apiKey: resolved.key }, source: resolved.source }
+        : undefined;
+    },
+  };
+
+  const oauthAuth: OAuthAuth = {
+    name: HYPER_PROVIDER_NAME,
+    async login(interaction) {
+      const credentials = await loginHyper({
+        onAuth: (info) => interaction.notify({ type: "auth_url", ...info }),
+        onDeviceCode: (info) => interaction.notify({ type: "device_code", ...info }),
+        onPrompt: (prompt) =>
+          interaction.prompt({
+            type: "text",
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+            signal: interaction.signal,
+          }),
+        onProgress: (message) => interaction.notify({ type: "progress", message }),
+        onManualCodeInput: () =>
+          interaction.prompt({
+            type: "manual_code",
+            message: "Enter the Charm Hyper authorization code:",
+            signal: interaction.signal,
+          }),
+        onSelect: (prompt) =>
+          interaction.prompt({
+            type: "select",
+            message: prompt.message,
+            options: prompt.options,
+            signal: interaction.signal,
+          }),
+        signal: interaction.signal,
+      });
+      return { ...credentials, type: "oauth" } as OAuthCredential;
+    },
+    async refresh(credential, signal) {
+      return {
+        ...await refreshHyperToken(credential, signal),
+        type: "oauth",
+      } as OAuthCredential;
+    },
+    async toAuth(credential) {
+      return { apiKey: getHyperApiKey(credential) };
+    },
+  };
+
+  const streamWithFailover = (
+    model: Model<Api>,
+    transcript: TranscriptContext,
+    options: SimpleStreamOptions | undefined
+  ) =>
+    executeWithMultiAccountFailover(
+      HYPER_PROVIDER_ID,
+      model,
+      transcript,
+      options,
+      (m, ctx, opts, resolvedAuth) => streamHyper(m, ctx, opts, resolvedAuth)
+    );
+
+  const streams: ProviderStreams = {
+    stream(model, transcript, options?: StreamOptions) {
+      return streamWithFailover(model, transcript, options as SimpleStreamOptions | undefined);
+    },
+    streamSimple(model, transcript, options) {
+      return streamWithFailover(model, transcript, options);
+    },
+  };
+
+  const provider = createProvider<Api>({
+    id: HYPER_PROVIDER_ID,
     name: HYPER_PROVIDER_NAME,
     baseUrl: HYPER_API_BASE_URL,
-    apiKey: process.env.HYPER_API_KEY ? "$HYPER_API_KEY" : undefined,
-    api: "openai-completions",
-
+    auth: {
+      apiKey: apiKeyAuth,
+      oauth: oauthAuth,
+    },
     models: hyperModels,
+    api: streams,
+    async fetchModels(context) {
+      if (context.signal.aborted) return [];
 
-    async refreshModels(context) {
-      if (context?.allowNetwork === false || context?.signal?.aborted) {
-        return loadCachedModels() || hyperModels;
-      }
-      const currentActive = store.getActive(HYPER_PROVIDER_ID);
-      let activeToken = process.env.HYPER_API_KEY;
-      if (currentActive) {
-        try {
-          activeToken = await balancer.ensureFreshToken(currentActive);
-        } catch {
-          // Ignore
+      const credential = context.credential;
+      const credentialToken = credential?.type === "api_key"
+        ? credential.key
+        : credential?.type === "oauth"
+          ? getHyperApiKey(credential)
+          : undefined;
+      let token = credentialToken || process.env.HYPER_API_KEY?.trim();
+      if (!token) {
+        const currentActive = store.getActive(HYPER_PROVIDER_ID);
+        if (currentActive) {
+          try {
+            token = await balancer.ensureFreshToken(currentActive);
+          } catch {
+            // Keep cached/default models if account refresh fails.
+          }
         }
       }
-      if (!activeToken && context?.credential) {
-        if (context.credential.type === "api_key" && "key" in context.credential && context.credential.key) {
-          activeToken = context.credential.key;
-        } else if (context.credential.type === "oauth" && "access" in context.credential && context.credential.access) {
-          activeToken = (context.credential as { access: string }).access;
-        }
-      }
-      // Hyper models endpoints (/v1/provider and /v1/models) are public; fetch live catalog even if unauthenticated
-      const live = await fetchHyperModels(activeToken, context?.signal);
-      return live && live.length > 0 ? live : (loadCachedModels() || hyperModels);
-    },
-    oauth: {
-      name: HYPER_PROVIDER_NAME,
-      login: loginHyper,
-      refreshToken: refreshHyperToken,
-      getApiKey: getHyperApiKey,
-    },
 
-    streamSimple(model, transcript, options) {
-      return executeWithMultiAccountFailover(
-        HYPER_PROVIDER_ID,
-        model,
-        transcript,
-        options,
-        (m, ctx, opts, resolvedAuth) => streamHyper(m, ctx, opts, resolvedAuth)
-      );
+      const live = await fetchHyperModels(token, context.signal);
+      return live.length > 0 ? live : (loadCachedModels() || hyperModels);
     },
   });
+
+  pi.registerProvider(provider);
 }
 
 export * from "./constants.js";
