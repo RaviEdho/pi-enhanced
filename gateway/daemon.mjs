@@ -1017,7 +1017,24 @@ async function registerSlashCommands(readyClient) {
         .setDescription("Choose the thinking level for this Discord conversation"),
     ].map((command) => command.toJSON());
     await readyClient.application?.commands.set(commands);
-    log("Discord slash commands registered successfully.");
+
+    // Keep these as global commands only; registering both scopes makes Discord
+    // display duplicate entries. Remove guild-scoped copies created by older versions,
+    // while preserving any unrelated commands registered directly in those guilds.
+    const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning"]);
+    for (const guild of readyClient.guilds.cache.values()) {
+      try {
+        const guildCommands = await guild.commands.fetch();
+        await Promise.all(
+          guildCommands
+            .filter((command) => gatewayCommandNames.has(command.name))
+            .map((command) => command.delete()),
+        );
+      } catch (error) {
+        log(`Failed to remove duplicate guild slash commands in ${guild.id}: ${summarizeDiscordError(error)}`);
+      }
+    }
+    log("Discord slash commands registered globally; duplicate guild-scoped commands cleaned up.");
   } catch (error) {
     log(`Failed to register slash commands: ${summarizeDiscordError(error)}`);
   }
