@@ -361,6 +361,7 @@ class PiRpcSession {
     this.runWaiter = undefined;
     this.interaction = undefined;
     this.askUserMessage = undefined;
+    this.pendingAskUserCompletion = undefined;
     this.askUserMessageEditPromise = Promise.resolve();
     this.statusMessages = new Map();
     this.closed = false;
@@ -480,6 +481,7 @@ class PiRpcSession {
 
   async promptAndWait(message, interaction) {
     if (this.running) throw new Error("Pi session received overlapping prompts");
+    await this.flushPendingAskUserCompletion();
     this.running = true;
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
@@ -501,11 +503,35 @@ class PiRpcSession {
       return typeof response.data?.text === "string" ? response.data.text : "";
     } finally {
       if (this.runWaiter) this.runWaiter = undefined;
+      await this.flushPendingAskUserCompletion();
       await this.clearStatusMessages();
       this.interaction = undefined;
       this.running = false;
       this.lastUsedAt = Date.now();
     }
+  }
+
+  async flushPendingAskUserCompletion() {
+    const completion = this.pendingAskUserCompletion;
+    if (!completion) return;
+    this.pendingAskUserCompletion = undefined;
+
+    let message = completion.pending.promptMessage || this.askUserMessage;
+    if (!message && completion.pending.promptMessagePromise) {
+      try {
+        message = await completion.pending.promptMessagePromise;
+      } catch {
+        return;
+      }
+    }
+    if (!message) return;
+
+    const payload = buildDiscordUiPayload(
+      completion.pending,
+      completion.pending.completionStatus,
+      completion.value,
+    );
+    await queueAskUserMessageEdit(this, message, payload).catch(() => undefined);
   }
 
   async handleExtensionUiRequest(request) {
@@ -548,7 +574,12 @@ class PiRpcSession {
     const isAskUser = typeof request.title === "string" && request.title.startsWith("Ask User");
     const isAskUserReview = isAskUser && request.title.startsWith("Ask User\n\n");
     const isAskUserQuestion = isAskUser && !isAskUserReview && request.title.includes("\n");
-    if (!isAskUser) this.askUserMessage = undefined;
+    if (isAskUser) {
+      this.pendingAskUserCompletion = undefined;
+    } else {
+      await this.flushPendingAskUserCompletion();
+      this.askUserMessage = undefined;
+    }
     const timeoutMs = Number.isFinite(request.timeout) && request.timeout > 0
       ? Math.min(request.timeout, 60 * 60 * 1000)
       : UI_DEFAULT_TIMEOUT_MS;
@@ -682,6 +713,7 @@ function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, 
       channelId: session.interaction?.channelId,
       promptText: truncateDiscordText(promptText, 1800),
       promptMessage: undefined,
+      promptMessagePromise: undefined,
       completionStatus: undefined,
       result: undefined,
       page: 0,
@@ -713,12 +745,18 @@ function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, 
         clearTimeout(timer);
         if (pendingUiAnswers.get(key) === pending) pendingUiAnswers.delete(key);
         if (pendingDiscordUi.get(token) === pending) pendingDiscordUi.delete(token);
+        const deferAskUserCompletion = pending.isAskUser && value !== undefined;
+        if (deferAskUserCompletion) {
+          session.pendingAskUserCompletion = { pending, value };
+        }
         if (value === undefined && session.askUserMessage === pending.promptMessage) {
           session.askUserMessage = undefined;
         }
         resolve(value);
         if (updatePrompt && pending.promptMessage) {
-          const payload = buildDiscordUiPayload(pending, pending.completionStatus);
+          const payload = deferAskUserCompletion
+            ? buildDiscordUiPayload(pending, undefined, undefined, true)
+            : buildDiscordUiPayload(pending, pending.completionStatus);
           const edit = pending.isAskUser
             ? queueAskUserMessageEdit(session, pending.promptMessage, payload)
             : pending.promptMessage.edit(payload);
@@ -744,7 +782,9 @@ function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, 
       return channel.send(payload);
     };
 
-    void postPrompt().then((message) => {
+    const promptMessagePromise = postPrompt();
+    pending.promptMessagePromise = promptMessagePromise;
+    void promptMessagePromise.then((message) => {
       pending.promptMessage = message;
       if (uiRequest.isAskUser && (!finished || pending.result !== undefined)) {
         session.askUserMessage = message;
@@ -753,7 +793,9 @@ function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, 
         if (pending.result === undefined && session.askUserMessage === message) {
           session.askUserMessage = undefined;
         }
-        const completedPayload = buildDiscordUiPayload(pending, pending.completionStatus);
+        const completedPayload = pending.isAskUser && pending.result !== undefined
+          ? buildDiscordUiPayload(pending, undefined, undefined, true)
+          : buildDiscordUiPayload(pending, pending.completionStatus);
         const edit = pending.isAskUser
           ? queueAskUserMessageEdit(session, message, completedPayload)
           : message.edit(completedPayload);
@@ -771,7 +813,7 @@ function queueAskUserMessageEdit(session, message, payload) {
   return edit;
 }
 
-function buildDiscordUiPayload(pending, statusText, responseValue = pending.result) {
+function buildDiscordUiPayload(pending, statusText, responseValue = pending.result, disableControls = false) {
   const optionGuide = "Select an option below, or reply with its number or exact text.";
   const hasDropdownGuide =
     pending.isAskUser &&
@@ -797,7 +839,7 @@ function buildDiscordUiPayload(pending, statusText, responseValue = pending.resu
       ? `\n\n**Your answer:**\n> ${truncateDiscordText(String(responseValue), 500).replace(/\r?\n/g, "\n> ")}`
       : "";
   const content = statusText ? `${promptContent}${responseText}\n\n${statusText}` : pending.promptText;
-  const controls = statusText ? [] : buildDiscordUiComponents(pending);
+  const controls = statusText ? [] : buildDiscordUiComponents(pending, disableControls);
   if (!pending.isAskUser) {
     return {
       content,
@@ -860,17 +902,19 @@ function buildDiscordUiPayload(pending, statusText, responseValue = pending.resu
   };
 }
 
-function buildDiscordUiComponents(pending) {
+function buildDiscordUiComponents(pending, disabled = false) {
   if (pending.isAskUserReview) {
     return [new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`piui:${pending.token}:review-submit`)
         .setLabel("Submit response")
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(disabled),
       new ButtonBuilder()
         .setCustomId(`piui:${pending.token}:review-edit`)
         .setLabel("Edit answer")
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled),
     )];
   }
 
@@ -884,6 +928,7 @@ function buildDiscordUiComponents(pending) {
       .setPlaceholder(truncateDiscordText(pageCount > 1 ? `Choose an option (page ${pending.page + 1}/${pageCount})` : "Choose an option", 150))
       .setMinValues(1)
       .setMaxValues(1)
+      .setDisabled(disabled)
       .addOptions(visibleOptions.map((option, index) => ({
         label: discordOptionLabel(option),
         value: String(pageStart + index),
@@ -895,33 +940,34 @@ function buildDiscordUiComponents(pending) {
         .setCustomId(`piui:${pending.token}:prev`)
         .setLabel("Previous")
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(pending.page === 0));
+        .setDisabled(disabled || pending.page === 0));
       buttons.push(new ButtonBuilder()
         .setCustomId(`piui:${pending.token}:next`)
         .setLabel("Next")
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(pending.page >= pageCount - 1));
+        .setDisabled(disabled || pending.page >= pageCount - 1));
     }
     buttons.push(new ButtonBuilder()
       .setCustomId(`piui:${pending.token}:cancel`)
       .setLabel("Dismiss")
-      .setStyle(ButtonStyle.Secondary));
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disabled));
     rows.push(new ActionRowBuilder().addComponents(buttons));
     return rows;
   }
 
   if (pending.method === "confirm") {
     return [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`piui:${pending.token}:yes`).setLabel("Yes").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`piui:${pending.token}:no`).setLabel("No").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:yes`).setLabel("Yes").setStyle(ButtonStyle.Success).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:no`).setLabel("No").setStyle(ButtonStyle.Danger).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
     )];
   }
 
   const buttonLabel = pending.method === "editor" ? "Open editor" : "Enter response";
   return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`piui:${pending.token}:open`).setLabel(buttonLabel).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`piui:${pending.token}:open`).setLabel(buttonLabel).setStyle(ButtonStyle.Primary).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
   )];
 }
 
@@ -1044,7 +1090,10 @@ async function completeDiscordUiInteraction(pending, interaction, answer) {
   }
   const value = parsed.value ?? parsed.confirmed;
   try {
-    await interaction.update(buildDiscordUiPayload(pending, "Response received.", value));
+    const payload = pending.isAskUser
+      ? buildDiscordUiPayload(pending, undefined, undefined, true)
+      : buildDiscordUiPayload(pending, "Response received.", value);
+    await interaction.update(payload);
     pending.finish(value, { updatePrompt: false });
   } catch {
     pending.finish(value);
