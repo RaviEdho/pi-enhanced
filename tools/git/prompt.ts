@@ -6,14 +6,16 @@ Your task is to inspect the staged git changes and propose clean, atomic, conven
 1. Always call \`git_overview\` first to examine all staged files and change statistics.
 2. If you need details on specific changes, call \`git_file_diff\` with \`filePath\` set to 1 or 2 key files where the core logic changed. Do not inspect lockfiles or large assets.
 3. Analyze whether the changes represent:
-   - **Single concern**: A single feature, bugfix, refactor, or documentation change -> call \`propose_commit\`.
-   - **Multiple distinct concerns**: Changes that naturally belong to separate atomic commits (e.g. adding a new provider/feature AND fixing a bug in another subsystem AND updating rules/docs) -> call \`propose_commits\` with ordered commit stages.
+   - **Single concern**: A single feature, bugfix, refactor, or standalone documentation change -> call \`propose_commit\`.
+   - **Multiple distinct concerns**: Changes that naturally belong to separate atomic commits (e.g. independent features or a feature plus an unrelated bugfix) -> call \`propose_commits\` with ordered commit stages.
 
 ### Multi-Commit Guidelines:
 - Keep commits atomic: one logical purpose per commit.
-- Order commits logically (e.g. prerequisite rules/types -> features -> bugfixes -> docs/cleanups).
+- Documentation that explains, configures, or enables a changed feature is part of that feature and MUST be assigned to the same commit stage as its implementation. Never create a separate docs commit for documentation accompanying a feature.
+- Split independent features or unrelated bugfixes into separate stages, but keep each feature's documentation with that feature. A docs-only stage is allowed only for documentation changes that are genuinely standalone and unrelated to implementation changes in this change set.
+- Order commits logically (e.g. prerequisite rules/types -> feature with its docs -> unrelated bugfix).
 - Group files cleanly. Every staged file should belong to a commit stage. Use explicit file paths or directory globs like \`providers/*\`.
-- Do NOT over-split: if 5 files are all part of the same feature implementation, keep them together in 1 commit. Only split when changes span genuinely separate concerns or subsystems.
+- Do NOT over-split: if files implement or document the same feature, keep them together in 1 commit. Only split when changes span genuinely separate concerns or subsystems.
 
 ### Tool Parameter Reference:
 - \`type\`: Conventional type (feat, fix, refactor, perf, docs, test, chore, style, ci, build).
@@ -31,8 +33,8 @@ The user invoked /commit with an instruction. Treat that instruction as the goal
 ### Workflow:
 1. Always call \`git_overview\` first to list all changed files.
 2. Inspect diffs with \`git_file_diff\` for files relevant to the instruction. Fine-grained text diff hunks (including zero-context edits) are numbered as [HUNK 1], [HUNK 2], etc.
-3. Select the smallest coherent set of changes that fulfills the user's instruction. You may select whole files or individual numbered hunks. Leave unrelated changes out; they will remain uncommitted and the user's staging state will be preserved.
-4. Propose one commit for a single concern, or multiple atomic commits for distinct concerns. Do not include any unselected changes merely to make the commit complete.
+3. Select the smallest coherent set of changes that fulfills the user's instruction. You may select whole files or individual numbered hunks. Include documentation that explains or enables a selected feature even when the user did not name the docs file explicitly. Leave unrelated changes out; they will remain uncommitted and the user's staging state will be preserved.
+4. Propose one commit for a single concern, or multiple atomic commits for distinct concerns. Keep each selected feature's implementation and accompanying documentation in the same commit stage; never split them into a feature commit and a docs commit. Do not include unrelated changes merely to make the commit complete.
 
 ### Selection parameters:
 - For whole files, set \`files\` to exact paths from \`git_overview\`.

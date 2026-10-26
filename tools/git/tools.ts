@@ -167,7 +167,7 @@ export function createCommitTools(options: {
   const proposeCommitTool: ToolDefinition<any, unknown> = {
     name: "propose_commit",
     label: "Propose Commit",
-    description: "Submit a single commit proposal when all inspected changes belong to one coherent concern.",
+    description: "Submit a single commit proposal for one coherent concern. Keep a feature's implementation and its accompanying documentation together in this commit.",
     parameters: Type.Object({
       type: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       scope: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -247,7 +247,7 @@ export function createCommitTools(options: {
   const proposeCommitsTool: ToolDefinition<any, unknown> = {
     name: "propose_commits",
     label: "Propose Multiple Commits",
-    description: "Submit an ordered plan of multiple atomic commit stages when staged changes span multiple distinct concerns (e.g. feature + bugfix + docs).",
+    description: "Submit an ordered plan of multiple atomic stages for genuinely independent concerns. Documentation explaining or enabling a feature must be assigned to the same stage as that feature; do not create a separate docs stage for it.",
     parameters: Type.Object({
       commits: Type.Array(CommitStageSchema),
     }),
