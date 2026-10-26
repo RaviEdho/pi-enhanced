@@ -18,6 +18,7 @@ import {
   PROVIDER_ID,
 } from "./constants.js";
 import { updateCachedKenariBilling } from "./plan.js";
+import { fetchKenariModels } from "./models.js";
 import type {
   KenariBalanceResponse,
   KenariCliTokenResponse,
@@ -352,6 +353,12 @@ export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuth
     const validation = await validateKenariApiKey(finalApiKey, callbacks.signal).catch((err) => {
       throw new Error(`Invalid Kenari API key: ${err instanceof Error ? err.message : String(err)}`);
     });
+
+    // Pi's post-login model sync is deliberately offline-only. Populate the
+    // dynamic catalog before returning credentials so that sync can publish it
+    // immediately, without requiring a process restart.
+    callbacks.onProgress?.("Loading available Kenari models...");
+    await fetchKenariModels(finalApiKey, callbacks.signal);
 
     const displayIdentity =
       labelPrefix ||
