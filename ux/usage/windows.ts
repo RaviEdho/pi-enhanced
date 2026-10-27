@@ -50,9 +50,9 @@ export const QUOTA_WINDOW_LABEL: Record<string, string> = {
  */
 export const QUOTA_WINDOW_SHORT_LABEL: Record<string, string> = {
   [QUOTA_WINDOW.fiveHour]: "5h",
-  [QUOTA_WINDOW.weekly]: "weekly",
-  [QUOTA_WINDOW.monthly]: "monthly",
-  [QUOTA_WINDOW.daily]: "daily",
+  [QUOTA_WINDOW.weekly]: "wk",
+  [QUOTA_WINDOW.monthly]: "mo",
+  [QUOTA_WINDOW.daily]: "1d",
 };
 
 /**

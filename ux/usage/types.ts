@@ -37,7 +37,7 @@ export interface ProviderUsageReport {
   capacitySummary?: string;
   /**
    * Compact variant of `capacitySummary` using the footer vocabulary
-   * (`5h`, `weekly`, `monthly`). Used by the single-line status footer so it
+   * (`5h`, `wk`, `mo`). Used by the single-line status footer so it
    * stays narrow; `/usage` keeps the descriptive `capacitySummary`.
    */
   capacitySummaryShort?: string;
