@@ -254,7 +254,7 @@ function renderFooterLine1(
 }
 
 /**
- * Renders the stable budget bar and compact secondary limits, expanding urgent countdowns.
+ * Renders the stable budget bar and secondary countdowns for windows with usage.
  */
 function renderProgressBar(
   primary: QuotaBucket,
@@ -277,13 +277,16 @@ function renderProgressBar(
     : "";
 
   let secondarySegment = "";
-  for (const secondary of secondaries ?? []) {
+  const sortedSecondaries = [...(secondaries ?? [])].sort(
+    (a, b) => quotaWindowSeconds(b) - quotaWindowSeconds(a)
+  );
+  for (const secondary of sortedSecondaries) {
     const secPct = Math.round(secondary.usedFraction * 100);
     const secLabel =
       quotaWindowShortLabel(secondary.window, secondary.windowSeconds) ||
       secondary.displayName;
     const countdown =
-      secondary.usedFraction >= 0.8 &&
+      secondary.usedFraction > 0 &&
       secondary.resetTime &&
       Number.isFinite(Date.parse(secondary.resetTime))
         ? ` (${formatRelativeTime(secondary.resetTime, now)})`
