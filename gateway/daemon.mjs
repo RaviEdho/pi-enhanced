@@ -59,6 +59,12 @@ const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const THREAD_TITLE_WAIT_MS = 25_000;
 const THREAD_TITLE_POLL_MS = 500;
 const DISCORD_TEXT_LIMIT = 1900;
+const MAX_DISCORD_IMAGES = 4;
+const MAX_DISCORD_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_DISCORD_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+const DISCORD_IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
+const DISCORD_IMAGE_HOSTS = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
+const DISCORD_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 
 if (!configPath || !pidPath || !statusPath || !sessionRoot || !threadsPath) {
   throw new Error("Discord gateway paths are not configured");
@@ -213,6 +219,19 @@ async function handleMessage(message) {
   seenMessages.add(message.id);
   if (seenMessages.size > 3000) seenMessages.delete(seenMessages.values().next().value);
 
+  const content = stripBotMention(message.content || "");
+  const imageAttachments = getDiscordImageAttachments(message);
+  if (!content && imageAttachments.length === 0) {
+    const hasAttachments = (message.attachments?.size || 0) > 0;
+    await sendText(
+      message.channel,
+      hasAttachments
+        ? "I can read text and PNG, JPEG, GIF, or WebP image attachments. This message has no supported image or text."
+        : "Please send a text message or attach an image.",
+    );
+    return;
+  }
+
   let target = message.channel;
   let sessionKey;
   let conversationLabel;
@@ -224,7 +243,6 @@ async function handleMessage(message) {
     sessionKey = `guild:${route.parentChannelId}:thread:${message.channelId}:user:${message.author.id}`;
     conversationLabel = `Discord thread ${message.channelId}`;
   } else {
-    const content = stripBotMention(message.content || "");
     try {
       const thread = await message.startThread({
         name: makeThreadName(message.author.username, content),
@@ -248,28 +266,33 @@ async function handleMessage(message) {
     }
   }
 
-  const content = stripBotMention(message.content || "");
-  if (!content) {
-    await sendText(target, "I can only process text messages right now. Please send your request as text.");
-    return;
-  }
-
-  const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${content}`;
   pendingMessageTasks += 1;
   const queuedRun = enqueueForSession(sessionKey, async () => {
     const typing = startTyping(target);
     try {
       const result = await withRunSlot(async () => {
+        const { images, skippedCount } = await loadDiscordImages(imageAttachments);
+        if (!content && images.length === 0) {
+          await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.");
+          return undefined;
+        }
+
+        const messageContent = content || "Please inspect the attached image(s) and describe what you see.";
+        const imageNote = skippedCount > 0
+          ? `\n\n[Gateway note: ${skippedCount} image attachment(s) could not be included. Analyze only the images attached to this prompt.]`
+          : "";
+        const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}`;
         const session = await getPiSession(sessionKey);
         const result = await session.promptAndWait(prompt, {
           channel: target,
           userId: message.author.id,
           channelId: target.id,
           typing,
-        });
+        }, images);
         watchThreadTitle(target, session);
         return result;
       });
+      if (result === undefined) return;
       if (result.trim()) await sendText(target, result);
       else await sendText(target, "The agent finished without a text response.");
     } catch (error) {
@@ -489,7 +512,7 @@ class PiRpcSession {
     return response;
   }
 
-  async promptAndWait(message, interaction) {
+  async promptAndWait(message, interaction, images = []) {
     if (this.running) throw new Error("Pi session received overlapping prompts");
     await this.flushPendingAskUserCompletion();
     this.running = true;
@@ -503,7 +526,11 @@ class PiRpcSession {
         this.runWaiter = { resolve, reject };
       });
       void settledPromise.catch(() => undefined);
-      const accepted = await this.request("prompt", { message }, 30_000);
+      const accepted = await this.request(
+        "prompt",
+        { message, ...(images.length > 0 ? { images } : {}) },
+        30_000,
+      );
       if (!accepted.success) throw new Error("Pi rejected the Discord message");
       if (accepted.data?.disposition === "handled") return "";
       const settled = await settledPromise;
@@ -1712,6 +1739,120 @@ function stripBotMention(content) {
   const botId = client.user?.id;
   if (!botId) return content.trim();
   return content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
+}
+
+function getDiscordImageAttachments(message) {
+  const attachments = message.attachments && typeof message.attachments.values === "function"
+    ? Array.from(message.attachments.values())
+    : [];
+  return attachments.filter((attachment) => {
+    const contentType = typeof attachment.contentType === "string" ? attachment.contentType.toLowerCase() : "";
+    const extension = typeof attachment.name === "string" ? attachment.name.split(".").pop()?.toLowerCase() : "";
+    return contentType.startsWith("image/") || DISCORD_IMAGE_EXTENSIONS.has(extension);
+  });
+}
+
+async function loadDiscordImages(attachments) {
+  const images = [];
+  let skippedCount = Math.max(0, attachments.length - MAX_DISCORD_IMAGES);
+  let totalBytes = 0;
+
+  for (const attachment of attachments.slice(0, MAX_DISCORD_IMAGES)) {
+    const remainingBytes = MAX_DISCORD_TOTAL_IMAGE_BYTES - totalBytes;
+    if (remainingBytes <= 0) {
+      skippedCount += 1;
+      continue;
+    }
+
+    try {
+      const image = await downloadDiscordImage(
+        attachment,
+        Math.min(MAX_DISCORD_IMAGE_BYTES, remainingBytes),
+      );
+      images.push(image.content);
+      totalBytes += image.byteLength;
+    } catch (error) {
+      skippedCount += 1;
+      log(`Skipped a Discord image attachment: ${safeErrorName(error)}`);
+    }
+  }
+
+  return { images, skippedCount };
+}
+
+async function downloadDiscordImage(attachment, maxBytes) {
+  const url = new URL(attachment.url);
+  if (
+    url.protocol !== "https:" ||
+    !DISCORD_IMAGE_HOSTS.has(url.hostname) ||
+    (url.port && url.port !== "443") ||
+    (url.username || url.password) ||
+    !(url.pathname.startsWith("/attachments/") || url.pathname.startsWith("/ephemeral-attachments/"))
+  ) {
+    throw new Error("attachment URL is not a Discord CDN image");
+  }
+  if (Number.isFinite(attachment.size) && attachment.size > maxBytes) {
+    throw new Error("attachment exceeds the image size limit");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DISCORD_IMAGE_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "error",
+    });
+    if (!response.ok) throw new Error(`Discord CDN returned HTTP ${response.status}`);
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && Number(contentLength) > maxBytes) {
+      throw new Error("attachment exceeds the image size limit");
+    }
+    if (!response.body) throw new Error("Discord CDN returned an empty response");
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let byteLength = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        byteLength += value.byteLength;
+        if (byteLength > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error("attachment exceeds the image size limit");
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const data = Buffer.concat(chunks, byteLength);
+    const mimeType = detectDiscordImageMimeType(data);
+    if (!mimeType) throw new Error("attachment is not a supported PNG, JPEG, GIF, or WebP image");
+    return {
+      content: { type: "image", data: data.toString("base64"), mimeType },
+      byteLength,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function detectDiscordImageMimeType(data) {
+  if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (data.length >= 6 && (data.toString("ascii", 0, 6) === "GIF87a" || data.toString("ascii", 0, 6) === "GIF89a")) {
+    return "image/gif";
+  }
+  if (data.length >= 12 && data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP") {
+    return "image/webp";
+  }
+  return undefined;
 }
 
 function makeThreadName(username, prompt) {
