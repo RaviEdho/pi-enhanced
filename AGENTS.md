@@ -84,7 +84,8 @@ pi-enhanced/
 │   ├── select-dialog.ts        # Themed selector for gateway menu and setup choices
 │   ├── toggle-dialog.ts        # DM/server access path toggles
 │   ├── command.ts              # /discord menu, setup/configure/start/stop/teardown/status/logs commands
-│   ├── daemon.mjs              # Discord Gateway client and Pi RPC session router
+│   ├── daemon.mjs              # Standalone Node entry point wiring the runtime modules
+│   ├── runtime/                # Modular routing, sessions, RPC, Discord UI, commands, lifecycle & helpers
 │   ├── index.ts                # Gateway command registration
 │   └── storage.ts              # Private config, status and process paths
 ├── tools/                      # Agent capability tools
