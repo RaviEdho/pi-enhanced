@@ -19,6 +19,8 @@ export interface AccountCredential {
   blockedUntil?: number | null;
   blockedReason?: string | null;
   disabledCause?: string | null;
+  /** One-time revalidation after recovering from a legacy quota auth rejection. */
+  requiresAuthRefresh?: boolean;
 }
 
 export interface AccountStoreData {

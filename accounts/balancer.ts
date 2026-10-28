@@ -251,7 +251,8 @@ export class AccountBalancer {
     }
 
     const now = Date.now();
-    const isNearExpiry = account.expires && now + EXPIRY_BUFFER_MS >= account.expires;
+    const isNearExpiry = account.requiresAuthRefresh ||
+      (account.expires && now + EXPIRY_BUFFER_MS >= account.expires);
 
     if (account.type === "api_key" && account.apiKey) {
       return account.apiKey;
@@ -262,6 +263,9 @@ export class AccountBalancer {
     }
 
     if (!account.refresh) {
+      if (account.requiresAuthRefresh) {
+        throw new Error(`Account needs revalidation (run /login ${account.provider})`);
+      }
       if (account.access) return account.access;
       throw new Error(`Account ${account.id} has no valid access or refresh token.`);
     }
@@ -362,6 +366,7 @@ export class AccountBalancer {
             if (cred.refresh) account.refresh = cred.refresh;
             account.expires = cred.expires;
             if ((cred as any).clientId) account.clientId = (cred as any).clientId;
+            delete account.requiresAuthRefresh;
             account.updatedAt = Date.now();
             this.store.upsert(account);
             return cred.access;
@@ -375,8 +380,12 @@ export class AccountBalancer {
           throw new Error(account.disabledCause);
         }
         console.warn(`[AccountBalancer] OpenAI token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
+        if (account.requiresAuthRefresh) throw err;
         if (account.access) return account.access;
         throw err;
+      }
+      if (account.requiresAuthRefresh) {
+        throw new Error("Account needs revalidation (run /login openai)");
       }
     }
 

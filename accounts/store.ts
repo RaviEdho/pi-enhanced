@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode", "kenari"]);
 
 /**
@@ -108,14 +108,28 @@ export class AccountStore {
             ? (parsed.sessionBindings as Record<string, Record<string, string>>)
             : {};
 
+        const previousVersion = parsed.version || 1;
         this.data = {
-          version: parsed.version || STORE_VERSION,
+          version: Math.max(previousVersion, STORE_VERSION),
           activeAccounts: parsed.activeAccounts || {},
           accounts: loadedAccounts,
           sessionBindings: loadedBindings,
         };
 
         for (const acc of this.data.accounts) {
+          // v1 incorrectly probed the Codex quota endpoint with SIWC tokens and
+          // saved the same disable message as a real revocation. Allow one
+          // proper OpenAI refresh, not unconditional trust in the old token.
+          if (
+            previousVersion < 2 &&
+            acc.provider === "openai" &&
+            acc.type === "oauth" &&
+            acc.disabledCause === "Session expired or revoked (run /login openai)"
+          ) {
+            acc.disabledCause = null;
+            acc.requiresAuthRefresh = true;
+            acc.updatedAt = Date.now();
+          }
           if (acc.disabledCause && /401|invalidated|revoked|authentication failed|credits check failed/i.test(acc.disabledCause)) {
             const prov = acc.provider.replace("openai-", "").replace("google-", "");
             acc.disabledCause = `Session expired or revoked (run /login ${prov})`;
@@ -125,6 +139,9 @@ export class AccountStore {
             acc.blockedUntil = block.blockedUntil;
             acc.blockedReason = block.blockedReason;
           }
+        }
+        if (previousVersion < STORE_VERSION) {
+          this.save();
         }
       }
     } catch {
@@ -524,6 +541,16 @@ export class AccountStore {
                 existing.access = access;
                 if (refresh) existing.refresh = refresh;
                 if (credExpires) existing.expires = credExpires;
+                if (provider === "openai") {
+                  // A new SIWC login issues its own client ID. Accepted new
+                  // credentials supersede recovery/auth-failure state, but an
+                  // unchanged auth.json mirror must never resurrect a failure.
+                  if (clientId) existing.clientId = clientId;
+                  delete existing.requiresAuthRefresh;
+                  if (existing.disabledCause === "Session expired or revoked (run /login openai)") {
+                    existing.disabledCause = null;
+                  }
+                }
                 existing.updatedAt = Date.now();
                 modified = true;
               }

@@ -21,6 +21,7 @@ import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import { fetchHyperUsage } from "./hyper.js";
+import { buildOpenAIUsageReport } from "./openai.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
 
 interface StoredAuthEntry {
@@ -342,68 +343,23 @@ export async function collectUsageReports(
         continue;
       }
 
-      openaiPromises.push(
-        (async (): Promise<ProviderUsageReport> => {
-          try {
-            const token = await balancer.ensureFreshToken(acc);
-            const report = await fetchCodexUsage({
-              accessToken: token,
-              accountId: acc.accountId,
-              email: label,
-              refreshToken: acc.refresh,
-              signal,
-            });
-            report.providerId = "openai";
-            report.providerName = "OpenAI (ChatGPT)";
-            report.isSessionAccount = isSession;
-            report.accountId = acc.id;
-            report.accountEmail = label;
-            report.cooldownMinutes = isCooldown ? mins : undefined;
-            if (report.error && isAuthRevocationError(report.error)) {
-              acc.disabledCause = `Session expired or revoked (run /login openai)`;
-              acc.updatedAt = Date.now();
-              store.upsert(acc);
-              report.error = acc.disabledCause;
-            }
-            QuotaManager.getInstance().setReport(acc.id, report);
-            return report;
-          } catch (err) {
-            return {
-              providerId: "openai",
-              providerName: "OpenAI (ChatGPT)",
-              accountEmail: label,
-              accountId: acc.id,
-              isSessionAccount: isSession,
-              planType: acc.planType,
-              cooldownMinutes: isCooldown ? mins : undefined,
-              fetchedAt: Date.now(),
-              groups: [],
-              error: formatUsageErrorMessage(err, "openai"),
-            };
-          }
-        })()
-      );
+      // Usage display must not probe legacy endpoints or refresh credentials:
+      // these tokens only authorize the public OpenAI API, which has no
+      // documented subscription-quota endpoint for this login flow.
+      const report = buildOpenAIUsageReport({ ...acc, email: label, accountId: acc.id });
+      report.isSessionAccount = isSession;
+      report.cooldownMinutes = isCooldown ? mins : undefined;
+      QuotaManager.getInstance().setReport(acc.id, report);
+      openaiPromises.push(Promise.resolve(report));
     }
   } else {
     // Fallback to auth.json if openai is configured with OAuth
     const authMap = loadConfiguredAuth();
     const openaiAuth = authMap["openai"];
     if (openaiAuth?.access && openaiAuth.type === "oauth") {
-      openaiPromises.push(
-        (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchCodexUsage({
-            accessToken: openaiAuth.access!,
-            accountId: openaiAuth.accountId,
-            email: openaiAuth.email,
-            refreshToken: openaiAuth.refresh,
-            signal,
-          });
-          report.providerId = "openai";
-          report.providerName = "OpenAI (ChatGPT)";
-          report.isSessionAccount = isOpenAIActive;
-          return report;
-        })()
-      );
+      const report = buildOpenAIUsageReport(openaiAuth);
+      report.isSessionAccount = isOpenAIActive;
+      openaiPromises.push(Promise.resolve(report));
     }
   }
 

@@ -41,6 +41,9 @@ export interface ProviderUsageReport {
    * stays narrow; `/usage` keeps the descriptive `capacitySummary`.
    */
   capacitySummaryShort?: string;
+  /** Informational limitation, not a credential failure or an empty quota. */
+  quotaUnavailableReason?: string;
+  usageUrl?: string;
   error?: string;
 }
 

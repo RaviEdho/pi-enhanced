@@ -382,6 +382,10 @@ function buildUsageBar(ctx: ExtensionContext): string {
     return `${prefix}  [COOLDOWN ~${cooldownStr}]`;
   }
 
+  if (account.provider === "openai" && account.type === "oauth") {
+    return `${prefix}  Quota unavailable (/usage)`;
+  }
+
   const report = QuotaManager.getInstance().getReport(account.id);
   if (!report || report.groups.length === 0) {
     return `${prefix}  ···`;
@@ -668,7 +672,9 @@ async function refreshCandidateAccounts(
   await Promise.allSettled(
     candidates.map(async (account) => {
       try {
-        const token = await balancer.ensureFreshToken(account);
+        const token = account.provider === "openai" && account.type === "oauth"
+          ? account.access || ""
+          : await balancer.ensureFreshToken(account);
         await quotaManager.ensureFreshQuota(
           account,
           token,
@@ -704,7 +710,9 @@ async function refreshSessionAccountQuota(
 
   const quotaManager = QuotaManager.getInstance();
   try {
-    const token = await balancer.ensureFreshToken(account);
+    const token = account.provider === "openai" && account.type === "oauth"
+      ? account.access || ""
+      : await balancer.ensureFreshToken(account);
     await quotaManager.ensureFreshQuota(
       account,
       token,

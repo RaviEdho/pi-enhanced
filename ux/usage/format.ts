@@ -356,7 +356,7 @@ export function buildUsageLines(
     const canFitTwoColumns =
       availableWidth >= 100 &&
       providerReports.length === 2 &&
-      !providerReports.some((r) => r.error);
+      !providerReports.some((r) => r.error || r.quotaUnavailableReason);
 
     if (canFitTwoColumns) {
       // 2-Account Side-by-Side Presentation
@@ -428,6 +428,11 @@ export function buildUsageLines(
                 ? report.error
                 : `Could not fetch usage: ${report.error}`);
           lines.push(`      ${error(`⚠️  ${cleanErr}`)}`);
+        } else if (report.quotaUnavailableReason) {
+          lines.push(`      ${dim(report.quotaUnavailableReason)}`);
+          if (report.usageUrl) {
+            lines.push(`      ${dim(`View usage: ${report.usageUrl}`)}`);
+          }
         } else {
           const allBuckets = report.groups.flatMap((g) => g.buckets);
           if (allBuckets.length === 0) {

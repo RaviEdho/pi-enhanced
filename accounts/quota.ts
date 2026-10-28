@@ -7,6 +7,7 @@ import { computeTimeElapsedFraction } from "../ux/usage/format.js";
 import { fetchHyperUsage } from "../ux/usage/hyper.js";
 import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
 import { fetchKenariUsage } from "../ux/usage/kenari.js";
+import { buildOpenAIUsageReport } from "../ux/usage/openai.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
@@ -56,7 +57,11 @@ export class QuotaManager {
       if (parsed && typeof parsed === "object") {
         for (const [id, entry] of Object.entries(parsed)) {
           if (entry && typeof entry === "object" && "report" in entry) {
-            this.cache.set(id, entry as CachedQuotaEntry);
+            const cached = entry as CachedQuotaEntry;
+            // Old OpenAI entries came from an unauthorized legacy Codex probe.
+            // Never let those cached auth errors disable an otherwise valid login.
+            if (cached.report?.providerId === "openai") continue;
+            this.cache.set(id, cached);
           }
         }
       }
@@ -116,7 +121,7 @@ export class QuotaManager {
     });
     this.saveDiskCache();
 
-    if (report.error) {
+    if (report.error && report.providerId !== "openai") {
       const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
       if (isAuthErr) {
         const store = AccountStore.getInstance();
@@ -167,6 +172,12 @@ export class QuotaManager {
     const now = Date.now();
     if (entry && now - entry.fetchedAt < maxAgeMs) {
       return entry.report;
+    }
+
+    if (account.provider === "openai" && account.type === "oauth") {
+      const report = buildOpenAIUsageReport({ ...account, accountId: account.id });
+      this.setReport(account.id, report);
+      return report;
     }
 
     const inFlight = this.inFlightFetches.get(account.id);
@@ -259,7 +270,9 @@ export class QuotaManager {
     }
 
     const entry = this.getReportEntry(account.id);
-    const report = entry?.report;
+    // OpenAI SIWC quota is unknown. Only actual inference cooldowns above
+    // should affect its health, never stale legacy quota reports.
+    const report = account.provider === "openai" ? undefined : entry?.report;
     if (report?.error) {
       const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
       if (isAuthErr) {
