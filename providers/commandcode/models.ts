@@ -1118,20 +1118,27 @@ export const COMMANDCODE_MODEL_METADATA: Record<string, ModelMetadata> = {
       "cacheWrite": 0
     }
   },
-  // The model catalog omits effort capabilities; these are from model-publisher docs.
+  // The API catalog omits efforts; these match Command Code CLI v1.88.1's
+  // bundled command-code-knowledge/reference/models.md.
+  "gpt-6.1-terra": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  "inclusionai/ling-3.1-flash": { efforts: ["low", "medium", "high"] },
+  // Command Code documents automatic reasoning depth, not selectable efforts.
+  "ornith/ornith-1.5-122b": { efforts: [] },
   "moonshotai/Kimi-K3.1-Pro": { efforts: ["low", "high", "max"] },
   "minimax/minimax-m3.1-flash": {
     efforts: ["low", "medium", "high", "xhigh", "max"],
   },
   "Qwen/Qwen3.8-Max-Prime": { efforts: ["low", "medium", "xhigh"] },
   "nvidia/nemotron-3.5-super-vl": {
-    efforts: ["none", "low", "medium", "high", "xhigh"],
+    efforts: ["low", "medium", "high"],
   },
   "reflection/beam:free": {
     efforts: ["low", "medium", "high", "xhigh", "max"],
   },
   "meta/muse-spark-open": {
-    efforts: ["low", "medium", "high", "xhigh"],
+    efforts: ["low", "medium", "high"],
   }
 };
 
