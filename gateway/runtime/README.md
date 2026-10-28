@@ -15,7 +15,7 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `pi-rpc.mjs` | Own one Pi child process, RPC framing, request timeouts, and agent settlement. |
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
-| `commands.mjs` | Register slash commands; own expiring model/thinking pickers and home-channel configuration. |
+| `commands.mjs` | Register slash commands and model/thinking autocomplete; handle setting changes and home-channel configuration. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
 | `messages.mjs` | Split/send text, manage typing, and safely download supported Discord CDN images. |
 | `threads.mjs` | Own thread registration, persistence, pruning, and generated-title watchers. |

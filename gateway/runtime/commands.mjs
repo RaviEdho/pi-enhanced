@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { buildConversationSettingPayload } from "./components.mjs";
 import { replyEphemeral } from "./interactions.mjs";
+import { discordOptionLabel } from "./messages.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 import { writePrivateJson } from "./persistence.mjs";
 
@@ -19,10 +20,20 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
           .setDescription("Set the home channel for gateway notifications to this channel"),
         new SlashCommandBuilder()
           .setName("model")
-          .setDescription("Choose the model for this Discord conversation"),
+          .setDescription("Choose the model for this Discord conversation")
+          .addStringOption((option) => option
+            .setName("model")
+            .setDescription("Search available models, or leave blank to open the picker")
+            .setRequired(false)
+            .setAutocomplete(true)),
         new SlashCommandBuilder()
           .setName("thinking")
-          .setDescription("Choose the thinking level for this Discord conversation"),
+          .setDescription("Choose the thinking level for this Discord conversation")
+          .addStringOption((option) => option
+            .setName("level")
+            .setDescription("Search available thinking levels")
+            .setRequired(true)
+            .setAutocomplete(true)),
       ].map((command) => command.toJSON());
       await readyClient.application?.commands.set(commands);
 
@@ -45,6 +56,63 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       log("Discord slash commands registered globally; duplicate guild-scoped commands cleaned up.");
     } catch (error) {
       log(`Failed to register slash commands: ${summarizeDiscordError(error)}`);
+    }
+  }
+
+  async function handleAutocomplete(interaction) {
+    const setting = interaction.commandName === "model" || interaction.commandName === "thinking"
+      ? interaction.commandName
+      : undefined;
+    if (!setting) return;
+
+    const respond = async (choices) => {
+      try {
+        await interaction.respond(choices);
+      } catch {
+        // Discord autocomplete interactions expire quickly; stale replies are best-effort.
+      }
+    };
+
+    if (lifecycle.isStopping() || (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id))) {
+      await respond([]);
+      return;
+    }
+    const sessionKey = getConversationSessionKey(interaction);
+    if (!sessionKey) {
+      await respond([]);
+      return;
+    }
+
+    try {
+      const expectedOption = setting === "model" ? "model" : "level";
+      const focused = interaction.options.getFocused(true);
+      if (focused.name !== expectedOption) {
+        await respond([]);
+        return;
+      }
+      const session = sessions.peek(sessionKey);
+      if (!session || session.closed) {
+        await respond([]);
+        return;
+      }
+
+      const response = await session.request(
+        setting === "model" ? "get_available_models" : "get_available_thinking_levels",
+        {},
+        2000,
+      );
+      if (!response.success) {
+        await respond([]);
+        return;
+      }
+      const query = typeof focused.value === "string" ? focused.value : "";
+      const options = setting === "model"
+        ? buildModelAutocompleteChoices(response.data?.models, query)
+        : buildThinkingAutocompleteChoices(response.data?.levels, query);
+      await respond(options);
+    } catch (error) {
+      log(`Discord /${setting} autocomplete failed: ${safeErrorName(error)}`);
+      await respond([]);
     }
   }
 
@@ -191,6 +259,41 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
         }
       }
 
+      const selectedValue = interaction.options?.getString(setting === "model" ? "model" : "level");
+      if (selectedValue !== null && selectedValue !== undefined) {
+        const selected = setting === "model"
+          ? options.find((option) => `${option?.provider}/${option?.id}` === selectedValue)
+          : options.find((option) => option === selectedValue);
+        if (selected === undefined) {
+          await interaction.editReply(`That ${setting === "model" ? "model" : "thinking level"} is not available to this Pi session.`);
+          return;
+        }
+
+        const label = setting === "model"
+          ? `${selected.provider}/${selected.id}`
+          : String(selected);
+        void lifecycle.trackTask(sessions.enqueue(sessionKey, async () => {
+          if (lifecycle.isStopping()) throw new Error("The gateway is restarting or stopping");
+          if (session.closed || sessions.peek(sessionKey) !== session) {
+            throw new Error("The conversation session is no longer active");
+          }
+          if (session.running) throw new Error("This conversation is currently generating a response");
+          const result = setting === "model"
+            ? await session.request("set_model", { provider: selected.provider, modelId: selected.id })
+            : await session.request("set_thinking_level", { level: selected });
+          if (!result.success) throw new Error(result.error || "Pi rejected the setting");
+        }).then(async () => {
+          await interaction.editReply({
+            content: `This conversation will use ${setting === "model" ? "model" : "thinking level"} **${label}**.`,
+            allowedMentions: { parse: [] },
+          });
+        }).catch(async (error) => {
+          log(`Discord /${setting} selection failed: ${safeErrorName(error)}`);
+          await interaction.editReply(`Could not apply that ${setting} setting. Run the command again and choose an available option.`).catch(() => undefined);
+        }));
+        return;
+      }
+
       const token = randomUUID();
       const pending = {
         token,
@@ -296,5 +399,56 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     }
   }
 
-  return { registerSlashCommands, handleChatInputCommand, handleConversationSettingInteraction, close, cancelSession };
+  return { registerSlashCommands, handleAutocomplete, handleChatInputCommand, handleConversationSettingInteraction, close, cancelSession };
+}
+
+function buildModelAutocompleteChoices(models, query) {
+  if (!Array.isArray(models)) return [];
+  const seen = new Set();
+  return models
+    .map((model, index) => {
+      if (typeof model?.provider !== "string" || typeof model?.id !== "string") return undefined;
+      const value = `${model.provider}/${model.id}`;
+      if (value.length > 100 || seen.has(value)) return undefined;
+      seen.add(value);
+      const modelName = typeof model.name === "string" && model.name.trim() ? model.name.trim() : model.id;
+      const searchText = `${modelName} ${value}`.toLowerCase();
+      const score = autocompleteMatchScore(query, searchText);
+      if (score === undefined) return undefined;
+      const label = modelName === model.id ? value : `${value} — ${modelName}`;
+      return {
+        choice: { name: discordOptionLabel(label), value },
+        score,
+        index,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .slice(0, 25)
+    .map((item) => item.choice);
+}
+
+function buildThinkingAutocompleteChoices(levels, query) {
+  if (!Array.isArray(levels)) return [];
+  return levels
+    .filter((level) => typeof level === "string" && level.length <= 100)
+    .map((level, index) => ({
+      choice: { name: discordOptionLabel(level), value: level },
+      score: autocompleteMatchScore(query, level.toLowerCase()),
+      index,
+    }))
+    .filter((item) => item.score !== undefined)
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .slice(0, 25)
+    .map((item) => item.choice);
+}
+
+function autocompleteMatchScore(query, searchableText) {
+  const normalized = String(query || "").trim().toLowerCase();
+  if (!normalized) return 0;
+  const terms = normalized.split(/\s+/);
+  if (!terms.every((term) => searchableText.includes(term))) return undefined;
+  if (searchableText.startsWith(normalized)) return 0;
+  if (searchableText.includes(normalized)) return 1;
+  return 2;
 }

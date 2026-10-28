@@ -67,6 +67,12 @@ client.on("messageCreate", (message) => {
   void lifecycle.handleMessage(() => router.handleMessage(message));
 });
 client.on("interactionCreate", (interaction) => {
+  if (interaction.isAutocomplete?.()) {
+    void commands.handleAutocomplete(interaction).catch((error) => {
+      log(`Discord slash-command autocomplete failed: ${safeErrorName(error)}`);
+    });
+    return;
+  }
   if (interaction.isChatInputCommand?.()) {
     void commands.handleChatInputCommand(interaction).catch((error) => {
       log(`Discord slash command failed: ${safeErrorName(error)}`);
