@@ -1,5 +1,5 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 
 const SECTION_HEADINGS = new Set(["ACCESS", "UNATTENDED TOOLS", "WORKSPACE", "SECURITY"]);
@@ -80,11 +80,9 @@ export class DiscordConfirmationDialog implements Component {
     const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
 
-    const left = `${border("── ")}${bold(accent(this.title))} `;
-    const leftWidth = visibleWidth(`── ${this.title} `);
-    const fillCount = Math.max(1, width - leftWidth - 2);
-    const lines = [`${left}${border("─".repeat(fillCount))}${border("──")}`, ""];
-    const contentWidth = Math.max(10, width - 4);
+    const header = truncateToWidth(`${border("── ")}${bold(accent(this.title))} `, width);
+    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const contentWidth = Math.max(1, width - 4);
 
     for (const contentLine of this.content) {
       if (!contentLine) {
@@ -118,9 +116,8 @@ export class DiscordConfirmationDialog implements Component {
       keyHint("tui.select.confirm", "confirm"),
       keyHint("tui.select.cancel", "cancel"),
     ].join("  ");
-    lines.push(`  ${muted(hints)}`);
-    lines.push("");
-    lines.push(border("─".repeat(Math.max(1, width))));
-    return lines;
+    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
+    lines.push(border("─".repeat(Math.max(0, width))));
+    return lines.map((line) => truncateToWidth(line, width));
   }
 }

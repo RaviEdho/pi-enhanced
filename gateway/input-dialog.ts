@@ -1,5 +1,5 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Input, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 
 export class DiscordInputDialog implements Component {
@@ -70,11 +70,9 @@ export class DiscordInputDialog implements Component {
     const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
 
-    const header = `${border("── ")}${bold(accent(this.title))} `;
-    const headerWidth = visibleWidth(`── ${this.title} `);
-    const fillCount = Math.max(1, width - headerWidth - 2);
-    const lines = [`${header}${border("─".repeat(fillCount))}${border("──")}`, ""];
-    const contentWidth = Math.max(10, width - 4);
+    const header = truncateToWidth(`${border("── ")}${bold(accent(this.title))} `, width);
+    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const contentWidth = Math.max(1, width - 4);
 
     for (const line of wrapTextWithAnsi(this.instruction, contentWidth)) {
       lines.push(`  ${text(line)}`);
@@ -82,9 +80,9 @@ export class DiscordInputDialog implements Component {
     lines.push("");
     lines.push(...this.input.render(contentWidth).map((line) => `  ${line}`));
     lines.push("");
-    lines.push(`  ${muted(keyHint("tui.select.confirm", "submit"))}  ${muted(keyHint("tui.select.cancel", "cancel"))}`);
-    lines.push("");
-    lines.push(border("─".repeat(Math.max(1, width))));
-    return lines;
+    const hints = `${keyHint("tui.select.confirm", "submit")}  ${keyHint("tui.select.cancel", "cancel")}`;
+    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
+    lines.push(border("─".repeat(Math.max(0, width))));
+    return lines.map((line) => truncateToWidth(line, width));
   }
 }

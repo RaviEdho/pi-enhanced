@@ -1,5 +1,5 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 
 export interface DiscordAccessPaths {
@@ -93,20 +93,14 @@ export class DiscordToggleDialog implements Component {
       ? this.theme.fg(enabled ? "success" : "warning", value)
       : value;
 
-    const title = "Discord Access Paths";
-    const header = `${border("── ")}${bold(accent(title))} `;
-    const headerWidth = visibleWidth(`── ${title} `);
-    const fillCount = Math.max(1, width - headerWidth - 2);
-    const lines = [`${header}${border("─".repeat(fillCount))}${border("──")}`, ""];
-    for (const line of wrapTextWithAnsi("Choose which Discord routes the gateway accepts. Enter or Space toggles a path.", Math.max(10, width - 4))) {
-      lines.push(`  ${text(line)}`);
-    }
-    lines.push("");
+    const header = truncateToWidth(`${border("── ")}${bold(accent("Discord Message Access"))} `, width);
+    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const contentWidth = Math.max(1, width - 4);
 
     const options = [
-      { label: "DM access", enabled: this.allowDirectMessages },
-      { label: "Server access", enabled: this.allowServerMessages },
-      { label: "Save access paths", enabled: undefined },
+      { label: "Direct messages", enabled: this.allowDirectMessages },
+      { label: "Server messages", enabled: this.allowServerMessages },
+      { label: "Save changes", enabled: undefined },
     ];
     for (let index = 0; index < options.length; index++) {
       const option = options[index];
@@ -123,9 +117,8 @@ export class DiscordToggleDialog implements Component {
       keyHint("tui.select.confirm", "toggle/save"),
       keyHint("tui.select.cancel", "cancel"),
     ].join("  ");
-    lines.push(`  ${muted(hints)}`);
-    lines.push("");
-    lines.push(border("─".repeat(Math.max(1, width))));
-    return lines;
+    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
+    lines.push(border("─".repeat(Math.max(0, width))));
+    return lines.map((line) => truncateToWidth(line, width));
   }
 }

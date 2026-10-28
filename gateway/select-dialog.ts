@@ -1,5 +1,5 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 
 export interface DiscordSelectDialogOptions {
@@ -75,13 +75,12 @@ export class DiscordSelectDialog implements Component {
     const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
 
-    const header = `${border("── ")}${bold(accent(this.options.title))} `;
-    const headerWidth = visibleWidth(`── ${this.options.title} `);
-    const fillCount = Math.max(1, width - headerWidth - 2);
-    const lines = [`${header}${border("─".repeat(fillCount))}${border("──")}`, ""];
+    const header = truncateToWidth(`${border("── ")}${bold(accent(this.options.title))} `, width);
+    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const contentWidth = Math.max(1, width - 4);
     if (this.options.description) {
-      for (const line of wrapTextWithAnsi(this.options.description, Math.max(10, width - 4))) {
-        lines.push(`  ${text(line)}`);
+      for (const line of wrapTextWithAnsi(this.options.description, contentWidth)) {
+        lines.push(`  ${muted(line)}`);
       }
       lines.push("");
     }
@@ -101,9 +100,8 @@ export class DiscordSelectDialog implements Component {
       keyHint("tui.select.confirm", "select"),
       keyHint("tui.select.cancel", "cancel"),
     ].join("  ");
-    lines.push(`  ${muted(hints)}`);
-    lines.push("");
-    lines.push(border("─".repeat(Math.max(1, width))));
-    return lines;
+    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
+    lines.push(border("─".repeat(Math.max(0, width))));
+    return lines.map((line) => truncateToWidth(line, width));
   }
 }
