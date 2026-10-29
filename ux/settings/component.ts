@@ -3,15 +3,12 @@ import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
   stripTerminalSequences,
-  visibleWidth,
-  Container,
   fuzzyFilter,
   getKeybindings,
   Input,
   SelectList,
   SettingsList,
-  Spacer,
-  Text,
+  wrapTextWithAnsi,
   type Component,
   type SelectItem,
   type SettingItem,
@@ -23,6 +20,7 @@ import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
+import { DialogFrame } from "../dialog.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   COMMIT_MODEL_SESSION_LABEL,
@@ -42,9 +40,9 @@ interface CacheWarningState {
 /**
  * Interactive settings component for pi-enhanced.
  * Matches Pi's native `/settings` modal conventions:
- * - Clean layout with top and bottom borders
+ * - Shared, bounded dialog chrome and page scrolling
  * - Built-in search input with real-time fuzzy filtering
- * - Native keyboard navigation (Tab, Left/Right cycling, PageUp/PageDown, Home/End, Esc)
+ * - Native keyboard navigation (Tab, Left/Right cycling, Home/End, Esc)
  */
 export class EnhancedSettingsComponent implements Component {
   private tui: TUI;
@@ -55,6 +53,10 @@ export class EnhancedSettingsComponent implements Component {
   private settingsList: SettingsList;
   private items: SettingItem[];
   private cacheWarning?: CacheWarningState;
+  private frame: DialogFrame;
+  private focusSearch = true;
+  private hasFocus = false;
+  private modelMenu?: { title: string; searchInput: Input; focusLine: number };
 
   constructor(
     tui: TUI,
@@ -64,6 +66,7 @@ export class EnhancedSettingsComponent implements Component {
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.frame = new DialogFrame(tui, theme);
     this.onDone = onDone;
     this.ctx = ctx;
     this.store = EnhancedSettingsStore.getInstance();
@@ -154,38 +157,62 @@ export class EnhancedSettingsComponent implements Component {
             placeholderStyle: (text) => this.theme.fg("dim", text),
           });
           let selectList: SelectList;
+          let focusSearch = false;
+          let listRows = 0;
+          const menu = {
+            title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
+            searchInput,
+            focusLine: 0,
+          };
+          this.modelMenu = menu;
+          this.frame.resetScroll();
 
+          const finish = (value?: string) => {
+            this.modelMenu = undefined;
+            this.focusSearch = false;
+            this.frame.resetScroll();
+            done(value);
+          };
           const createSelectList = (query: string) => {
             const choices = query
               ? fuzzyFilter(modelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
               : modelChoices;
-            selectList = new SelectList(choices, Math.min(choices.length, 10), listTheme);
+            selectList = new SelectList(choices, Math.max(1, Math.min(10, this.frame.bodyHeight - 6)), listTheme);
             const selectedIndex = query
               ? -1
               : choices.findIndex((choice) => choice.value === selectedValue);
             if (selectedIndex >= 0) selectList.setSelectedIndex(selectedIndex);
-            selectList.onSelect = (choice) => done(choice.value);
-            selectList.onCancel = () => done();
+            selectList.onSelect = (choice) => finish(choice.value);
+            selectList.onCancel = () => finish();
           };
           createSelectList("");
 
-          const container = new Container();
-          const title = isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model";
-          container.addChild(new Text(this.theme.fg("accent", this.theme.bold(title))));
-          container.addChild(new Spacer(1));
-          container.addChild(searchInput);
-          container.addChild(new Spacer(1));
-          container.addChild({
-            render: (width: number) => selectList.render(width),
-            invalidate: () => selectList.invalidate(),
-            handleMouse: (event: TuiMouseEvent) => selectList.handleMouse(event),
-          });
-          container.addChild(new Spacer(1));
-          container.addChild(new Text(this.theme.fg("dim", "↑↓ navigate • Enter select • Esc back")));
-
           return {
-            render: (width: number) => container.render(width),
-            invalidate: () => container.invalidate(),
+            render: (width: number) => {
+              searchInput.focused = this.hasFocus;
+              const selected = selectList.getSelectedItem();
+              // Native rows truncate model names/descriptions. Keep the complete selected
+              // model below the list, where the shared viewport can page through it.
+              const details = selected
+                ? [selected.label ?? selected.value, selected.description ?? ""]
+                    .filter(Boolean)
+                    .flatMap((text) => wrapTextWithAnsi(text, Math.max(1, width - 2)))
+                : [];
+              (selectList as any).maxVisible = Math.max(1,
+                Math.min(10, this.frame.bodyHeight - 4 - Math.min(3, details.length)));
+              const rows = selectList.render(width);
+              listRows = rows.length;
+              const selectedRow = rows.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
+              menu.focusLine = focusSearch ? 0 : 2 + Math.max(0, selectedRow);
+              return [
+                ...searchInput.render(width), "", ...rows,
+                ...(details.length ? ["", ...details.map((line) => this.theme.fg("muted", `  ${line}`))] : []),
+              ];
+            },
+            invalidate: () => {
+              searchInput.invalidate();
+              selectList.invalidate();
+            },
             handleInput: (data: string) => {
               const keybindings = getKeybindings();
               if (
@@ -194,14 +221,26 @@ export class EnhancedSettingsComponent implements Component {
                 keybindings.matches(data, "tui.select.confirm") ||
                 keybindings.matches(data, "tui.select.cancel")
               ) {
+                focusSearch = false;
                 selectList.handleInput(data);
               } else {
+                focusSearch = true;
                 searchInput.handleInput(data);
                 createSelectList(searchInput.getValue());
               }
               this.tui.requestRender();
             },
-            handleMouse: (event: TuiMouseEvent) => container.handleMouse(event),
+            handleMouse: (event: TuiMouseEvent) => {
+              if (event.y === 0) {
+                focusSearch = true;
+                return searchInput.handleMouse(event);
+              }
+              if (event.y >= 2 && event.y < 2 + listRows) {
+                focusSearch = false;
+                return selectList.handleMouse({ ...event, y: event.y - 2 });
+              }
+              return undefined;
+            },
           };
         };
       } else if (def.key === "scout.interceptShell" && !scoutActive) {
@@ -222,7 +261,7 @@ export class EnhancedSettingsComponent implements Component {
       };
     });
 
-    const maxVisible = 10; // Exactly matches Pi native settings selector height
+    const maxVisible = Math.max(1, Math.min(10, this.frame.bodyHeight - 6));
     const listTheme = getSettingsListTheme();
 
     this.settingsList = new SettingsList(
@@ -239,115 +278,104 @@ export class EnhancedSettingsComponent implements Component {
     );
   }
 
+  public get focused(): boolean {
+    return this.hasFocus;
+  }
+
+  public set focused(value: boolean) {
+    this.hasFocus = value;
+    const searchInput = (this.settingsList as any)?.searchInput as Input | undefined;
+    if (searchInput) searchInput.focused = value;
+    if (this.modelMenu) this.modelMenu.searchInput.focused = value;
+  }
+
   public invalidate(): void {
     this.settingsList.invalidate();
+    (this.settingsList as any).searchInput?.invalidate();
   }
 
   public render(width: number): string[] {
-    const lines: string[] = [];
-
-    // Cache warning dialog (if mid-session disable triggered on >= 10k context)
+    const innerWidth = Math.max(1, width - 2);
     if (this.cacheWarning) {
-      const title = " Prompt Cache Invalidation Warning ";
-      const lineWidth = Math.max(0, width - visibleWidth(title) - 2);
-      const borderLine = "─".repeat(lineWidth);
-      const header =
-        this.theme.fg("warning", "──") +
-        this.theme.fg("warning", this.theme.bold(title)) +
-        this.theme.fg("warning", borderLine);
-      lines.push(header);
-      lines.push("");
-
-      const kTok = (this.cacheWarning.contextTokens / 1000).toFixed(1);
-      lines.push(
-        "  " +
-          this.theme.fg("warning", "⚠ ") +
-          this.theme.fg(
-            "text",
-            `Active context has ~${kTok}k tokens (≥ 10k threshold).`
-          )
-      );
-      lines.push(
-        "  " +
-          this.theme.fg(
-            "text",
-            `Disabling ${this.cacheWarning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`
-          )
-      );
-      lines.push(
-        "  " +
-          this.theme.fg(
-            "dim",
-            "Subsequent requests will incur cache misses, increasing turnaround latency and token costs."
-          )
-      );
-      lines.push("");
-
-      const optKeep =
-        this.cacheWarning.selectedOption === 0
-          ? this.theme.fg("accent", "→ ") +
-            this.theme.fg("accent", this.theme.bold("Keep enabled (recommended)"))
-          : "  " + this.theme.fg("dim", "Keep enabled (recommended)");
-
-      const optDisable =
-        this.cacheWarning.selectedOption === 1
-          ? this.theme.fg("accent", "→ ") +
-            this.theme.fg("accent", this.theme.bold("Proceed and disable anyway"))
-          : "  " + this.theme.fg("dim", "Proceed and disable anyway");
-
-      lines.push("  " + optKeep);
-      lines.push("  " + optDisable);
-      lines.push("");
-      lines.push("  " + this.theme.fg("dim", "↑/↓ toggle  •  Enter confirm  •  Esc cancel"));
-      lines.push(this.theme.fg("warning", "─".repeat(Math.max(1, width))));
-      return lines;
+      const warning = this.cacheWarning;
+      const content: string[] = [];
+      const paragraph = (text: string, color: string) => {
+        content.push(...wrapTextWithAnsi(this.theme.fg(color, text), innerWidth)
+          .map((line) => `  ${line}`));
+      };
+      paragraph(`Active context has ~${(warning.contextTokens / 1000).toFixed(1)}k tokens (≥ 10k threshold).`, "warning");
+      content.push("");
+      paragraph(`Disabling ${warning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`, "text");
+      content.push("");
+      paragraph("Subsequent requests will incur cache misses, increasing turnaround latency and token costs.", "dim");
+      content.push("");
+      let focusLine = content.length;
+      ["Keep enabled (recommended)", "Proceed and disable anyway"].forEach((label, index) => {
+        const selected = index === warning.selectedOption;
+        if (selected) focusLine = content.length;
+        const prefix = selected ? "→ " : "  ";
+        const rows = wrapTextWithAnsi(selected ? this.theme.bold(label) : label, Math.max(1, innerWidth - 2));
+        content.push(...rows.map((line, row) =>
+          `  ${this.theme.fg(selected ? "accent" : "dim", `${row === 0 ? prefix : "  "}${line}`)}`));
+      });
+      return this.frame.render(width, {
+        title: "Prompt Cache Invalidation Warning",
+        content,
+        hints: ["↑↓ toggle", "Enter confirm", "Esc cancel"],
+        focusLine,
+      });
     }
 
-    // 1. Top border with title header
-    const title = " Enhanced Settings ";
-    const lineWidth = Math.max(0, width - visibleWidth(title) - 2);
-    const borderLine = "─".repeat(lineWidth);
-    const header =
-      this.theme.fg("border", "──") +
-      this.theme.fg("accent", this.theme.bold(title)) +
-      this.theme.fg("border", borderLine);
-    lines.push(header);
+    const anyList = this.settingsList as any;
+    const submenu = !!anyList.submenuComponent;
+    const displayItems: SettingItem[] = anyList.getDisplayItems();
+    const selected = displayItems[anyList.selectedIndex];
+    if (!submenu) {
+      const descriptionRows = selected?.description
+        ? wrapTextWithAnsi(selected.description, Math.max(1, innerWidth - 4)).length : 0;
+      // Search + gap, native count, description gap, and a spare row for wrapped
+      // frame hints. Long descriptions remain intact and accessible with PgDn.
+      anyList.maxVisible = Math.max(1,
+        Math.min(10, this.frame.bodyHeight - 5 - Math.min(3, descriptionRows)));
+      anyList.searchInput.focused = this.hasFocus;
+    }
+    let listLines = this.settingsList.render(innerWidth);
+    if (!submenu) {
+      // Native SettingsList ends with a blank and its own keyboard hint.
+      // The frame owns hints, including scroll instructions and dismissal.
+      listLines = listLines.slice(0, -2);
+      if (selected?.submenu && selected.currentValue) {
+        listLines.push("", ...wrapTextWithAnsi(selected.currentValue, Math.max(1, innerWidth - 2))
+          .map((line) => this.theme.fg("muted", `  ${line}`)));
+      }
 
-    // 2. Settings list (contains search input + items + description + native hint line)
-    let listLines = this.settingsList.render(width);
-
-    // If Scout search tools are disabled, render the interceptor setting row in faded dim color
-    if (!this.isScoutCurrentlyEnabled()) {
       listLines = listLines.map((line) => {
         const clean = stripTerminalSequences(line);
-        if (clean.includes("Scout Shell Interceptor")) {
+        if ((!this.isScoutCurrentlyEnabled() && clean.includes("Scout Shell Interceptor")) ||
+            (!this.isSubagentCurrentlyEnabled() && clean.includes("Subagent Default Mode"))) {
           return this.theme.fg("dim", clean);
         }
         return line;
       });
     }
-
-    // If Subagent tools are disabled, render the subagent default mode row in faded dim color
-    if (!this.isSubagentCurrentlyEnabled()) {
-      listLines = listLines.map((line) => {
-        const clean = stripTerminalSequences(line);
-        if (clean.includes("Subagent Default Mode")) {
-          return this.theme.fg("dim", clean);
-        }
-        return line;
-      });
-    }
-
-    lines.push(...listLines);
-
-    // 3. Bottom border
-    const bottomBorder = this.theme.fg("border", "─".repeat(Math.max(1, width)));
-    lines.push(bottomBorder);
-
-    return lines;
+    const selectedRow = listLines.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
+    return this.frame.render(width, {
+      title: this.modelMenu?.title ?? "Enhanced Settings",
+      metadata: this.modelMenu ? "Enhanced Settings" : undefined,
+      content: listLines.map((line) => `  ${line}`),
+      hints: this.modelMenu
+        ? ["Type to search", "↑↓ navigate", "Enter select", "Esc back"]
+        : ["Type to search", "↑↓/Tab navigate", "←→/Enter change", "Esc close"],
+      focusLine: this.modelMenu?.focusLine ?? (this.focusSearch ? 0 : Math.max(0, selectedRow)),
+    });
   }
 
   public handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
+    // Paging may deliberately leave the active control. The next edit or
+    // navigation returns to it, even if the native list keeps it on the same row.
+    this.frame.resetScroll();
+
     // Intercept input during cache warning confirmation
     if (this.cacheWarning) {
       if (
@@ -405,6 +433,17 @@ export class EnhancedSettingsComponent implements Component {
       return true;
     }
     const searchVal: string = anyList.searchInput?.getValue?.() ?? "";
+    const keybindings = getKeybindings();
+    this.focusSearch = !(
+      keybindings.matches(data, "tui.select.up") ||
+      keybindings.matches(data, "tui.select.down") ||
+      keybindings.matches(data, "tui.select.confirm") ||
+      data === "\t" || data === "\x1b[Z" ||
+      (searchVal.length === 0 && (
+        matchesKey(data, "left") || matchesKey(data, "right") ||
+        matchesKey(data, "home") || matchesKey(data, "end") || data === " "
+      ))
+    );
 
     // Escape handling:
     // If search filter has text, clear search input first; if already empty, close dialog
@@ -495,25 +534,6 @@ export class EnhancedSettingsComponent implements Component {
       }
     }
 
-    // PageUp (\x1b[5~): Jump selection up by 5
-    if (data === "\x1b[5~") {
-      anyList.selectedIndex = Math.max(0, anyList.selectedIndex - 5);
-      this.skipUnselectableItems("up");
-      this.tui.requestRender();
-      return true;
-    }
-
-    // PageDown (\x1b[6~): Jump selection down by 5
-    if (data === "\x1b[6~") {
-      anyList.selectedIndex = Math.min(
-        displayItems.length - 1,
-        anyList.selectedIndex + 5
-      );
-      this.skipUnselectableItems("down");
-      this.tui.requestRender();
-      return true;
-    }
-
     // Home (\x1b[H or \x1b[1~): Jump to first item (when search input is empty)
     if ((data === "\x1b[H" || data === "\x1b[1~") && searchVal.length === 0) {
       anyList.selectedIndex = 0;
@@ -545,20 +565,22 @@ export class EnhancedSettingsComponent implements Component {
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // Top border occupies row 0; adjust y by -1 for SettingsList
-    if (event.y >= 1) {
-      const adjustedEvent: TuiMouseEvent = {
-        ...event,
-        y: event.y - 1,
-      };
-      const result = this.settingsList.handleMouse?.(adjustedEvent);
-      if (result) {
-        this.skipUnselectableItems("down");
-        this.tui.requestRender();
-        return result;
-      }
+    // Never let confirmation or chrome clicks mutate settings underneath them.
+    const contentRow = this.frame.contentRowAt(event.y);
+    if (this.cacheWarning || contentRow === undefined || event.x < 2) return undefined;
+    const adjustedEvent: TuiMouseEvent = {
+      ...event,
+      x: event.x - 2,
+      y: contentRow,
+    };
+    this.focusSearch = adjustedEvent.y === 0 && event.type !== "wheel";
+    const result = this.settingsList.handleMouse?.(adjustedEvent);
+    if (result) {
+      this.frame.resetScroll();
+      this.skipUnselectableItems("down");
+      this.tui.requestRender();
+      return result;
     }
-
     return undefined;
   }
 

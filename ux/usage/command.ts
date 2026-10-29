@@ -11,7 +11,8 @@ import type {
   TuiMouseEvent,
   TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
+import { DialogFrame } from "../dialog.js";
 import { AccountBalancer } from "../../accounts/balancer.js";
 import { QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
@@ -598,7 +599,7 @@ export interface UsageViewerOptions {
 }
 
 /**
- * Interactive fullscreen/modal component rendering provider quotas and rate limits
+ * Height-bounded dialog rendering provider quotas and rate limits
  * with live in-place refresh, keyboard scrolling, and native Pi visual hierarchy.
  */
 export class UsageViewerComponent implements Component {
@@ -618,7 +619,7 @@ export class UsageViewerComponent implements Component {
   private spinnerTimer?: NodeJS.Timeout;
   private ageTimer?: NodeJS.Timeout;
   private abortController = new AbortController();
-  private scrollTop = 0;
+  private frame: DialogFrame;
 
   constructor(
     tui: TUI,
@@ -629,6 +630,7 @@ export class UsageViewerComponent implements Component {
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.frame = new DialogFrame(tui, theme);
     this.keybindings = keybindings;
     this.onDone = onDone;
     this.options = options;
@@ -715,8 +717,7 @@ export class UsageViewerComponent implements Component {
   }
 
   private scrollBy(delta: number): void {
-    this.scrollTop += delta;
-    this.tui.requestRender();
+    this.frame.scrollBy(delta);
   }
 
   invalidate(): void {}
@@ -762,7 +763,7 @@ export class UsageViewerComponent implements Component {
     }
 
     if (matchesKey(data, "pageUp") || matchesKey(data, "ctrl+u")) {
-      this.scrollBy(-8);
+      this.scrollBy(-this.frame.bodyHeight);
       return true;
     }
 
@@ -771,19 +772,17 @@ export class UsageViewerComponent implements Component {
       matchesKey(data, "ctrl+d") ||
       matchesKey(data, "space")
     ) {
-      this.scrollBy(8);
+      this.scrollBy(this.frame.bodyHeight);
       return true;
     }
 
     if (matchesKey(data, "home") || data === "g") {
-      this.scrollTop = 0;
-      this.tui.requestRender();
+      this.frame.scrollTo(0);
       return true;
     }
 
     if (matchesKey(data, "end") || data === "G") {
-      this.scrollTop = 9999;
-      this.tui.requestRender();
+      this.frame.scrollTo(Number.MAX_SAFE_INTEGER);
       return true;
     }
 
@@ -800,8 +799,6 @@ export class UsageViewerComponent implements Component {
 
   render(width: number): string[] {
     const accentFn = (s: string) => (this.theme?.fg ? this.theme.fg("accent", s) : s);
-    const borderFn = (s: string) => (this.theme?.fg ? this.theme.fg("border", s) : s);
-    const boldFn = (s: string) => (this.theme?.bold ? this.theme.bold(s) : s);
     const dimFn = (s: string) => (this.theme?.fg ? this.theme.fg("dim", s) : s);
 
     const titleText = "Provider Quotas & Rate Limits";
@@ -828,42 +825,19 @@ export class UsageViewerComponent implements Component {
       rightBadge = `fetched ${ageStr}`;
     }
 
-    const leftText = `── ${titleText} `;
-    const leftPart = `${borderFn("── ")}${boldFn(accentFn(titleText))} `;
-    const leftVisible = visibleWidth(leftText);
-
-    const rightText = rightBadge ? ` ${rightBadge} ──` : " ──";
-    const rightPart = rightBadge ? ` ${dimFn(rightBadge)}${borderFn(" ──")}` : borderFn(" ──");
-    const rightVisible = visibleWidth(rightText);
-
-    let topBorder: string;
-    if (leftVisible + rightVisible + 2 <= width) {
-      const fillCount = Math.max(1, width - leftVisible - rightVisible);
-      topBorder = `${leftPart}${borderFn("─".repeat(fillCount))}${rightPart}`;
-    } else {
-      const fillCount = Math.max(1, width - leftVisible - 2);
-      topBorder = `${leftPart}${borderFn("─".repeat(fillCount))}${borderFn("──")}`;
-    }
-
-    const lines: string[] = [topBorder];
+    const lines: string[] = [];
 
     if (this.loading && this.reports.length === 0) {
       const spinner = accentFn(SPINNER_FRAMES[this.frameIndex]);
-      lines.push("");
       lines.push(`  ${spinner} ${dimFn("Fetching provider quotas across configured accounts...")}`);
-      lines.push("");
     } else if (this.errorMsg && this.reports.length === 0) {
-      lines.push("");
       lines.push(
         `  ${this.theme?.fg ? this.theme.fg("error", `Failed to load usage: ${this.errorMsg}`) : `Failed to load usage: ${this.errorMsg}`}`
       );
-      lines.push("");
     } else if (this.reports.length === 0) {
-      lines.push("");
       lines.push(
         `  ${this.theme?.fg ? this.theme.fg("warning", "No active provider accounts found to report usage for.") : "No active provider accounts found to report usage for."}`
       );
-      lines.push("");
     } else {
       const allContentLines = buildUsageLines(this.reports, {
         sessionInfo: this.sessionInfo,
@@ -872,57 +846,24 @@ export class UsageViewerComponent implements Component {
         now: Date.now(),
       });
 
-      const termRows =
-        this.tui.terminal?.rows ||
-        (typeof process !== "undefined" && process.stdout?.rows) ||
-        24;
-      // Overhead: topBorder (1) + blank (1) + blank (1) + hints (1) + blank (1) + bottomBorder (1) = 6
-      const viewportHeight = Math.max(5, termRows - 6);
-      const canScroll = allContentLines.length > viewportHeight;
-      const maxScroll = Math.max(0, allContentLines.length - viewportHeight);
-      this.scrollTop = Math.max(0, Math.min(maxScroll, this.scrollTop));
-
-      const visibleLines = canScroll
-        ? allContentLines.slice(this.scrollTop, this.scrollTop + viewportHeight)
-        : allContentLines;
-
-      lines.push("");
-      lines.push(...visibleLines);
-      lines.push("");
-
-      // Footer hints inside the box
-      const hints: string[] = [];
-      hints.push(formatKeyHint(this.theme, "r", "refresh"));
-      if (canScroll) {
-        const scrollInfo = `${this.scrollTop + 1}-${Math.min(allContentLines.length, this.scrollTop + viewportHeight)}/${allContentLines.length}`;
-        hints.push(formatKeyHint(this.theme, "↑↓", `scroll (${scrollInfo})`));
-      }
-      hints.push(formatKeyHint(this.theme, "Esc", "close"));
-
-      lines.push(`  ${hints.join("  ·  ")}`);
-      lines.push("");
-
-      // Bottom border
-      lines.push(borderFn("─".repeat(Math.max(1, width))));
-      return lines;
+      lines.push(...allContentLines);
     }
 
-    // Inside box hints for loading / empty / error state
-    const simpleHints = [formatKeyHint(this.theme, "Esc", "close")];
-    if (this.errorMsg) {
-      simpleHints.unshift(formatKeyHint(this.theme, "r", "retry"));
-    }
-    lines.push(`  ${simpleHints.join("  ·  ")}`);
-    lines.push("");
-
-    // Bottom border closes the box
-    lines.push(borderFn("─".repeat(Math.max(1, width))));
-    return lines;
+    const hints = [];
+    if (!this.loading) hints.push(formatKeyHint(this.theme, "r", this.errorMsg ? "retry" : "refresh"));
+    hints.push(formatKeyHint(this.theme, "Esc", "close"));
+    return this.frame.render(width, {
+      title: titleText,
+      metadata: rightBadge,
+      content: lines,
+      hints,
+      scrollKeys: "↑↓",
+    });
   }
 }
 
 /**
- * Renders the usage breakdown in a full TUI dialog, displaying in-modal loading state without polluting scrollback.
+ * Renders the usage breakdown in a bounded TUI dialog with in-modal loading state.
  */
 async function showUsageTui(ctx: ExtensionCommandContext): Promise<void> {
   const sessionId = ctx.sessionManager?.getSessionId?.();

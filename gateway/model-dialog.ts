@@ -1,7 +1,8 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, SelectItem, TUI } from "@earendil-works/pi-tui";
-import { fuzzyFilter, Input, SelectList, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { fuzzyFilter, Input, SelectList } from "@earendil-works/pi-tui";
+import { DialogFrame } from "../ux/dialog.js";
 
 export async function selectDiscordModel(
   ctx: ExtensionCommandContext,
@@ -27,8 +28,12 @@ export async function selectDiscordModel(
 
 /** A bounded, searchable model list built from Pi's native input and selector. */
 export class DiscordModelDialog implements Component, Focusable {
+  private readonly frame: DialogFrame;
   private readonly input: Input;
   private list!: SelectList;
+  private filtered: SelectItem[] = [];
+  private listSize = 1;
+  private searching = false;
 
   constructor(
     private readonly tui: TUI,
@@ -38,6 +43,7 @@ export class DiscordModelDialog implements Component, Focusable {
     private readonly currentValue: string,
     private readonly onDone: (value: string | undefined) => void
   ) {
+    this.frame = new DialogFrame(tui, theme);
     this.input = new Input({
       placeholder: "Search models…",
       placeholderStyle: (text) => this.theme.fg("muted", text),
@@ -58,35 +64,41 @@ export class DiscordModelDialog implements Component, Focusable {
     this.list.invalidate();
   }
 
-  private updateList(): void {
+  private updateList(selectedValue?: string): void {
     const query = this.input.getValue();
-    const filtered = query
+    this.filtered = query
       ? fuzzyFilter(this.choices, query, (choice) => `${choice.value} ${choice.label} ${choice.description || ""}`)
       : this.choices;
-    this.list = new SelectList(filtered, 8, {
+    // Reserve a row for search and one for wrapped frame hints.
+    this.listSize = Math.max(1, Math.min(8, this.frame.bodyHeight - 2));
+    this.list = new SelectList(this.filtered, this.listSize, {
       selectedPrefix: (text) => this.theme.fg("accent", text),
       selectedText: (text) => this.theme.fg("accent", text),
       description: (text) => this.theme.fg("muted", text),
       scrollInfo: (text) => this.theme.fg("dim", text),
       noMatch: () => this.theme.fg("muted", "  No matching models"),
     });
-    if (!query) {
-      const index = filtered.findIndex((choice) => choice.value === this.currentValue);
-      if (index >= 0) this.list.setSelectedIndex(index);
-    }
+    const value = selectedValue ?? (!query ? this.currentValue : undefined);
+    const index = this.filtered.findIndex((choice) => choice.value === value);
+    if (index >= 0) this.list.setSelectedIndex(index);
     this.list.onSelect = (choice) => this.onDone(choice.value);
     this.list.onCancel = () => this.onDone(undefined);
   }
 
   handleInput(data: string): void {
+    if (this.frame.handleInput(data)) return;
+    // Return to the active control after manually paging the viewport.
+    this.frame.resetScroll();
     if (
       this.keybindings.matches(data, "tui.select.up") ||
       this.keybindings.matches(data, "tui.select.down") ||
       this.keybindings.matches(data, "tui.select.confirm") ||
       this.keybindings.matches(data, "tui.select.cancel")
     ) {
+      this.searching = false;
       this.list.handleInput(data);
     } else {
+      this.searching = true;
       this.input.handleInput(data);
       this.updateList();
     }
@@ -95,28 +107,33 @@ export class DiscordModelDialog implements Component, Focusable {
 
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - 4);
-    const header = truncateToWidth(
-      `${this.theme.fg("border", "── ")}${this.theme.bold(this.theme.fg("accent", "Discord Default Model"))} `,
-      width
-    );
-    const lines = [
-      `${header}${this.theme.fg("border", "─".repeat(Math.max(0, width - visibleWidth(header))))}`,
-      ...wrapTextWithAnsi(`Current: ${this.currentValue || "Pi default"}`, contentWidth)
-        .map((line) => `  ${this.theme.fg("muted", line)}`),
-      "",
-      ...this.input.render(contentWidth).map((line) => `  ${line}`),
-      "",
-      ...this.list.render(contentWidth).map((line) => `  ${line}`),
-      "",
-    ];
+    const listSize = Math.max(1, Math.min(8, this.frame.bodyHeight - 2));
+    if (listSize !== this.listSize) this.updateList(this.list.getSelectedItem()?.value);
+
+    // The frame owns scrolling chrome; omit SelectList's trailing scroll counter.
+    const listLines = this.list.render(contentWidth).slice(0, Math.max(1, Math.min(this.filtered.length, this.listSize)));
+    const inputLines = this.input.render(contentWidth);
+    const lines = [...inputLines, ...listLines].map((line) => `  ${line}`);
+    const selectedIndex = Math.max(0, this.filtered.indexOf(this.list.getSelectedItem()!));
+    const startIndex = Math.max(0, Math.min(
+      selectedIndex - Math.floor(this.listSize / 2),
+      this.filtered.length - this.listSize
+    ));
+    // On tiny terminals search and selection may not fit together. Reveal the
+    // control being used rather than cropping the selected model out of view.
+    const focusLine = this.searching ? 0 : inputLines.length + selectedIndex - startIndex;
     const hints = [
       rawKeyHint("type", "search"),
-      rawKeyHint("↑↓", "navigate"),
+      rawKeyHint("↑↓", `navigate (${this.filtered.length ? selectedIndex + 1 : 0}/${this.filtered.length})`),
       keyHint("tui.select.confirm", "select"),
       keyHint("tui.select.cancel", "cancel"),
-    ].join("  ");
-    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${this.theme.fg("muted", line)}`));
-    lines.push(this.theme.fg("border", "─".repeat(Math.max(0, width))));
-    return lines.map((line) => truncateToWidth(line, width));
+    ];
+    return this.frame.render(width, {
+      title: "Discord Default Model",
+      metadata: `Current: ${this.currentValue || "Pi default"}`,
+      content: lines,
+      hints,
+      focusLine,
+    });
   }
 }

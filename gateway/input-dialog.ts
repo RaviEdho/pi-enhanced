@@ -1,8 +1,10 @@
-import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import { Input, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../ux/dialog.js";
 
-export class DiscordInputDialog implements Component {
+export class DiscordInputDialog implements Component, Focusable {
+  private readonly frame: DialogFrame;
   private readonly tui: TUI;
   private readonly theme: any;
   private readonly title: string;
@@ -21,6 +23,7 @@ export class DiscordInputDialog implements Component {
     onDone: (value: string | undefined) => void,
     keybindings?: any
   ) {
+    this.frame = new DialogFrame(tui, theme);
     this.tui = tui;
     this.theme = theme;
     this.title = title;
@@ -36,9 +39,21 @@ export class DiscordInputDialog implements Component {
     this.input.focused = true;
   }
 
-  invalidate(): void {}
+  get focused(): boolean {
+    return this.input.focused;
+  }
+
+  set focused(value: boolean) {
+    this.input.focused = value;
+  }
+
+  invalidate(): void {
+    this.input.invalidate();
+  }
 
   handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
+
     if (matchesKey(data, "enter")) {
       this.onDone(this.input.getValue());
       return true;
@@ -58,31 +73,24 @@ export class DiscordInputDialog implements Component {
       return true;
     }
 
+    this.frame.resetScroll();
     this.input.handleInput(data);
     this.tui.requestRender();
     return true;
   }
 
   render(width: number): string[] {
-    const accent = (value: string) => this.theme?.fg ? this.theme.fg("accent", value) : value;
-    const border = (value: string) => this.theme?.fg ? this.theme.fg("border", value) : value;
     const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
-    const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
-    const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
-
-    const header = truncateToWidth(`${border("── ")}${bold(accent(this.title))} `, width);
-    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
     const contentWidth = Math.max(1, width - 4);
-
-    for (const line of wrapTextWithAnsi(this.instruction, contentWidth)) {
-      lines.push(`  ${text(line)}`);
-    }
+    const lines = wrapTextWithAnsi(this.instruction, contentWidth).map((line) => `  ${text(line)}`);
     lines.push("");
+    const focusLine = lines.length;
     lines.push(...this.input.render(contentWidth).map((line) => `  ${line}`));
-    lines.push("");
-    const hints = `${keyHint("tui.select.confirm", "submit")}  ${keyHint("tui.select.cancel", "cancel")}`;
-    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
-    lines.push(border("─".repeat(Math.max(0, width))));
-    return lines.map((line) => truncateToWidth(line, width));
+    return this.frame.render(width, {
+      title: this.title,
+      content: lines,
+      hints: [keyHint("tui.select.confirm", "submit"), keyHint("tui.select.cancel", "cancel")],
+      focusLine,
+    });
   }
 }

@@ -1,49 +1,20 @@
-import {
-  CancellableLoader,
-  Container,
-  Spacer,
-  Text,
-  type TUI,
-} from "@earendil-works/pi-tui";
+import { CancellableLoader, type Component, type TUI } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../../ux/dialog.js";
 
-class DynamicBorder {
-  private color: (s: string) => string;
-
-  constructor(color: (s: string) => string) {
-    this.color = color;
-  }
-
-  invalidate(): void {}
-
-  render(width: number): string[] {
-    return [this.color("─".repeat(Math.max(1, width)))];
-  }
-}
-
-/**
- * Pi-native bordered loader for foreground (synchronous) subagent execution.
- * Built with Pi's DynamicBorder, CancellableLoader, semantic theme colors,
- * and standard Esc cancellation hint.
- */
-export class SubagentBorderedLoader extends Container {
-  private loader: CancellableLoader;
+/** Native cancellable loader inside the shared, height-bounded dialog frame. */
+export class SubagentBorderedLoader implements Component {
+  private readonly loader: CancellableLoader;
+  private readonly frame: DialogFrame;
 
   constructor(tui: TUI, theme: any, initialMessage: string) {
-    super();
-    const borderColor = (s: string) => (theme?.fg ? theme.fg("border", s) : s);
-    this.addChild(new DynamicBorder(borderColor));
+    this.frame = new DialogFrame(tui, theme);
     this.loader = new CancellableLoader(
       tui,
       (s) => (theme?.fg ? theme.fg("accent", s) : s),
       (s) => (theme?.fg ? theme.fg("muted", s) : s),
       initialMessage
     );
-    this.addChild(this.loader);
-    this.addChild(new Spacer(1));
-    this.addChild(new Text(keyHint("tui.select.cancel", "cancel"), 1, 0));
-    this.addChild(new Spacer(1));
-    this.addChild(new DynamicBorder(borderColor));
   }
 
   get signal(): AbortSignal {
@@ -58,8 +29,20 @@ export class SubagentBorderedLoader extends Container {
     this.loader.setMessage(message);
   }
 
+  invalidate(): void {
+    this.loader.invalidate();
+  }
+
+  render(width: number): string[] {
+    return this.frame.render(width, {
+      title: "Subagent",
+      content: this.loader.render(Math.max(1, width - 2)).slice(1).map((line) => `  ${line}`),
+      hints: [keyHint("tui.select.cancel", "cancel")],
+    });
+  }
+
   handleInput(data: string): void {
-    this.loader.handleInput(data);
+    if (!this.frame.handleInput(data)) this.loader.handleInput(data);
   }
 
   dispose(): void {

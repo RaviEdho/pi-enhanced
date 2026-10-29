@@ -1,6 +1,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../ux/dialog.js";
 
 export interface DiscordAccessPaths {
   allowDirectMessages: boolean;
@@ -8,6 +9,7 @@ export interface DiscordAccessPaths {
 }
 
 export class DiscordToggleDialog implements Component {
+  private readonly frame: DialogFrame;
   private readonly tui: TUI;
   private readonly theme: any;
   private readonly onDone: (values: DiscordAccessPaths | undefined) => void;
@@ -23,6 +25,7 @@ export class DiscordToggleDialog implements Component {
     onDone: (values: DiscordAccessPaths | undefined) => void,
     keybindings?: any
   ) {
+    this.frame = new DialogFrame(tui, theme);
     this.tui = tui;
     this.theme = theme;
     this.allowDirectMessages = initialValues.allowDirectMessages;
@@ -34,6 +37,8 @@ export class DiscordToggleDialog implements Component {
   invalidate(): void {}
 
   handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
+
     if (
       matchesKey(data, "escape") ||
       data === "\x03" ||
@@ -50,11 +55,13 @@ export class DiscordToggleDialog implements Component {
     }
 
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
+      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 2) % 3;
       this.tui.requestRender();
       return true;
     }
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
+      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 1) % 3;
       this.tui.requestRender();
       return true;
@@ -77,6 +84,7 @@ export class DiscordToggleDialog implements Component {
   }
 
   private toggleSelectedPath(): void {
+    this.frame.resetScroll();
     if (this.selectedIndex === 0) this.allowDirectMessages = !this.allowDirectMessages;
     else if (this.selectedIndex === 1) this.allowServerMessages = !this.allowServerMessages;
     else return;
@@ -85,23 +93,20 @@ export class DiscordToggleDialog implements Component {
 
   render(width: number): string[] {
     const accent = (value: string) => this.theme?.fg ? this.theme.fg("accent", value) : value;
-    const border = (value: string) => this.theme?.fg ? this.theme.fg("border", value) : value;
     const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
-    const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
     const stateColor = (enabled: boolean, value: string) => this.theme?.fg
       ? this.theme.fg(enabled ? "success" : "warning", value)
       : value;
 
-    const header = truncateToWidth(`${border("── ")}${bold(accent("Discord Message Access"))} `, width);
-    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
-    const contentWidth = Math.max(1, width - 4);
+    const lines: string[] = [];
 
     const options = [
       { label: "Direct messages", enabled: this.allowDirectMessages },
       { label: "Server messages", enabled: this.allowServerMessages },
       { label: "Save changes", enabled: undefined },
     ];
+    const focusLine = this.selectedIndex;
     for (let index = 0; index < options.length; index++) {
       const option = options[index];
       const prefix = index === this.selectedIndex ? `${accent("→")} ` : "  ";
@@ -110,15 +115,17 @@ export class DiscordToggleDialog implements Component {
       lines.push(`  ${prefix}${label}${state}`);
     }
 
-    lines.push("");
     const hints = [
       rawKeyHint("↑↓", "navigate"),
       rawKeyHint("Space", "toggle"),
       keyHint("tui.select.confirm", "toggle/save"),
       keyHint("tui.select.cancel", "cancel"),
-    ].join("  ");
-    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
-    lines.push(border("─".repeat(Math.max(0, width))));
-    return lines.map((line) => truncateToWidth(line, width));
+    ];
+    return this.frame.render(width, {
+      title: "Discord Message Access",
+      content: lines,
+      hints,
+      focusLine,
+    });
   }
 }

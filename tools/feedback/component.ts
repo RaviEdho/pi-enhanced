@@ -2,10 +2,13 @@ import {
   Input,
   matchesKey,
   wrapTextWithAnsi,
+  visibleWidth,
   type Component,
+  type Focusable,
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { QuestionItem, SingleAnswerDetail } from "./types.js";
+import { DialogFrame } from "../../ux/dialog.js";
 
 const CUSTOM_CHOICE_LABEL = "✎ Type custom answer...";
 
@@ -42,7 +45,10 @@ export interface QuestionnaireResult {
  * - Clean option labels without synthetic "Option 1:" prefixes.
  * - In-place editing and recap screen before submission.
  */
-export class QuestionnaireComponent implements Component {
+export class QuestionnaireComponent implements Component, Focusable {
+  public focused = false;
+  private frame: DialogFrame;
+  private renderedIndex = -1;
   private tui: TUI;
   private theme: any;
   private onDone: (result: QuestionnaireResult | undefined) => void;
@@ -64,6 +70,7 @@ export class QuestionnaireComponent implements Component {
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.frame = new DialogFrame(tui, theme);
     this.onDone = onDone;
     this.allowCustom = options?.allowCustom ?? true;
     this.showRecap = options?.showRecap ?? true;
@@ -77,14 +84,15 @@ export class QuestionnaireComponent implements Component {
       }
 
       const textInput = new Input({
-        prompt: "  ❯ ",
+        prompt: "",
+        placeholder: item.placeholder || "Type your response...",
+        placeholderStyle: (text) => this.theme.fg("dim", text),
       });
-      textInput.focused = true;
-
       const customInput = new Input({
         prompt: "",
+        placeholder: "Type custom answer...",
+        placeholderStyle: (text) => this.theme.fg("dim", text),
       });
-      customInput.focused = true;
 
       return {
         item,
@@ -101,7 +109,19 @@ export class QuestionnaireComponent implements Component {
     });
   }
 
-  public invalidate(): void {}
+  public invalidate(): void {
+    for (const st of this.states) {
+      st.textInput.invalidate();
+      st.customInput.invalidate();
+    }
+  }
+
+  private requestRender(): void {
+    // A control interaction should reveal the active row, even after paging away.
+    // Ordinary renders and PgUp/PgDn leave the viewport alone.
+    this.frame.resetScroll();
+    this.tui.requestRender();
+  }
 
   public handleInput(data: string): boolean {
     // 1. Cancellation / Dismissal (Esc, Ctrl+C)
@@ -115,6 +135,8 @@ export class QuestionnaireComponent implements Component {
       return true;
     }
 
+    if (this.frame.handleInput(data)) return true;
+
     const total = this.states.length;
     const isRecapScreen = this.currentIndex === total;
 
@@ -124,7 +146,7 @@ export class QuestionnaireComponent implements Component {
       if (matchesKey(data, "left") || data === "\x1b[D" || data === "\x1b[Z") {
         this.currentIndex = Math.max(0, total - 1);
         this.syncHighlightedChoice(this.currentIndex);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
 
@@ -137,7 +159,7 @@ export class QuestionnaireComponent implements Component {
         data === "\t"
       ) {
         this.recapChoiceIndex = this.recapChoiceIndex === 0 ? 1 : 0;
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
 
@@ -162,7 +184,7 @@ export class QuestionnaireComponent implements Component {
           // Edit answers: jump back to question 0
           this.currentIndex = 0;
           this.syncHighlightedChoice(this.currentIndex);
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         }
       }
@@ -194,7 +216,7 @@ export class QuestionnaireComponent implements Component {
         // Up Arrow: move highlight up to standard choices
         if (matchesKey(data, "up") || data === "\x1b[A") {
           st.highlightedIndex = Math.max(0, st.highlightedIndex - 1);
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         }
 
@@ -206,7 +228,7 @@ export class QuestionnaireComponent implements Component {
           if (this.currentIndex > 0) {
             this.currentIndex--;
             this.syncHighlightedChoice(this.currentIndex);
-            this.tui.requestRender();
+            this.requestRender();
             return true;
           }
           return true;
@@ -220,11 +242,11 @@ export class QuestionnaireComponent implements Component {
           if (this.currentIndex < total - 1) {
             this.currentIndex++;
             this.syncHighlightedChoice(this.currentIndex);
-            this.tui.requestRender();
+            this.requestRender();
             return true;
           } else if (this.showRecap && this.currentIndex === total - 1) {
             this.currentIndex = total;
-            this.tui.requestRender();
+            this.requestRender();
             return true;
           }
           return true;
@@ -232,7 +254,7 @@ export class QuestionnaireComponent implements Component {
 
         // Immediately handle typing (printable characters, backspace, cursor movement)
         st.customInput.handleInput(data);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
 
@@ -242,7 +264,7 @@ export class QuestionnaireComponent implements Component {
         if (this.currentIndex > 0) {
           this.currentIndex--;
           this.syncHighlightedChoice(this.currentIndex);
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         }
         return true;
@@ -253,11 +275,11 @@ export class QuestionnaireComponent implements Component {
         if (this.currentIndex < total - 1) {
           this.currentIndex++;
           this.syncHighlightedChoice(this.currentIndex);
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         } else if (this.showRecap && this.currentIndex === total - 1) {
           this.currentIndex = total;
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         }
         return true;
@@ -266,13 +288,13 @@ export class QuestionnaireComponent implements Component {
       // Up / Down: Move highlighted choice
       if (matchesKey(data, "up") || data === "k") {
         st.highlightedIndex = Math.max(0, st.highlightedIndex - 1);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
 
       if (matchesKey(data, "down") || data === "j") {
         st.highlightedIndex = Math.min(st.options.length - 1, st.highlightedIndex + 1);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
 
@@ -281,7 +303,7 @@ export class QuestionnaireComponent implements Component {
         const numIdx = parseInt(data, 10) - 1;
         if (numIdx >= 0 && numIdx < st.options.length) {
           st.highlightedIndex = numIdx;
-          this.tui.requestRender();
+          this.requestRender();
           return true;
         }
       }
@@ -321,7 +343,7 @@ export class QuestionnaireComponent implements Component {
       if (this.currentIndex > 0) {
         this.currentIndex--;
         this.syncHighlightedChoice(this.currentIndex);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
       return true;
@@ -335,11 +357,11 @@ export class QuestionnaireComponent implements Component {
       if (this.currentIndex < total - 1) {
         this.currentIndex++;
         this.syncHighlightedChoice(this.currentIndex);
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       } else if (this.showRecap && this.currentIndex === total - 1) {
         this.currentIndex = total;
-        this.tui.requestRender();
+        this.requestRender();
         return true;
       }
       return true;
@@ -347,7 +369,7 @@ export class QuestionnaireComponent implements Component {
 
     // Delegate text typing, cursor movement, Kitty keys to Input component
     st.textInput.handleInput(data);
-    this.tui.requestRender();
+    this.requestRender();
     return true;
   }
 
@@ -371,7 +393,7 @@ export class QuestionnaireComponent implements Component {
         return;
       }
     }
-    this.tui.requestRender();
+    this.requestRender();
   }
 
   /**
@@ -390,220 +412,114 @@ export class QuestionnaireComponent implements Component {
     const lines: string[] = [];
     const total = this.states.length;
     const isRecap = this.currentIndex === total;
+    if (this.renderedIndex !== this.currentIndex) {
+      this.frame.resetScroll();
+      this.renderedIndex = this.currentIndex;
+    }
+    for (const st of this.states) {
+      st.textInput.focused = false;
+      st.customInput.focused = false;
+    }
 
-    // Titled top border
-    const title = width >= 11 ? " Ask User " : "";
-    const borderFill = Math.max(0, width - title.length - 1);
-    lines.push(
-      `${this.theme.fg("border", "─")}${title ? this.theme.fg("accent", this.theme.bold(title)) : ""}${this.theme.fg("border", "─".repeat(borderFill))}`
-    );
+    // Wrap all user-provided content before handing it to the bounded viewport.
+    const append = (text: string, prefix: string, style: (text: string) => string, continuation = prefix) => {
+      wrapQuestion(text, width - Math.max(visibleWidth(prefix), visibleWidth(continuation)))
+        .forEach((line, index) => lines.push(`${index === 0 ? prefix : continuation}${style(line)}`));
+    };
+    const color = (token: string) => (text: string) => this.theme.fg(token, text);
+    let focusLine: number | undefined;
 
-    // Header tabs (if multiple questions)
     if (total > 1) {
-      const tabParts: string[] = [];
-      for (let i = 0; i < total; i++) {
-        const s = this.states[i];
-        const isCurrent = this.currentIndex === i;
-        const statusMark = s.answered ? "●" : "○";
-        const label = `Q${i + 1} ${statusMark}`;
-
-        if (isCurrent) {
-          tabParts.push(this.theme.fg("accent", this.theme.bold(`[ ${label} ]`)));
-        } else if (s.answered) {
-          tabParts.push(this.theme.fg("success", label));
-        } else {
-          tabParts.push(this.theme.fg("dim", label));
-        }
-      }
-
+      const tabs = this.states.map((st, index) => {
+        const label = `Q${index + 1} ${st.answered ? "●" : "○"}`;
+        return this.currentIndex === index
+          ? this.theme.fg("accent", this.theme.bold(`[ ${label} ]`))
+          : this.theme.fg(st.answered ? "success" : "dim", label);
+      });
       if (this.showRecap) {
-        const reviewLabel = "Review";
-        if (isRecap) {
-          tabParts.push(this.theme.fg("accent", this.theme.bold(`[ ${reviewLabel} ]`)));
-        } else {
-          tabParts.push(this.theme.fg("dim", reviewLabel));
-        }
+        tabs.push(isRecap
+          ? this.theme.fg("accent", this.theme.bold("[ Review ]"))
+          : this.theme.fg("dim", "Review"));
       }
-
-      lines.push("  " + tabParts.join("  "));
+      append(tabs.join("  "), "  ", (text) => text);
       lines.push("");
     }
 
-    // Body content
     if (isRecap) {
-      lines.push(
-        "  " + this.theme.fg("accent", this.theme.bold("Review your responses:"))
-      );
+      append("Review your responses:", "  ", (text) => this.theme.fg("accent", this.theme.bold(text)));
       lines.push("");
-
       for (let i = 0; i < total; i++) {
-        const s = this.states[i];
-        const num = `${i + 1}.`;
-        const questionPrefix = `  ${num} `;
-        const wrappedQuestion = wrapQuestion(s.item.question, Math.max(1, width - 8));
-        for (let lineIndex = 0; lineIndex < wrappedQuestion.length; lineIndex++) {
-          const prefix =
-            lineIndex === 0
-              ? `  ${this.theme.fg("dim", num)} `
-              : " ".repeat(questionPrefix.length);
-          lines.push(`${prefix}${this.theme.fg("text", wrappedQuestion[lineIndex] || "")}`);
-        }
-
-        if (s.answered) {
-          const customTag = s.isCustom ? this.theme.fg("warning", "[custom] ") : "";
-          lines.push(`     → ${customTag}${this.theme.fg("success", s.selectedText || "")}`);
-        } else {
-          lines.push(`     → ${this.theme.fg("dim", "(skipped / not answered)")}`);
-        }
+        const st = this.states[i];
+        const prefix = `  ${i + 1}. `;
+        append(st.item.question, prefix, color("text"), " ".repeat(visibleWidth(prefix)));
+        const response = st.answered
+          ? `${st.isCustom ? this.theme.fg("warning", "[custom] ") : ""}${this.theme.fg("success", st.selectedText || "")}`
+          : this.theme.fg("dim", "(skipped / not answered)");
+        append(response, "     → ", (text) => text, "       ");
       }
-
       lines.push("");
-      lines.push("  " + this.theme.fg("muted", "Proceed with these responses?"));
+      append("Proceed with these responses?", "  ", color("muted"));
       lines.push("");
-
-      const options = ["Submit responses", "Edit answers"];
-      for (let j = 0; j < options.length; j++) {
-        const isSel = j === this.recapChoiceIndex;
-        if (isSel) {
-          lines.push(
-            "  " +
-              this.theme.fg("accent", "→ ") +
-              this.theme.fg("accent", this.theme.bold(options[j]))
-          );
-        } else {
-          lines.push("    " + this.theme.fg("dim", options[j]));
-        }
-      }
+      ["Submit responses", "Edit answers"].forEach((option, index) => {
+        const selected = index === this.recapChoiceIndex;
+        if (selected) focusLine = lines.length;
+        append(option, selected ? this.theme.fg("accent", "  → ") : "    ",
+          selected ? (text) => this.theme.fg("accent", this.theme.bold(text)) : color("dim"), "    ");
+      });
     } else {
       const st = this.states[this.currentIndex];
-      if (total > 1) {
-        lines.push(
-          "  " +
-            this.theme.fg("muted", `[Question ${this.currentIndex + 1} of ${total}]`)
-        );
-      }
-      const wrappedQuestion = wrapQuestion(st.item.question, Math.max(1, width - 4));
-      for (const questionLine of wrappedQuestion) {
-        lines.push("  " + this.theme.fg("accent", this.theme.bold(questionLine)));
-      }
+      append(st.item.question, "  ", (text) => this.theme.fg("accent", this.theme.bold(text)));
       lines.push("");
 
       if (st.isChoiceMode) {
-        for (let optIdx = 0; optIdx < st.options.length; optIdx++) {
-          const opt = st.options[optIdx];
-          const isHighlighted = optIdx === st.highlightedIndex;
-          const isOriginallySelected = st.answered && st.selectedOptionIndex === optIdx;
-
-          if (opt === CUSTOM_CHOICE_LABEL) {
-            if (isHighlighted) {
-              // Active inline typing for custom choice with normal white full block cursor
-              const customVal = st.customInput.getValue();
-              const cursor = (st.customInput as any).cursor ?? customVal.length;
-              const before = customVal.slice(0, cursor);
-
-              let cursorDisplay: string;
-              if (customVal.length === 0) {
-                const firstChar = "\x1b[30;47mT\x1b[0m";
-                const rest = this.theme.fg("dim", "ype custom answer...");
-                cursorDisplay = `${firstChar}${rest}`;
-              } else if (cursor < customVal.length) {
-                const charUnder = customVal[cursor];
-                cursorDisplay = `\x1b[30;47m${charUnder}\x1b[0m${customVal.slice(cursor + 1)}`;
-              } else {
-                cursorDisplay = "\x1b[97m█\x1b[39m";
-              }
-
-              const displayVal =
-                customVal.length === 0
-                  ? cursorDisplay
-                  : `${before}${cursorDisplay}`;
-
-              lines.push(`  ${this.theme.fg("accent", "→ ✎ ")}${displayVal}`);
+        st.options.forEach((option, index) => {
+          const highlighted = index === st.highlightedIndex;
+          const originallySelected = st.answered && st.selectedOptionIndex === index;
+          if (highlighted) focusLine = lines.length;
+          if (option === CUSTOM_CHOICE_LABEL) {
+            if (highlighted) {
+              st.customInput.focused = this.focused;
+              const prefix = this.theme.fg("accent", "  → ✎ ");
+              lines.push(prefix + st.customInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
             } else {
-              if (st.isCustom && st.selectedText) {
-                lines.push(
-                  `    ${this.theme.fg("dim", "✎ ")}${this.theme.fg("success", `"${st.selectedText}" ✔ (selected)`)}`
-                );
-              } else {
-                lines.push(`    ${this.theme.fg("dim", "✎ Type custom answer...")}`);
-              }
+              const label = st.isCustom && st.selectedText
+                ? `✎ ${this.theme.fg("success", `"${st.selectedText}" ✔ (selected)`)}`
+                : CUSTOM_CHOICE_LABEL;
+              append(label, "    ", color("dim"));
             }
           } else {
-            const cursorPrefix = isHighlighted
-              ? this.theme.fg("accent", "→ ")
-              : "  ";
-
-            let labelText = isHighlighted
-              ? this.theme.fg("accent", opt)
-              : this.theme.fg("text", opt);
-
-            // Visually mark the original choice if this question was already answered!
-            if (isOriginallySelected) {
-              labelText += `  ${this.theme.fg("success", "✔ (selected)")}`;
-            }
-
-            lines.push("  " + cursorPrefix + labelText);
+            const label = this.theme.fg(highlighted ? "accent" : "text", option)
+              + (originallySelected ? `  ${this.theme.fg("success", "✔ (selected)")}` : "");
+            append(label, highlighted ? this.theme.fg("accent", "  → ") : "    ", (text) => text, "    ");
           }
-        }
+        });
       } else {
-        lines.push("  " + this.theme.fg("muted", "Type your response (press Enter to confirm):"));
+        append("Type your response (press Enter to confirm):", "  ", color("muted"));
         lines.push("");
-
-        const val = st.textInput.getValue();
-        const cursor = (st.textInput as any).cursor ?? val.length;
-
-        if (val.length === 0) {
-          const placeholder = st.item.placeholder || "Type your response...";
-          const firstChar = placeholder[0] || " ";
-          const rest = placeholder.slice(1);
-          const cursorChar = `\x1b[30;47m${firstChar}\x1b[0m`;
-          const restFaded = this.theme.fg("dim", rest);
-          lines.push(`  ❯ ${cursorChar}${restFaded}`);
-        } else {
-          const before = val.slice(0, cursor);
-          let cursorDisplay: string;
-          if (cursor < val.length) {
-            const charUnder = val[cursor];
-            cursorDisplay = `\x1b[30;47m${charUnder}\x1b[0m${val.slice(cursor + 1)}`;
-          } else {
-            cursorDisplay = "\x1b[97m█\x1b[39m";
-          }
-          lines.push(`  ❯ ${before}${cursorDisplay}`);
-        }
-
+        st.textInput.focused = this.focused;
+        focusLine = lines.length;
+        const prefix = "  ❯ ";
+        lines.push(prefix + st.textInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
         if (st.answered && st.selectedText) {
           lines.push("");
-          lines.push(
-            "  " +
-              this.theme.fg("dim", "Confirmed answer: ") +
-              this.theme.fg("success", `"${st.selectedText}"`)
-          );
+          append(`${this.theme.fg("dim", "Confirmed answer: ")}${this.theme.fg("success", `"${st.selectedText}"`)}`,
+            "  ", (text) => text);
         }
       }
     }
 
-    lines.push("");
-
-    // Bottom navigation hints
-    const navHint =
-      total > 1
-        ? "←/→ navigate questions  •  "
-        : "";
-    const activeSt = !isRecap ? this.states[this.currentIndex] : undefined;
-
-    const actionHint = isRecap
-      ? "↑/↓ toggle  •  Enter confirm  •  Esc cancel"
-      : activeSt?.isChoiceMode
-      ? "↑/↓ choose  •  Enter confirm  •  Esc cancel"
-      : "Enter confirm  •  Esc cancel";
-
-    lines.push(
-      "  " + this.theme.fg("dim", `${navHint}${actionHint}`)
-    );
-
-    // Bottom border
-    lines.push(this.theme.fg("border", "─".repeat(Math.max(1, width))));
-
-    return lines;
+    const active = !isRecap ? this.states[this.currentIndex] : undefined;
+    return this.frame.render(width, {
+      title: "Ask User",
+      metadata: isRecap ? "Review" : `Question ${this.currentIndex + 1} of ${total}`,
+      content: lines,
+      focusLine,
+      hints: [
+        ...(total > 1 ? ["←/→ navigate questions"] : []),
+        ...(isRecap ? ["↑/↓ toggle"] : active?.isChoiceMode ? ["↑/↓ choose"] : []),
+        "Enter confirm",
+        "Esc cancel",
+      ],
+    });
   }
 }

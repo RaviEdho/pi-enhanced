@@ -1,6 +1,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../ux/dialog.js";
 
 export interface DiscordSelectDialogOptions {
   title: string;
@@ -9,6 +10,7 @@ export interface DiscordSelectDialogOptions {
 }
 
 export class DiscordSelectDialog implements Component {
+  private readonly frame: DialogFrame;
   private readonly tui: TUI;
   private readonly theme: any;
   private readonly options: DiscordSelectDialogOptions;
@@ -23,6 +25,7 @@ export class DiscordSelectDialog implements Component {
     onDone: (choice: string | undefined) => void,
     keybindings?: any
   ) {
+    this.frame = new DialogFrame(tui, theme);
     this.tui = tui;
     this.theme = theme;
     this.options = options;
@@ -33,6 +36,8 @@ export class DiscordSelectDialog implements Component {
   invalidate(): void {}
 
   handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
+
     if (matchesKey(data, "enter")) {
       this.onDone(this.options.options[this.selectedIndex]);
       return true;
@@ -54,12 +59,14 @@ export class DiscordSelectDialog implements Component {
     }
 
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
+      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex - 1 + this.options.options.length) % this.options.options.length;
       this.tui.requestRender();
       return true;
     }
 
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
+      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 1) % this.options.options.length;
       this.tui.requestRender();
       return true;
@@ -70,13 +77,11 @@ export class DiscordSelectDialog implements Component {
 
   render(width: number): string[] {
     const accent = (value: string) => this.theme?.fg ? this.theme.fg("accent", value) : value;
-    const border = (value: string) => this.theme?.fg ? this.theme.fg("border", value) : value;
     const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
     const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
 
-    const header = truncateToWidth(`${border("── ")}${bold(accent(this.options.title))} `, width);
-    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const lines: string[] = [];
     const contentWidth = Math.max(1, width - 4);
     if (this.options.description) {
       for (const line of wrapTextWithAnsi(this.options.description, contentWidth)) {
@@ -85,6 +90,7 @@ export class DiscordSelectDialog implements Component {
       lines.push("");
     }
 
+    const focusLine = lines.length + this.selectedIndex;
     for (let index = 0; index < this.options.options.length; index++) {
       const option = this.options.options[index];
       if (index === this.selectedIndex) {
@@ -94,14 +100,16 @@ export class DiscordSelectDialog implements Component {
       }
     }
 
-    lines.push("");
     const hints = [
       rawKeyHint("↑↓", "navigate"),
       keyHint("tui.select.confirm", "select"),
       keyHint("tui.select.cancel", "cancel"),
-    ].join("  ");
-    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
-    lines.push(border("─".repeat(Math.max(0, width))));
-    return lines.map((line) => truncateToWidth(line, width));
+    ];
+    return this.frame.render(width, {
+      title: this.options.title,
+      content: lines,
+      hints,
+      focusLine,
+    });
   }
 }

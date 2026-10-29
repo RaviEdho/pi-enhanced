@@ -1,6 +1,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../ux/dialog.js";
 
 const SECTION_HEADINGS = new Set(["ACCESS", "UNATTENDED TOOLS", "WORKSPACE", "SECURITY"]);
 
@@ -13,6 +14,7 @@ export interface DiscordConfirmationDialogOptions {
 }
 
 export class DiscordConfirmationDialog implements Component {
+  private readonly frame: DialogFrame;
   private readonly tui: TUI;
   private readonly theme: any;
   private readonly title: string;
@@ -22,6 +24,7 @@ export class DiscordConfirmationDialog implements Component {
   private readonly onDone: (approved: boolean) => void;
   private readonly keybindings: any;
   private selectedIndex = 0;
+  private followSelection = false;
 
   constructor(
     tui: TUI,
@@ -30,6 +33,7 @@ export class DiscordConfirmationDialog implements Component {
     onDone: (approved: boolean) => void,
     keybindings?: any
   ) {
+    this.frame = new DialogFrame(tui, theme);
     this.tui = tui;
     this.theme = theme;
     this.title = options.title;
@@ -43,6 +47,8 @@ export class DiscordConfirmationDialog implements Component {
   invalidate(): void {}
 
   handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
+
     if (matchesKey(data, "enter")) {
       this.onDone(this.selectedIndex === 0);
       return true;
@@ -65,6 +71,8 @@ export class DiscordConfirmationDialog implements Component {
 
     if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "tab")) {
       this.selectedIndex = this.selectedIndex === 0 ? 1 : 0;
+      this.followSelection = true;
+      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
@@ -74,14 +82,11 @@ export class DiscordConfirmationDialog implements Component {
 
   render(width: number): string[] {
     const accent = (value: string) => this.theme?.fg ? this.theme.fg("accent", value) : value;
-    const border = (value: string) => this.theme?.fg ? this.theme.fg("border", value) : value;
     const warning = (value: string) => this.theme?.fg ? this.theme.fg("warning", value) : value;
     const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
-    const muted = (value: string) => this.theme?.fg ? this.theme.fg("muted", value) : value;
     const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
 
-    const header = truncateToWidth(`${border("── ")}${bold(accent(this.title))} `, width);
-    const lines = [`${header}${border("─".repeat(Math.max(0, width - visibleWidth(header))))}`];
+    const lines: string[] = [];
     const contentWidth = Math.max(1, width - 4);
 
     for (const contentLine of this.content) {
@@ -102,6 +107,7 @@ export class DiscordConfirmationDialog implements Component {
     }
 
     lines.push("");
+    const focusLine = lines.length + this.selectedIndex;
     for (let index = 0; index < this.actions.length; index++) {
       if (index === this.selectedIndex) {
         lines.push(`  ${accent("→")} ${bold(accent(this.actions[index]))}`);
@@ -110,14 +116,17 @@ export class DiscordConfirmationDialog implements Component {
       }
     }
 
-    lines.push("");
     const hints = [
       rawKeyHint("↑↓", "navigate"),
       keyHint("tui.select.confirm", "confirm"),
       keyHint("tui.select.cancel", "cancel"),
-    ].join("  ");
-    lines.push(...wrapTextWithAnsi(hints, contentWidth).map((line) => `  ${muted(line)}`));
-    lines.push(border("─".repeat(Math.max(0, width))));
-    return lines.map((line) => truncateToWidth(line, width));
+    ];
+    return this.frame.render(width, {
+      title: this.title,
+      content: lines,
+      hints,
+      // Show disclosures first; follow actions only after explicit navigation.
+      focusLine: this.followSelection ? focusLine : undefined,
+    });
   }
 }

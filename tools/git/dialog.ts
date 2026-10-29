@@ -1,6 +1,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import { DialogFrame } from "../../ux/dialog.js";
 import { formatCommitFiles, formatCost, formatDuration } from "./format.js";
 import type {
   CommitActionEntry,
@@ -21,6 +22,8 @@ export interface CommitConfirmationDialogOptions {
 
 export class CommitConfirmationDialog implements Component {
   private tui: TUI;
+  private frame: DialogFrame;
+  private followSelection = false;
   private theme: any;
   private plan: CommitPlanProposal;
   private overview: GitStagedOverview;
@@ -39,6 +42,7 @@ export class CommitConfirmationDialog implements Component {
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.frame = new DialogFrame(tui, theme);
     this.keybindings = keybindings;
     this.plan = options.plan;
     this.overview = options.overview;
@@ -60,6 +64,7 @@ export class CommitConfirmationDialog implements Component {
   invalidate(): void {}
 
   handleInput(data: string): boolean {
+    if (this.frame.handleInput(data)) return true;
     if (matchesKey(data, "enter")) {
       if (this.selectedIndex === 0) {
         this.onDone({ action: "commit", message: this.fullMessage, stages: this.plan.stages });
@@ -106,12 +111,16 @@ export class CommitConfirmationDialog implements Component {
     // Navigation
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
       this.selectedIndex = (this.selectedIndex - 1 + 3) % 3;
+      this.followSelection = true;
+      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
 
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
       this.selectedIndex = (this.selectedIndex + 1) % 3;
+      this.followSelection = true;
+      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
@@ -122,9 +131,7 @@ export class CommitConfirmationDialog implements Component {
   render(width: number): string[] {
     const isMulti = this.plan.stages.length > 1;
     const accentFn = (s: string) => (this.theme?.fg ? this.theme.fg("accent", s) : s);
-    const borderFn = (s: string) => (this.theme?.fg ? this.theme.fg("border", s) : s);
     const boldFn = (s: string) => (this.theme?.bold ? this.theme.bold(s) : s);
-    const dimFn = (s: string) => (this.theme?.fg ? this.theme.fg("dim", s) : s);
     const mutedFn = (s: string) => (this.theme?.fg ? this.theme.fg("muted", s) : s);
     const textFn = (s: string) => (this.theme?.fg ? this.theme.fg("text", s) : s);
 
@@ -134,22 +141,30 @@ export class CommitConfirmationDialog implements Component {
       : `${this.usage.totalTokens.toLocaleString()} tokens`;
     const rightBadge = `${this.usage.modelId} • ${costBadge}`;
 
-    // Top border line: ── Title ──────────────────────── badge ──
-    const leftPart = `${borderFn("── ")}${boldFn(accentFn(titleText))} `;
-    const leftVisible = visibleWidth(`── ${titleText} `);
-    const rightPart = ` ${dimFn(rightBadge)}${borderFn(" ──")}`;
-    const rightVisible = visibleWidth(` ${rightBadge} ──`);
-
-    let topBorder: string;
-    if (leftVisible + rightVisible + 2 <= width) {
-      const fillCount = Math.max(1, width - leftVisible - rightVisible);
-      topBorder = `${leftPart}${borderFn("─".repeat(fillCount))}${rightPart}`;
-    } else {
-      const fillCount = Math.max(1, width - leftVisible - 2);
-      topBorder = `${leftPart}${borderFn("─".repeat(fillCount))}${borderFn("──")}`;
-    }
-
-    const lines: string[] = [topBorder, ""];
+    const lines: string[] = [];
+    const append = (text: string, indent: number, style: (text: string) => string) => {
+      for (const rawLine of text.split(/\r?\n/)) {
+        for (const line of wrapTextWithAnsi(rawLine, Math.max(1, width - indent))) {
+          lines.push(`${" ".repeat(indent)}${style(line)}`);
+        }
+      }
+    };
+    const appendBody = (body: string, indent: number) => {
+      for (const rawLine of body.trim().split(/\r?\n/)) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) {
+          lines.push("");
+          continue;
+        }
+        const isBullet = /^[-*•] /.test(trimmed);
+        const text = isBullet ? trimmed.slice(2).trim() : trimmed;
+        wrapTextWithAnsi(text, Math.max(1, width - indent - (isBullet ? 2 : 0)))
+          .forEach((line, index) => {
+            const prefix = " ".repeat(indent) + (isBullet ? (index === 0 ? "• " : "  ") : "");
+            lines.push(`${prefix}${textFn(line)}`);
+          });
+      }
+    };
 
     // Message preview
     if (isMulti) {
@@ -163,17 +178,14 @@ export class CommitConfirmationDialog implements Component {
         const typeScope = stage.scope ? `${stage.type}(${stage.scope})` : stage.type;
         const stageTitle = `${i + 1}. ${typeScope}: ${stage.subject}`;
 
-        lines.push(`  ${boldFn(textFn(stageTitle))}${countStr ? mutedFn(countStr) : ""}`);
+        append(`${boldFn(textFn(stageTitle))}${countStr ? mutedFn(countStr) : ""}`, 2, (text) => text);
 
         const files = formatCommitFiles(stage);
         if (files) {
-          lines.push(`     ${mutedFn(`Files: ${truncateToWidth(files, Math.max(10, width - 12), "…")}`)}`);
+          append(`Files: ${files}`, 5, mutedFn);
         }
         if (stage.body?.trim()) {
-          const firstBodyLine = stage.body.trim().split("\n")[0].trim().replace(/^[-*•]\s*/, "");
-          if (firstBodyLine) {
-            lines.push(`     ${dimFn("• " + truncateToWidth(firstBodyLine, Math.max(10, width - 8), "…"))}`);
-          }
+          appendBody(stage.body, 5);
         }
         if (i < this.plan.stages.length - 1) {
           lines.push("");
@@ -181,44 +193,19 @@ export class CommitConfirmationDialog implements Component {
       }
     } else {
       const single = this.plan.stages[0];
-      const headerWrapped = wrapTextWithAnsi(this.headerLine, Math.max(10, width - 4));
-      for (const hLine of headerWrapped) {
-        lines.push(`  ${boldFn(accentFn(hLine))}`);
-      }
+      append(this.headerLine, 2, (text) => boldFn(accentFn(text)));
 
       if (single?.files?.length || single?.hunks?.length) {
         lines.push("");
         const files = formatCommitFiles(single);
         if (files) {
-          lines.push(`  ${mutedFn(`Files: ${truncateToWidth(files, Math.max(10, width - 9), "…")}`)}`);
+          append(`Files: ${files}`, 2, mutedFn);
         }
       }
 
       if (single?.body?.trim()) {
         lines.push("");
-        const rawBodyLines = single.body.trim().split("\n");
-        for (const rawLine of rawBodyLines) {
-          const trimmed = rawLine.trim();
-          if (!trimmed) {
-            lines.push("");
-            continue;
-          }
-          const isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ");
-          const textAfterBullet = isBullet ? trimmed.slice(2).trim() : trimmed;
-
-          if (isBullet) {
-            const wrapped = wrapTextWithAnsi(textAfterBullet, Math.max(10, width - 6));
-            wrapped.forEach((line, idx) => {
-              const prefix = idx === 0 ? "  • " : "    ";
-              lines.push(`${prefix}${textFn(line)}`);
-            });
-          } else {
-            const wrapped = wrapTextWithAnsi(trimmed, Math.max(10, width - 4));
-            wrapped.forEach((line) => {
-              lines.push(`  ${textFn(line)}`);
-            });
-          }
-        }
+        appendBody(single.body, 2);
       }
     }
 
@@ -229,7 +216,7 @@ export class CommitConfirmationDialog implements Component {
     const statSummary = this.overview.statSummary ? ` (${this.overview.statSummary.split("\n")[0].trim()})` : "";
     const turnsInfo = `${this.usage.turns} turn${this.usage.turns === 1 ? "" : "s"} in ${formatDuration(this.usage.durationMs)}`;
     const overviewLabel = this.overview.label ?? "Staged";
-    lines.push(mutedFn(`  ${overviewLabel}: ${stagedCount} file${stagedCount === 1 ? "" : "s"}${statSummary} • ${turnsInfo}`));
+    append(`${overviewLabel}: ${stagedCount} file${stagedCount === 1 ? "" : "s"}${statSummary} • ${turnsInfo}`, 2, mutedFn);
 
     lines.push("");
 
@@ -240,33 +227,32 @@ export class CommitConfirmationDialog implements Component {
       isMulti ? "Edit plan" : "Edit message",
     ];
 
+    let focusLine: number | undefined;
     for (let i = 0; i < actions.length; i++) {
       const isSelected = i === this.selectedIndex;
       if (isSelected) {
+        focusLine = lines.length;
         lines.push(`  ${accentFn("→")} ${boldFn(accentFn(actions[i]))}`);
       } else {
         lines.push(`    ${textFn(actions[i])}`);
       }
     }
 
-    lines.push("");
-
-    // Native Key Hints
-    const hints = [
-      rawKeyHint("↑↓", "navigate"),
-      keyHint("tui.select.confirm", "confirm"),
-      rawKeyHint("c", "commit"),
-      rawKeyHint("p", "push"),
-      rawKeyHint("e", "edit"),
-      keyHint("tui.select.cancel", "cancel"),
-    ].join("  ");
-
-    lines.push(`  ${hints}`);
-    lines.push("");
-
-    // Bottom border
-    lines.push(borderFn("─".repeat(Math.max(1, width))));
-
-    return lines;
+    return this.frame.render(width, {
+      title: titleText,
+      metadata: rightBadge,
+      content: lines,
+      // Start with the proposal, then follow explicit action navigation. A stable
+      // focusLine lets PgUp/PgDn inspect the entire preview without snapping back.
+      focusLine: this.followSelection ? focusLine : undefined,
+      hints: [
+        rawKeyHint("↑↓", "navigate"),
+        keyHint("tui.select.confirm", "confirm"),
+        rawKeyHint("c", "commit"),
+        rawKeyHint("p", "push"),
+        rawKeyHint("e", "edit"),
+        keyHint("tui.select.cancel", "cancel"),
+      ],
+    });
   }
 }

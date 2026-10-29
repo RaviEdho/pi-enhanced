@@ -128,6 +128,8 @@ Run `/usage` to view live quotas, progress bars, and reset times across all acco
 pi -p "/usage"
 ```
 
+Custom TUI dialogs share a titled header, optional right-aligned metadata, and a keyboard-hint footer. Their total height is capped at **20 rows** or **terminal height minus 4 rows**, whichever is smaller (centralized in `ux/dialog.ts`). Overflow stays inside a scrollable viewport: use `PgUp`/`PgDn` in forms and selectors, or `↑`/`↓` in viewers. Pi-native dialogs and Discord's RPC-rendered dialogs are unchanged.
+
 ### 5. Inspect Context Window Breakdown (`/context`)
 
 Run `/context` to inspect the active context window consumption of the current chat:
@@ -147,7 +149,7 @@ pi -p "/context"
   - **Messages**: User messages and assistant turns, with inline thinking / reasoning tokens.
   - **Tools**: Tool execution results with call counts and compact breakdown of top tools.
   - **Compacted**: Compaction run history and summary tokens (if any).
-- **Interactive TUI Controls**: Re-analyze in real time with `r`, trigger manual compaction with `c`, and close cleanly with `esc` or `Enter`. Fits on any terminal without scrolling.
+- **Interactive TUI Controls**: Re-analyze in real time with `r`, trigger manual compaction with `c`, scroll with `↑`/`↓` or `PgUp`/`PgDn`, and close cleanly with `Esc` or `Enter`. Content stays inside the shared height-bounded dialog.
 
 ### 6. Enhanced Settings (`/settings-enhanced`)
 
