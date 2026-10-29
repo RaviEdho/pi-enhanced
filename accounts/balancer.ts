@@ -6,6 +6,7 @@ import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
 import { refreshHyperToken } from "../providers/hyper/oauth.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
+import { getHighestTierAccounts } from "./priority.js";
 import { AccountStore, SUPPORTED_PROVIDERS } from "./store.js";
 import type { AccountCredential, ResolvedAccountAuth } from "./types.js";
 import { EnhancedSettingsStore } from "../ux/settings/store.js";
@@ -213,7 +214,7 @@ export class AccountBalancer {
       health: quotaManager.evaluateAccountHealth(acc, modelId),
     }));
 
-    const available = evaluated.filter((e) => !e.health.isExhausted);
+    const available = getHighestTierAccounts(evaluated.filter((e) => !e.health.isExhausted));
 
     if (sessionId) {
       const boundId = this.getBoundAccountId(sessionId, provider);
@@ -433,8 +434,8 @@ export class AccountBalancer {
   }
 
   /**
-   * Selects an optimal account for a request based on session affinity, 429 status,
-   * and pre-emptive quota ranking (preferring accounts with lowest % used).
+   * Selects from the highest healthy, eligible subscription tier first, then uses
+   * session affinity and pre-emptive quota ranking within that tier.
    */
   public async selectAccount(
     provider: string,
@@ -499,8 +500,9 @@ export class AccountBalancer {
       health: quotaManager.evaluateAccountHealth(acc, modelId),
     }));
 
-    // Filter out accounts that are exhausted (either on 429 cooldown or 100% quota consumed)
-    const available = evaluated.filter((e) => !e.health.isExhausted);
+    // Lower tiers are fallbacks only, even when session affinity or quota pace
+    // would otherwise favor them. Exhausted/ineligible tiers never block fallback.
+    const available = getHighestTierAccounts(evaluated.filter((e) => !e.health.isExhausted));
 
     // If all eligible accounts are exhausted, return null so caller immediately reports cooldown/reset
     if (available.length === 0) {
@@ -509,7 +511,7 @@ export class AccountBalancer {
 
     let chosen: AccountCredential;
 
-    // Check if session already has a bound account that remains healthy and eligible
+    // Retain a binding only if it belongs to the highest available tier.
     let sessionBoundAccount: AccountCredential | undefined;
     if (sessionId) {
       const boundId = this.getBoundAccountId(sessionId, provider);
@@ -522,7 +524,7 @@ export class AccountBalancer {
     }
 
     if (sessionBoundAccount) {
-      // Retain prompt-cache session affinity as long as account is healthy
+      // Retain prompt-cache session affinity within the preferred tier.
       chosen = sessionBoundAccount;
     } else {
       // Pick unstarted accounts first (0 usage, unstarted timer) so their reset window begins,
