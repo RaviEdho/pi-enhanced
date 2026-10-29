@@ -23,7 +23,6 @@ export interface CommitConfirmationDialogOptions {
 export class CommitConfirmationDialog implements Component {
   private tui: TUI;
   private frame: DialogFrame;
-  private followSelection = false;
   private theme: any;
   private plan: CommitPlanProposal;
   private overview: GitStagedOverview;
@@ -111,16 +110,12 @@ export class CommitConfirmationDialog implements Component {
     // Navigation
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
       this.selectedIndex = (this.selectedIndex - 1 + 3) % 3;
-      this.followSelection = true;
-      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
 
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
       this.selectedIndex = (this.selectedIndex + 1) % 3;
-      this.followSelection = true;
-      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
@@ -227,24 +222,16 @@ export class CommitConfirmationDialog implements Component {
       isMulti ? "Edit plan" : "Edit message",
     ];
 
-    let focusLine: number | undefined;
-    for (let i = 0; i < actions.length; i++) {
-      const isSelected = i === this.selectedIndex;
-      if (isSelected) {
-        focusLine = lines.length;
-        lines.push(`  ${accentFn("→")} ${boldFn(accentFn(actions[i]))}`);
-      } else {
-        lines.push(`    ${textFn(actions[i])}`);
-      }
-    }
+    const actionLines = actions.map((action, index) => index === this.selectedIndex
+      ? `  ${accentFn("→")} ${boldFn(accentFn(action))}`
+      : `    ${textFn(action)}`);
 
     return this.frame.render(width, {
       title: titleText,
       metadata: rightBadge,
       content: lines,
-      // Start with the proposal, then follow explicit action navigation. A stable
-      // focusLine lets PgUp/PgDn inspect the entire preview without snapping back.
-      focusLine: this.followSelection ? focusLine : undefined,
+      actions: actionLines,
+      actionFocusLine: this.selectedIndex,
       hints: [
         rawKeyHint("↑↓", "navigate"),
         keyHint("tui.select.confirm", "confirm"),

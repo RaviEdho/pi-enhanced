@@ -117,9 +117,7 @@ export class QuestionnaireComponent implements Component, Focusable {
   }
 
   private requestRender(): void {
-    // A control interaction should reveal the active row, even after paging away.
-    // Ordinary renders and PgUp/PgDn leave the viewport alone.
-    this.frame.resetScroll();
+    // Controls have their own viewport; only question/recap changes reset the body.
     this.tui.requestRender();
   }
 
@@ -410,6 +408,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 
   public render(width: number): string[] {
     const lines: string[] = [];
+    const actions: string[] = [];
     const total = this.states.length;
     const isRecap = this.currentIndex === total;
     if (this.renderedIndex !== this.currentIndex) {
@@ -421,13 +420,16 @@ export class QuestionnaireComponent implements Component, Focusable {
       st.customInput.focused = false;
     }
 
-    // Wrap all user-provided content before handing it to the bounded viewport.
-    const append = (text: string, prefix: string, style: (text: string) => string, continuation = prefix) => {
-      wrapQuestion(text, width - Math.max(visibleWidth(prefix), visibleWidth(continuation)))
-        .forEach((line, index) => lines.push(`${index === 0 ? prefix : continuation}${style(line)}`));
-    };
+    // Wrap body and controls separately so paging never hides the active control.
+    const appendTo = (target: string[]) =>
+      (text: string, prefix: string, style: (text: string) => string, continuation = prefix) => {
+        wrapQuestion(text, width - Math.max(visibleWidth(prefix), visibleWidth(continuation)))
+          .forEach((line, index) => target.push(`${index === 0 ? prefix : continuation}${style(line)}`));
+      };
+    const append = appendTo(lines);
+    const appendAction = appendTo(actions);
     const color = (token: string) => (text: string) => this.theme.fg(token, text);
-    let focusLine: number | undefined;
+    let actionFocusLine: number | undefined;
 
     if (total > 1) {
       const tabs = this.states.map((st, index) => {
@@ -462,8 +464,8 @@ export class QuestionnaireComponent implements Component, Focusable {
       lines.push("");
       ["Submit responses", "Edit answers"].forEach((option, index) => {
         const selected = index === this.recapChoiceIndex;
-        if (selected) focusLine = lines.length;
-        append(option, selected ? this.theme.fg("accent", "  → ") : "    ",
+        if (selected) actionFocusLine = actions.length;
+        appendAction(option, selected ? this.theme.fg("accent", "  → ") : "    ",
           selected ? (text) => this.theme.fg("accent", this.theme.bold(text)) : color("dim"), "    ");
       });
     } else {
@@ -475,31 +477,31 @@ export class QuestionnaireComponent implements Component, Focusable {
         st.options.forEach((option, index) => {
           const highlighted = index === st.highlightedIndex;
           const originallySelected = st.answered && st.selectedOptionIndex === index;
-          if (highlighted) focusLine = lines.length;
+          if (highlighted) actionFocusLine = actions.length;
           if (option === CUSTOM_CHOICE_LABEL) {
             if (highlighted) {
               st.customInput.focused = this.focused;
               const prefix = this.theme.fg("accent", "  → ✎ ");
-              lines.push(prefix + st.customInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
+              actions.push(prefix + st.customInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
             } else {
               const label = st.isCustom && st.selectedText
                 ? `✎ ${this.theme.fg("success", `"${st.selectedText}" ✔ (selected)`)}`
                 : CUSTOM_CHOICE_LABEL;
-              append(label, "    ", color("dim"));
+              appendAction(label, "    ", color("dim"));
             }
           } else {
             const label = this.theme.fg(highlighted ? "accent" : "text", option)
               + (originallySelected ? `  ${this.theme.fg("success", "✔ (selected)")}` : "");
-            append(label, highlighted ? this.theme.fg("accent", "  → ") : "    ", (text) => text, "    ");
+            appendAction(label, highlighted ? this.theme.fg("accent", "  → ") : "    ", (text) => text, "    ");
           }
         });
       } else {
         append("Type your response (press Enter to confirm):", "  ", color("muted"));
         lines.push("");
         st.textInput.focused = this.focused;
-        focusLine = lines.length;
-        const prefix = "  ❯ ";
-        lines.push(prefix + st.textInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
+        actionFocusLine = actions.length;
+        const prefix = this.theme.fg("accent", "  → ");
+        actions.push(prefix + st.textInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
         if (st.answered && st.selectedText) {
           lines.push("");
           append(`${this.theme.fg("dim", "Confirmed answer: ")}${this.theme.fg("success", `"${st.selectedText}"`)}`,
@@ -513,7 +515,8 @@ export class QuestionnaireComponent implements Component, Focusable {
       title: "Ask User",
       metadata: isRecap ? "Review" : `Question ${this.currentIndex + 1} of ${total}`,
       content: lines,
-      focusLine,
+      actions,
+      actionFocusLine,
       hints: [
         ...(total > 1 ? ["←/→ navigate questions"] : []),
         ...(isRecap ? ["↑/↓ toggle"] : active?.isChoiceMode ? ["↑/↓ choose"] : []),

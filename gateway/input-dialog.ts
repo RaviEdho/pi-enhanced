@@ -73,7 +73,6 @@ export class DiscordInputDialog implements Component, Focusable {
       return true;
     }
 
-    this.frame.resetScroll();
     this.input.handleInput(data);
     this.tui.requestRender();
     return true;
@@ -83,14 +82,13 @@ export class DiscordInputDialog implements Component, Focusable {
     const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
     const contentWidth = Math.max(1, width - 4);
     const lines = wrapTextWithAnsi(this.instruction, contentWidth).map((line) => `  ${text(line)}`);
-    lines.push("");
-    const focusLine = lines.length;
-    lines.push(...this.input.render(contentWidth).map((line) => `  ${line}`));
+    const actions = this.input.render(contentWidth).map((line) => `  ${line}`);
     return this.frame.render(width, {
       title: this.title,
       content: lines,
       hints: [keyHint("tui.select.confirm", "submit"), keyHint("tui.select.cancel", "cancel")],
-      focusLine,
+      actions,
+      actionFocusLine: 0,
     });
   }
 }

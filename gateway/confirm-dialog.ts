@@ -24,7 +24,6 @@ export class DiscordConfirmationDialog implements Component {
   private readonly onDone: (approved: boolean) => void;
   private readonly keybindings: any;
   private selectedIndex = 0;
-  private followSelection = false;
 
   constructor(
     tui: TUI,
@@ -71,8 +70,6 @@ export class DiscordConfirmationDialog implements Component {
 
     if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "tab")) {
       this.selectedIndex = this.selectedIndex === 0 ? 1 : 0;
-      this.followSelection = true;
-      this.frame.resetScroll();
       this.tui.requestRender();
       return true;
     }
@@ -106,13 +103,12 @@ export class DiscordConfirmationDialog implements Component {
       }
     }
 
-    lines.push("");
-    const focusLine = lines.length + this.selectedIndex;
+    const actions: string[] = [];
     for (let index = 0; index < this.actions.length; index++) {
       if (index === this.selectedIndex) {
-        lines.push(`  ${accent("→")} ${bold(accent(this.actions[index]))}`);
+        actions.push(`  ${accent("→")} ${bold(accent(this.actions[index]))}`);
       } else {
-        lines.push(`    ${text(this.actions[index])}`);
+        actions.push(`    ${text(this.actions[index])}`);
       }
     }
 
@@ -125,8 +121,8 @@ export class DiscordConfirmationDialog implements Component {
       title: this.title,
       content: lines,
       hints,
-      // Show disclosures first; follow actions only after explicit navigation.
-      focusLine: this.followSelection ? focusLine : undefined,
+      actions,
+      actionFocusLine: this.selectedIndex,
     });
   }
 }

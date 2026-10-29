@@ -59,14 +59,12 @@ export class DiscordSelectDialog implements Component {
     }
 
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
-      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex - 1 + this.options.options.length) % this.options.options.length;
       this.tui.requestRender();
       return true;
     }
 
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
-      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 1) % this.options.options.length;
       this.tui.requestRender();
       return true;
@@ -87,16 +85,15 @@ export class DiscordSelectDialog implements Component {
       for (const line of wrapTextWithAnsi(this.options.description, contentWidth)) {
         lines.push(`  ${muted(line)}`);
       }
-      lines.push("");
     }
 
-    const focusLine = lines.length + this.selectedIndex;
+    const actions: string[] = [];
     for (let index = 0; index < this.options.options.length; index++) {
       const option = this.options.options[index];
       if (index === this.selectedIndex) {
-        lines.push(`  ${accent("→")} ${bold(accent(option))}`);
+        actions.push(`  ${accent("→")} ${bold(accent(option))}`);
       } else {
-        lines.push(`    ${text(option)}`);
+        actions.push(`    ${text(option)}`);
       }
     }
 
@@ -109,7 +106,8 @@ export class DiscordSelectDialog implements Component {
       title: this.options.title,
       content: lines,
       hints,
-      focusLine,
+      actions,
+      actionFocusLine: this.selectedIndex,
     });
   }
 }

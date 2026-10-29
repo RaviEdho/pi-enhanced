@@ -56,7 +56,8 @@ export class EnhancedSettingsComponent implements Component {
   private frame: DialogFrame;
   private focusSearch = true;
   private hasFocus = false;
-  private modelMenu?: { title: string; searchInput: Input; focusLine: number };
+  private modelMenu?: { title: string; searchInput: Input; focusLine: number; details: string[]; detailKey: string };
+  private bodyIdentity?: string;
 
   constructor(
     tui: TUI,
@@ -163,6 +164,8 @@ export class EnhancedSettingsComponent implements Component {
             title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
             searchInput,
             focusLine: 0,
+            details: [] as string[],
+            detailKey: "",
           };
           this.modelMenu = menu;
           this.frame.resetScroll();
@@ -177,7 +180,7 @@ export class EnhancedSettingsComponent implements Component {
             const choices = query
               ? fuzzyFilter(modelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
               : modelChoices;
-            selectList = new SelectList(choices, Math.max(1, Math.min(10, this.frame.bodyHeight - 6)), listTheme);
+            selectList = new SelectList(choices, this.maxVisibleRows(), listTheme);
             const selectedIndex = query
               ? -1
               : choices.findIndex((choice) => choice.value === selectedValue);
@@ -191,22 +194,21 @@ export class EnhancedSettingsComponent implements Component {
             render: (width: number) => {
               searchInput.focused = this.hasFocus;
               const selected = selectList.getSelectedItem();
-              // Native rows truncate model names/descriptions. Keep the complete selected
-              // model below the list, where the shared viewport can page through it.
+              // Keep native search/list rows pinned; full model details scroll above them.
               const details = selected
                 ? [selected.label ?? selected.value, selected.description ?? ""]
                     .filter(Boolean)
                     .flatMap((text) => wrapTextWithAnsi(text, Math.max(1, width - 2)))
                 : [];
-              (selectList as any).maxVisible = Math.max(1,
-                Math.min(10, this.frame.bodyHeight - 4 - Math.min(3, details.length)));
+              menu.details = details.map((line) => this.theme.fg("muted", `  ${line}`));
+              menu.detailKey = JSON.stringify([selected?.value, selected?.label, selected?.description]);
+              (selectList as any).maxVisible = this.maxVisibleRows();
               const rows = selectList.render(width);
               listRows = rows.length;
               const selectedRow = rows.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
               menu.focusLine = focusSearch ? 0 : 2 + Math.max(0, selectedRow);
               return [
                 ...searchInput.render(width), "", ...rows,
-                ...(details.length ? ["", ...details.map((line) => this.theme.fg("muted", `  ${line}`))] : []),
               ];
             },
             invalidate: () => {
@@ -225,8 +227,9 @@ export class EnhancedSettingsComponent implements Component {
                 selectList.handleInput(data);
               } else {
                 focusSearch = true;
+                const previousQuery = searchInput.getValue();
                 searchInput.handleInput(data);
-                createSelectList(searchInput.getValue());
+                if (searchInput.getValue() !== previousQuery) createSelectList(searchInput.getValue());
               }
               this.tui.requestRender();
             },
@@ -261,7 +264,7 @@ export class EnhancedSettingsComponent implements Component {
       };
     });
 
-    const maxVisible = Math.max(1, Math.min(10, this.frame.bodyHeight - 6));
+    const maxVisible = this.maxVisibleRows();
     const listTheme = getSettingsListTheme();
 
     this.settingsList = new SettingsList(
@@ -308,21 +311,23 @@ export class EnhancedSettingsComponent implements Component {
       paragraph(`Disabling ${warning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`, "text");
       content.push("");
       paragraph("Subsequent requests will incur cache misses, increasing turnaround latency and token costs.", "dim");
-      content.push("");
-      let focusLine = content.length;
+      const actions: string[] = [];
+      let actionFocusLine = 0;
       ["Keep enabled (recommended)", "Proceed and disable anyway"].forEach((label, index) => {
         const selected = index === warning.selectedOption;
-        if (selected) focusLine = content.length;
+        if (selected) actionFocusLine = actions.length;
         const prefix = selected ? "→ " : "  ";
         const rows = wrapTextWithAnsi(selected ? this.theme.bold(label) : label, Math.max(1, innerWidth - 2));
-        content.push(...rows.map((line, row) =>
+        actions.push(...rows.map((line, row) =>
           `  ${this.theme.fg(selected ? "accent" : "dim", `${row === 0 ? prefix : "  "}${line}`)}`));
       });
+      this.resetScrollForDetails(`warning:${warning.settingKey}`);
       return this.frame.render(width, {
         title: "Prompt Cache Invalidation Warning",
         content,
+        actions,
+        actionFocusLine,
         hints: ["↑↓ toggle", "Enter confirm", "Esc cancel"],
-        focusLine,
       });
     }
 
@@ -331,21 +336,23 @@ export class EnhancedSettingsComponent implements Component {
     const displayItems: SettingItem[] = anyList.getDisplayItems();
     const selected = displayItems[anyList.selectedIndex];
     if (!submenu) {
-      const descriptionRows = selected?.description
-        ? wrapTextWithAnsi(selected.description, Math.max(1, innerWidth - 4)).length : 0;
-      // Search + gap, native count, description gap, and a spare row for wrapped
-      // frame hints. Long descriptions remain intact and accessible with PgDn.
-      anyList.maxVisible = Math.max(1,
-        Math.min(10, this.frame.bodyHeight - 5 - Math.min(3, descriptionRows)));
+      anyList.maxVisible = this.maxVisibleRows();
       anyList.searchInput.focused = this.hasFocus;
     }
     let listLines = this.settingsList.render(innerWidth);
+    let content: string[] = this.modelMenu?.details ?? [];
     if (!submenu) {
       // Native SettingsList ends with a blank and its own keyboard hint.
       // The frame owns hints, including scroll instructions and dismissal.
       listLines = listLines.slice(0, -2);
+      // Native SettingsList puts a blank description separator after the search,
+      // visible item rows, and optional count. Retain their original row offsets
+      // for mouse dispatch, but move everything after that separator into the body.
+      const descriptionStart = listLines.indexOf("", 2);
+      content = descriptionStart < 0 ? [] : listLines.slice(descriptionStart + 1);
+      if (descriptionStart >= 0) listLines = listLines.slice(0, descriptionStart);
       if (selected?.submenu && selected.currentValue) {
-        listLines.push("", ...wrapTextWithAnsi(selected.currentValue, Math.max(1, innerWidth - 2))
+        content.push("", ...wrapTextWithAnsi(selected.currentValue, Math.max(1, innerWidth - 2))
           .map((line) => this.theme.fg("muted", `  ${line}`)));
       }
 
@@ -358,24 +365,24 @@ export class EnhancedSettingsComponent implements Component {
         return line;
       });
     }
+    this.resetScrollForDetails(this.modelMenu
+      ? `model:${this.modelMenu.detailKey}`
+      : JSON.stringify([selected?.id, selected?.description, selected?.submenu ? selected.currentValue : undefined]));
     const selectedRow = listLines.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
     return this.frame.render(width, {
       title: this.modelMenu?.title ?? "Enhanced Settings",
       metadata: this.modelMenu ? "Enhanced Settings" : undefined,
-      content: listLines.map((line) => `  ${line}`),
+      content: content.map((line) => `  ${line}`),
+      actions: listLines.map((line) => `  ${line}`),
       hints: this.modelMenu
         ? ["Type to search", "↑↓ navigate", "Enter select", "Esc back"]
         : ["Type to search", "↑↓/Tab navigate", "←→/Enter change", "Esc close"],
-      focusLine: this.modelMenu?.focusLine ?? (this.focusSearch ? 0 : Math.max(0, selectedRow)),
+      actionFocusLine: this.modelMenu?.focusLine ?? (this.focusSearch ? 0 : Math.max(0, selectedRow)),
     });
   }
 
   public handleInput(data: string): boolean {
     if (this.frame.handleInput(data)) return true;
-    // Paging may deliberately leave the active control. The next edit or
-    // navigation returns to it, even if the native list keeps it on the same row.
-    this.frame.resetScroll();
-
     // Intercept input during cache warning confirmation
     if (this.cacheWarning) {
       if (
@@ -566,22 +573,34 @@ export class EnhancedSettingsComponent implements Component {
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     // Never let confirmation or chrome clicks mutate settings underneath them.
-    const contentRow = this.frame.contentRowAt(event.y);
-    if (this.cacheWarning || contentRow === undefined || event.x < 2) return undefined;
+    const actionRow = this.frame.actionRowAt(event.y);
+    if (this.cacheWarning || actionRow === undefined || event.x < 2) return undefined;
     const adjustedEvent: TuiMouseEvent = {
       ...event,
       x: event.x - 2,
-      y: contentRow,
+      y: actionRow,
     };
     this.focusSearch = adjustedEvent.y === 0 && event.type !== "wheel";
     const result = this.settingsList.handleMouse?.(adjustedEvent);
     if (result) {
-      this.frame.resetScroll();
       this.skipUnselectableItems("down");
       this.tui.requestRender();
       return result;
     }
     return undefined;
+  }
+
+  private maxVisibleRows(): number {
+    // Budget from total height, never bodyHeight (which excludes pinned actions).
+    // Reserve chrome/hints (8), search/gap/count (3), and three detail rows.
+    return Math.max(1, Math.min(10, this.frame.maxHeight - 14));
+  }
+
+  private resetScrollForDetails(identity: string): void {
+    if (identity !== this.bodyIdentity) {
+      this.bodyIdentity = identity;
+      this.frame.resetScroll();
+    }
   }
 
   private isScoutCurrentlyEnabled(): boolean {

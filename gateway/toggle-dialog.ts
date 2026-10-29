@@ -55,13 +55,11 @@ export class DiscordToggleDialog implements Component {
     }
 
     if (matchesKey(data, "up") || data.toLowerCase() === "k") {
-      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 2) % 3;
       this.tui.requestRender();
       return true;
     }
     if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
-      this.frame.resetScroll();
       this.selectedIndex = (this.selectedIndex + 1) % 3;
       this.tui.requestRender();
       return true;
@@ -84,7 +82,6 @@ export class DiscordToggleDialog implements Component {
   }
 
   private toggleSelectedPath(): void {
-    this.frame.resetScroll();
     if (this.selectedIndex === 0) this.allowDirectMessages = !this.allowDirectMessages;
     else if (this.selectedIndex === 1) this.allowServerMessages = !this.allowServerMessages;
     else return;
@@ -99,20 +96,19 @@ export class DiscordToggleDialog implements Component {
       ? this.theme.fg(enabled ? "success" : "warning", value)
       : value;
 
-    const lines: string[] = [];
+    const actions: string[] = [];
 
     const options = [
       { label: "Direct messages", enabled: this.allowDirectMessages },
       { label: "Server messages", enabled: this.allowServerMessages },
       { label: "Save changes", enabled: undefined },
     ];
-    const focusLine = this.selectedIndex;
     for (let index = 0; index < options.length; index++) {
       const option = options[index];
       const prefix = index === this.selectedIndex ? `${accent("→")} ` : "  ";
       const label = index === this.selectedIndex ? bold(accent(option.label)) : text(option.label);
       const state = option.enabled === undefined ? "" : `  ${stateColor(option.enabled, option.enabled ? "On" : "Off")}`;
-      lines.push(`  ${prefix}${label}${state}`);
+      actions.push(`  ${prefix}${label}${state}`);
     }
 
     const hints = [
@@ -123,9 +119,10 @@ export class DiscordToggleDialog implements Component {
     ];
     return this.frame.render(width, {
       title: "Discord Message Access",
-      content: lines,
+      content: [],
+      actions,
       hints,
-      focusLine,
+      actionFocusLine: this.selectedIndex,
     });
   }
 }

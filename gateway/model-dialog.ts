@@ -69,9 +69,10 @@ export class DiscordModelDialog implements Component, Focusable {
     this.filtered = query
       ? fuzzyFilter(this.choices, query, (choice) => `${choice.value} ${choice.label} ${choice.description || ""}`)
       : this.choices;
-    // Reserve a row for search and one for wrapped frame hints.
-    this.listSize = Math.max(1, Math.min(8, this.frame.bodyHeight - 2));
-    this.list = new SelectList(this.filtered, this.listSize, {
+    this.listSize = this.getListSize();
+    // Keep full descriptions in the scrollable body, not in the pinned list.
+    const items = this.filtered.map(({ value, label }) => ({ value, label }));
+    this.list = new SelectList(items, this.listSize, {
       selectedPrefix: (text) => this.theme.fg("accent", text),
       selectedText: (text) => this.theme.fg("accent", text),
       description: (text) => this.theme.fg("muted", text),
@@ -85,10 +86,14 @@ export class DiscordModelDialog implements Component, Focusable {
     this.list.onCancel = () => this.onDone(undefined);
   }
 
+  private getListSize(): number {
+    // Reserve header/bottom, margins, two hint rows, a body row, and search.
+    // bodyHeight excludes the pinned controls and must not size the list.
+    return Math.max(1, Math.min(8, this.frame.maxHeight - 10));
+  }
+
   handleInput(data: string): void {
     if (this.frame.handleInput(data)) return;
-    // Return to the active control after manually paging the viewport.
-    this.frame.resetScroll();
     if (
       this.keybindings.matches(data, "tui.select.up") ||
       this.keybindings.matches(data, "tui.select.down") ||
@@ -107,21 +112,33 @@ export class DiscordModelDialog implements Component, Focusable {
 
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - 4);
-    const listSize = Math.max(1, Math.min(8, this.frame.bodyHeight - 2));
+    const listSize = this.getListSize();
     if (listSize !== this.listSize) this.updateList(this.list.getSelectedItem()?.value);
 
     // The frame owns scrolling chrome; omit SelectList's trailing scroll counter.
     const listLines = this.list.render(contentWidth).slice(0, Math.max(1, Math.min(this.filtered.length, this.listSize)));
     const inputLines = this.input.render(contentWidth);
-    const lines = [...inputLines, ...listLines].map((line) => `  ${line}`);
-    const selectedIndex = Math.max(0, this.filtered.indexOf(this.list.getSelectedItem()!));
+    const actions = [...inputLines, ...listLines].map((line) => `  ${line}`);
+    const selectedIndex = Math.max(0, this.filtered.findIndex((choice) => choice.value === this.list.getSelectedItem()?.value));
+    const selected = this.filtered[selectedIndex];
+    const current = this.choices.find((choice) => choice.value === this.currentValue);
+    const lines = [
+      `  ${this.theme.fg("text", `Current: ${current?.label || this.currentValue || "Pi default"}`)}`,
+      ...(current?.description ? [`  ${this.theme.fg("muted", current.description)}`] : []),
+      `  ${this.theme.fg("muted", "Used when gateway Pi sessions start.")}`,
+    ];
+    if (selected) {
+      lines.push("", `  ${this.theme.fg("accent", `Selected: ${selected.label || selected.value}`)}`);
+      if (selected.label && selected.label !== selected.value) lines.push(`  ${this.theme.fg("dim", selected.value)}`);
+      if (selected.description) lines.push(`  ${this.theme.fg("muted", selected.description)}`);
+    }
     const startIndex = Math.max(0, Math.min(
       selectedIndex - Math.floor(this.listSize / 2),
       this.filtered.length - this.listSize
     ));
     // On tiny terminals search and selection may not fit together. Reveal the
     // control being used rather than cropping the selected model out of view.
-    const focusLine = this.searching ? 0 : inputLines.length + selectedIndex - startIndex;
+    const actionFocusLine = this.searching ? 0 : inputLines.length + selectedIndex - startIndex;
     const hints = [
       rawKeyHint("type", "search"),
       rawKeyHint("↑↓", `navigate (${this.filtered.length ? selectedIndex + 1 : 0}/${this.filtered.length})`),
@@ -133,7 +150,8 @@ export class DiscordModelDialog implements Component, Focusable {
       metadata: `Current: ${this.currentValue || "Pi default"}`,
       content: lines,
       hints,
-      focusLine,
+      actions,
+      actionFocusLine,
     });
   }
 }
