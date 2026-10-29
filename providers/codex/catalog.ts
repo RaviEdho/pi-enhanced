@@ -84,7 +84,8 @@ export function saveCachedCatalog(models: CodexModelSummary[]): void {
 }
 
 /**
- * Fetches the live model catalog from OpenAI's Codex endpoint.
+ * Fetches the live model catalog from OpenAI's Codex endpoint. The caller saves
+ * it only after Pi accepts the refresh publication (which may be superseded).
  */
 export async function fetchLiveCodexCatalog(
   accessToken: string,
@@ -120,11 +121,17 @@ export async function fetchLiveCodexCatalog(
       displayName: m.display_name || m.slug,
       availableInPlans: Array.isArray(m.available_in_plans) ? m.available_in_plans : [],
       contextWindow: m.context_window,
+      maxOutputTokens: m.max_output_tokens,
+      inputModalities: Array.isArray(m.input_modalities) ? m.input_modalities : undefined,
+      reasoningLevels: Array.isArray(m.supported_reasoning_levels)
+        ? m.supported_reasoning_levels
+            .filter((level) => level && typeof level.effort === "string")
+            .map((level) => level.effort)
+        : undefined,
+      supportedInApi: m.supported_in_api,
+      visibility: m.visibility,
     }));
 
-  if (summaries.length > 0) {
-    saveCachedCatalog(summaries);
-  }
-
+  signal?.throwIfAborted();
   return summaries;
 }

@@ -19,7 +19,7 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerHyperProvider(pi);
   await registerCommandCodeProvider(pi);
   await registerKenariProvider(pi);
-  registerCodexFilter(pi);
+  await registerCodexFilter(pi);
   registerOpenAIProvider(pi);
 }
 

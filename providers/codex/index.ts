@@ -1,7 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Api, Credential, Model, Provider, SimpleStreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
+import {
+  isModelType,
+  type Api,
+  type Credential,
+  type Model,
+  type Provider,
+  type SimpleStreamOptions,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AccountStore } from "../../accounts/store.js";
@@ -10,7 +18,9 @@ import {
   DEFAULT_FALLBACK_FREE_MODELS,
   fetchLiveCodexCatalog,
   loadCachedCatalog,
+  saveCachedCatalog,
 } from "./catalog.js";
+import { isVisibleCodexModel, mergeCodexModels } from "./models.js";
 import { getCodexAccountId, getCodexPlanType } from "./plan.js";
 
 /**
@@ -45,25 +55,41 @@ function getStoredCodexCredential(): { access?: string; accountId?: string } | n
 }
 
 /**
- * Registers the OpenAI Codex dynamic plan filter provider with multi-account failover.
+ * Registers OpenAI Codex discovery and plan filtering with multi-account failover.
  */
-export function registerCodexFilter(pi: ExtensionAPI): void {
+export async function registerCodexFilter(pi: ExtensionAPI): Promise<void> {
   const baseCodex = builtinProviders().find((p) => p.id === "openai-codex");
   if (!baseCodex) {
     return;
   }
 
-  // Kick off a non-blocking background catalog refresh if credentials already exist
-  const stored = getStoredCodexCredential();
-  if (stored?.access && stored.accountId) {
-    void fetchLiveCodexCatalog(stored.access, stored.accountId).catch(() => {
-      // Ignore background network failure on startup
-    });
+  // Startup model selection and --list-models only run offline refreshes. Bootstrap
+  // missing/legacy caches before registration, then use Pi's native refresh lifecycle.
+  let catalog = loadCachedCatalog();
+  if (!catalog || catalog.some((model) => !model.inputModalities)) {
+    const stored = getStoredCodexCredential();
+    if (stored?.access && stored.accountId) {
+      try {
+        const live = await fetchLiveCodexCatalog(stored.access, stored.accountId, AbortSignal.timeout(5000));
+        if (live.length > 0) {
+          catalog = live;
+          saveCachedCatalog(live);
+        }
+      } catch {
+        // Offline startup keeps the cache and built-in catalog.
+      }
+    }
   }
+  const getModels = () => mergeCodexModels(baseCodex.getModels(), catalog, baseCodex.baseUrl);
 
-  // Wrap baseCodex provider with dynamic filterModels, refreshModels, and multi-account streamSimple
+  // Keep the built-in authentication and wire implementation; add discovered models and failover.
   const filteredCodexProvider: Provider = {
     ...baseCodex,
+    getModels,
+    getAllModels: () => [
+      ...(baseCodex.getAllModels?.() ?? []).filter((model) => !isModelType(model, "chat")),
+      ...getModels(),
+    ],
 
     filterModels(
       models: readonly Model<Api>[],
@@ -96,11 +122,10 @@ export function registerCodexFilter(pi: ExtensionAPI): void {
         return models;
       }
 
-      const catalog = loadCachedCatalog();
       if (catalog && catalog.length > 0) {
         const allowedSlugs = new Set(
           catalog
-            .filter((m) => m.availableInPlans.some((plan) => plans.has(plan)))
+            .filter((m) => isVisibleCodexModel(m) && m.availableInPlans.some((plan) => plans.has(plan)))
             .map((m) => m.slug)
         );
         return models.filter((m) => allowedSlugs.has(m.id));
@@ -115,28 +140,30 @@ export function registerCodexFilter(pi: ExtensionAPI): void {
     },
 
     async refreshModels(context) {
-      if (context?.allowNetwork === false || context?.signal?.aborted) {
-        return;
-      }
+      if (context.signal.aborted) return;
       if (baseCodex.refreshModels) {
         await baseCodex.refreshModels(context);
       }
-      let access = context.credential?.type === "oauth" ? context.credential.access : undefined;
-      if (!access) {
-        const active = AccountStore.getInstance().getActive("openai-codex");
-        access = active?.access;
-      }
-      if (access) {
-        const accountId =
-          getCodexAccountId(access) ||
-          (context.credential as { accountId?: string })?.accountId;
-        if (accountId) {
-          try {
-            await fetchLiveCodexCatalog(access, accountId, context.signal);
-          } catch {
-            // Ignore refresh errors
-          }
-        }
+      if (!context.allowNetwork || context.signal.aborted) return;
+
+      const credential = context.credential?.type === "oauth" ? context.credential : undefined;
+      const stored = credential?.access ? undefined : getStoredCodexCredential();
+      const access = credential?.access ?? stored?.access;
+      const accountId = (access && getCodexAccountId(access)) ||
+        (credential as { accountId?: string } | undefined)?.accountId || stored?.accountId;
+      if (!access || !accountId) return;
+
+      try {
+        const live = await fetchLiveCodexCatalog(access, accountId, context.signal);
+        if (live.length === 0 || context.signal.aborted) return;
+        await context.publish({
+          update: () => {
+            catalog = live;
+            saveCachedCatalog(live);
+          },
+        });
+      } catch {
+        // Keep cached discovery and built-in models on network/authentication failure.
       }
     },
 
