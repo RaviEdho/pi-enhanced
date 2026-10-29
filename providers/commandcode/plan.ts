@@ -9,67 +9,108 @@ import type {
   CommandCodeSubscriptionsResponse,
 } from "./types.js";
 
-// Models explicitly classified as premium tier by Command Code.
-// Models not in this set default to "opensource" (which are allowed on GOAT, Pro, Max).
-const PREMIUM_MODELS = new Set<string>([
-  "claude-sonnet-5",
-  "claude-sonnet-4-6",
-  "claude-fable-5-1",
-  "claude-fable-5",
-  "claude-opus-5-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "claude-haiku-4-5-20251001",
-  "gpt-6-astra",
-  "gpt-6.1-sol",
-  "gpt-6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.3-codex",
-  "gpt-5.4-mini",
-  "google/gemini-4-argon",
-  "meta/muse-wonder-1.0",
-  "sakana/fugu-ultra",
+// Manual snapshots of the "Models included" tables:
+// https://commandcode.ai/docs/plans/go
+// https://commandcode.ai/docs/plans/goat
+// https://commandcode.ai/docs/plans/pro
+// IDs are lowercased API IDs with the provider prefix removed, not page slugs.
+// Keep these as allowlists: a catalog entry alone does not imply plan coverage.
+// Coverage is separate from API access (Go currently has no Provider API access).
+const GO_MODELS = new Set<string>([
+  "kimi-k3.1-pro",
+  "ornith-1.5-122b",
+  "minimax-m3.1-flash",
+  "beam:free",
+  "muse-spark-open",
+  "nemotron-3.5-super-vl",
+  "ling-3.1-flash",
+  "glyph-cluster:free",
+  "mistral-large-4",
+  "deepseek-v4.1-flash-fast",
+  "gpt-6-luna",
+  "mimo-v2.6-flash",
+  "mimo-v2.6-pro",
+  "step-5-preview",
+  "glm-5.3-flashx",
+  "qwen3.8-omni-flash",
+  "deepseek-v4.1-flash",
+  "muse-spark-1.3-contributor",
+  "qwen3.8-max-0902",
+  "hy4-preview",
+  "glm-5.3-flash",
+  "longcat-2.0",
+  "qwen3.8-flash",
+  "deepseek-v4-flash-fast",
+  "deepseek-v4-flash-vision-exp",
+  "glm-5.3",
+  "qwen3.8-27b",
+  "deepseek-v4-pro",
+  "muse-spark-1.2-contributor",
+  "qwen3.8-max",
+  "deepseek-v4-flash",
+  "inkling-small",
+  "qwen3.7-flash",
+  "laguna-s-2.1-free",
+  "inkling",
+  "kimi-k3",
+  "gpt-5.6-luna",
+  "grok-4.5",
+  "hy3-paid",
+  "glm-5.2-fast",
+  "glm-5.2",
+  "kimi-k2.7-code-highspeed",
+  "kimi-k2.7-code",
+  "nemotron-3-ultra-550b-a55b",
+  "minimax-m3",
+  "qwen3.7-plus",
+  "step-3.7-flash",
+  "qwen3.7-max",
+  "step-3.5-flash",
+  "glm-5.1",
+  "minimax-m2.7",
+  "qwen3.6-max-preview",
+  "qwen3.6-plus",
+  "kimi-k2.6",
+  "glm-5",
+  "kimi-k2.5",
+  "minimax-m2.5",
 ]);
 
-// Ultra-premium models blocked on the Pro plan ($20/mo)
-const PRO_BLOCKED_MODELS = new Set<string>([
-  "claude-fable-5-1",
-  "claude-fable-5",
-  "claude-opus-5-5",
-  "claude-opus-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "gpt-6-astra",
-  "gpt-6.1-sol",
-  "meta/muse-wonder-1.0",
-  "sakana/fugu-ultra",
-]);
-
-// Models blocked on the entry Go plan ($1/mo)
-const GO_BLOCKED_MODELS = new Set<string>([
-  ...PREMIUM_MODELS,
-  "claude-sonnet-5-5",
+const GOAT_MODELS = new Set<string>([
+  ...GO_MODELS,
+  "jev-1.14.0",
   "claude-haiku-5-5",
+  "claude-sonnet-5-5",
+  "qwen3.8-max-prime",
+  "jev",
+  "mimo-v2.6-pro-ultraspeed",
+  "grok-4.7",
+  "gemini-3.8-flash",
+  "muse-spark-1.3",
+  "gemini-3.7-flash",
+  "grok-4.6",
+  "muse-spark-1.2",
   "gpt-5.6-sol",
-  "google/gemini-3.7-flash",
-  "google/gemini-3.8-flash",
-  "google/gemini-3.6-flash",
-  "google/gemini-3.5-flash",
-  "google/gemini-3.5-flash-lite",
-  "google/gemini-3.1-flash-lite",
-  "meta/muse-spark-1.1",
-  "meta/muse-spark-1.2",
-  "meta/muse-spark-1.3",
-  "xai/grok-4.6",
-  "xai/grok-4.7",
-  "xiaomi/mimo-v2.6-pro-ultraspeed",
-  "ornith/ornith-1.5-122b",
-  "Qwen/Qwen3.8-Max-Prime",
+]);
+
+const PRO_MODELS = new Set<string>([
+  ...GOAT_MODELS,
+  "gpt-6.1-terra",
+  "gemini-4-argon",
+  "gpt-6-sol",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
+  "muse-spark-1.1",
+  "gpt-5.6-terra",
+  "claude-sonnet-5",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gpt-5.5",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.4",
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-6",
 ]);
 
 const billingCache = new Map<string, AccountBillingInfo>();
@@ -140,17 +181,7 @@ export function isModelCoveredByPlan(
 ): boolean {
   if (!planId) return false;
   const plan = planId.toLowerCase();
-  const cleanId = modelId.replace(/^[^/]+\//, "");
-
-  // Match against both the raw model ID and the prefix-stripped ID, so block
-  // lists written either way ("google/gemini-3.7-flash" or "gemini-3.7-flash")
-  // gate correctly regardless of catalog casing/prefixing.
-  const isBlockedWith = (set: Set<string>) =>
-    set.has(modelId) || set.has(cleanId);
-  const isBlocked = (set: Set<string>) =>
-    isBlockedWith(set) ||
-    set.has(modelId.toLowerCase()) ||
-    set.has(cleanId.toLowerCase());
+  const cleanId = modelId.replace(/^[^/]+\//, "").toLowerCase();
 
   // Max / Ultra / Teams plans have access to all models
   if (
@@ -163,24 +194,21 @@ export function isModelCoveredByPlan(
 
   // Provider pay-as-you-go plan allows virtually all models except unreleased experiments
   if (plan.includes("provider")) {
-    return !isBlocked(
-      new Set<string>(["gpt-6.1-sol", "meta/muse-wonder-1.0"])
-    );
+    return cleanId !== "gpt-6.1-sol" && cleanId !== "muse-wonder-1.0";
   }
 
-  // Pro plan allows open-source and standard premium, but gates ultra-premium (Opus, Fable, GPT-6 Astra)
+  // Pro includes GOAT plus the premium models listed on its plan page.
   if (plan.includes("pro")) {
-    return !isBlocked(PRO_BLOCKED_MODELS);
+    return PRO_MODELS.has(cleanId);
   }
 
-  // GOAT plan ($10/mo) allows open-source models + Sonnet 5.5, Haiku, Gemini 3.7, GPT-5.6 Sol
+  // Match GOAT before Go: their plan IDs share the "go" prefix.
   if (plan.includes("goat")) {
-    return !isBlocked(PREMIUM_MODELS);
+    return GOAT_MODELS.has(cleanId);
   }
 
-  // Go plan ($1/mo) has entry restrictions
   if (plan.includes("go")) {
-    return !isBlocked(GO_BLOCKED_MODELS);
+    return GO_MODELS.has(cleanId);
   }
 
   // Default allow
