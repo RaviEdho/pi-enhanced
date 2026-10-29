@@ -206,12 +206,53 @@ async function exchangeCode(
   return (await res.json()) as KenariCliTokenResponse;
 }
 
-/**
- * Handles browser loopback OAuth sign-in and manual key entry for Kenari matching Pi's TUI convention.
- */
-export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-  const store = AccountStore.getInstance();
+/** Validates a key, primes the catalog, and preserves the selected login method. */
+export async function validateAndStoreKenariApiKey(
+  apiKey: string,
+  signal?: AbortSignal,
+  onProgress?: (message: string) => void,
+  options: { type?: "api_key" | "oauth"; labelPrefix?: string } = {}
+): Promise<void> {
+  const key = apiKey.trim();
+  if (!key) throw new Error("No Kenari API key provided");
+  signal?.throwIfAborted();
+  onProgress?.("Validating Kenari credentials...");
+  const validation = await validateKenariApiKey(key, signal);
+  signal?.throwIfAborted();
 
+  // Pi's post-login model sync is offline-only. Prime the catalog first so
+  // either login method exposes the live models without a process restart.
+  onProgress?.("Loading available Kenari models...");
+  await fetchKenariModels(key, signal);
+  signal?.throwIfAborted();
+
+  const store = AccountStore.getInstance();
+  const existing = store.list(PROVIDER_ID).find(
+    (account) => account.apiKey === key || account.access === key
+  );
+  const displayIdentity = existing?.label || options.labelPrefix ||
+    (key.length > 12 ? `${key.slice(0, 7)}...${key.slice(-4)}` : "kn-key");
+  const accountId = existing?.id || AccountStore.generateAccountId(PROVIDER_ID, displayIdentity);
+  const type = options.type || "api_key";
+  store.upsert({
+    ...existing,
+    id: accountId,
+    provider: PROVIDER_ID,
+    type,
+    apiKey: key,
+    access: key,
+    ...(type === "oauth" ? { refresh: "", expires: 0 } : {}),
+    planType: validation.planName || "PAYG",
+    label: displayIdentity,
+    email: existing?.email || displayIdentity,
+    createdAt: existing?.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  });
+  store.setActive(PROVIDER_ID, accountId);
+}
+
+/** Handles browser loopback OAuth sign-in for Kenari. */
+export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   const verifier = base64url(randomBytes(32));
   const challenge = base64url(createHash("sha256").update(verifier).digest());
   const state = randomBytes(32).toString("hex");
@@ -297,7 +338,7 @@ export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuth
     // Pi convention: onAuth renders the clickable URL and instructions at the top
     callbacks.onAuth({
       url: authUrl,
-      instructions: "A browser window should open. Complete login in your browser, or paste your API key below.",
+      instructions: "A browser window should open. Complete Kenari sign-in in your browser.",
     });
 
     timer = setTimeout(() => {
@@ -310,8 +351,8 @@ export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuth
       manualPromise = (
         callbacks.onPrompt({
           type: "manual_code",
-          message: "Complete login in your browser, or paste your API key / redirect URL here:",
-          placeholder: "kn-...",
+          message: "If sign-in does not complete automatically, paste the final redirect URL:",
+          placeholder: "Paste the Kenari redirect URL...",
         } as any)
       )
         .then((input: string) => (input?.trim() ? input.trim() : null))
@@ -349,44 +390,20 @@ export async function loginKenari(callbacks: OAuthLoginCallbacks): Promise<OAuth
       throw new Error("Login cancelled.");
     }
 
-    callbacks.onProgress?.("Validating Kenari credentials...");
-    const validation = await validateKenariApiKey(finalApiKey, callbacks.signal).catch((err) => {
-      throw new Error(`Invalid Kenari API key: ${err instanceof Error ? err.message : String(err)}`);
-    });
-
-    // Pi's post-login model sync is deliberately offline-only. Populate the
-    // dynamic catalog before returning credentials so that sync can publish it
-    // immediately, without requiring a process restart.
-    callbacks.onProgress?.("Loading available Kenari models...");
-    await fetchKenariModels(finalApiKey, callbacks.signal);
-
-    const displayIdentity =
-      labelPrefix ||
-      (finalApiKey.length > 12 ? `${finalApiKey.slice(0, 7)}...${finalApiKey.slice(-4)}` : "kn-key");
-    const accountId = AccountStore.generateAccountId(PROVIDER_ID, displayIdentity);
-
-    store.upsert({
-      id: accountId,
-      provider: PROVIDER_ID,
-      type: "api_key",
-      apiKey: finalApiKey,
-      access: finalApiKey,
-      planType: validation.planName || "PAYG",
-      label: displayIdentity,
-      email: displayIdentity,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
-    store.setActive(PROVIDER_ID, accountId);
+    await validateAndStoreKenariApiKey(
+      finalApiKey,
+      callbacks.signal,
+      (message) => callbacks.onProgress?.(message),
+      { type: "oauth", labelPrefix }
+    );
 
     return {
-      type: "api_key",
+      type: "oauth",
       key: finalApiKey,
       access: finalApiKey,
       refresh: "",
       expires: 0,
-    } as unknown as OAuthCredentials;
+    };
   } finally {
     shutdown();
   }

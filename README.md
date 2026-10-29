@@ -7,7 +7,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Background Discord Agent Gateway (`/discord`)**: Run a detached Discord bot independently of the interactive Pi terminal. DMs and server threads are restricted to configured user/channel allowlists; a bot mention in an allowlisted server channel creates a thread with a durable, per-thread/per-user Pi session. The gateway uses your configured Pi model, extensions, and tools, routes Pi UI questions through Discord buttons, select menus, and text-entry modals, renames new threads to their generated session title when available, and offers the `discord_gateway_restart` tool for deferred self-restarts after code changes.
 - **Kenari AI Gateway Provider**:
   - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
-  - Dual authentication: Browser loopback PKCE OAuth flow (`/login kenari`) and API key via `KENARI_API_KEY`.
+  - Dual authentication: Choose browser loopback PKCE sign-in or API-key login via `/login kenari`, or set `KENARI_API_KEY`.
   - Dynamic live model discovery (`/v1/models` and `/api/public/pricing`) with live micro-IDR token pricing converted to USD, context length limits, tool calling, and discrete reasoning effort controls.
   - Multi-account pooling with transparent 429 rate limit failover (`plan_limit_reached`, `free_quota_daily`, `free_quota_rpm`) and 402 balance backoff (`insufficient_balance`).
   - Live rolling window quota (5-hour, weekly, monthly) and prepaid balance monitoring via `/usage` and interactive status footer.

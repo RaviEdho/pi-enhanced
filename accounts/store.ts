@@ -8,7 +8,7 @@ export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex"
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
- * Pi's OAuth login adapter always persists such credentials as
+ * Pi's OAuth login adapter persists browser-login credentials as
  * `{ type: "oauth", access: <key> }`, so the key has to be recovered from
  * `access` when the mirrored auth.json entry is imported back into the store.
  */
@@ -246,17 +246,6 @@ export class AccountStore {
       }
       if (
         active.type === "api_key" &&
-        PERSISTENT_KEY_PROVIDERS.has(provider) &&
-        existingAuth.type === "oauth" &&
-        existingAuth.access === (active.access || active.apiKey) &&
-        existingAuth.refresh === (active.refresh || "") &&
-        existingAuth.expires === (active.expires ?? 0)
-      ) {
-        return;
-      }
-      if (
-        active.type === "api_key" &&
-        !PERSISTENT_KEY_PROVIDERS.has(provider) &&
         existingAuth.type === "api_key" &&
         existingAuth.key === active.apiKey
       ) {
@@ -291,24 +280,10 @@ export class AccountStore {
         orgId: active.orgId,
       };
     } else if (active.type === "api_key") {
-      if (PERSISTENT_KEY_PROVIDERS.has(provider)) {
-        // These providers register persistent keys through Pi's OAuth adapter.
-        // Keep auth.json as OAuth so a key added during this session remains
-        // usable even though the provider's startup API-key config was unset.
-        currentAuth[provider] = {
-          type: "oauth",
-          access: active.access || active.apiKey || "",
-          refresh: active.refresh || "",
-          expires: active.expires ?? 0,
-          email: active.email,
-          accountId: active.accountId,
-        };
-      } else {
-        currentAuth[provider] = {
-          type: "api_key",
-          key: active.apiKey,
-        };
-      }
+      currentAuth[provider] = {
+        type: "api_key",
+        key: active.apiKey,
+      };
     }
 
     try {
@@ -454,12 +429,7 @@ export class AccountStore {
               (provider === "kenari" ? "PAYG" : undefined);
             const isOAuth = cred.type === "oauth" || !!cred.access;
 
-            // Pi mirrors persistent-key logins into auth.json as `oauth` credentials.
-            // Keep the account-store entry in API-key form while preserving OAuth in
-            // auth.json so the provider's OAuth adapter can resolve the key in-session.
-            if (PERSISTENT_KEY_PROVIDERS.has(provider) && persistentKey && cred.type !== "api_key") {
-              modified = true;
-            }
+            const accountType = isOAuth ? "oauth" : "api_key";
 
             // For API key providers, prune any prior accounts whose key does not match the current key in auth.json
             if (cred.type === "api_key" || persistentKey) {
@@ -481,12 +451,6 @@ export class AccountStore {
                 const isSameKey =
                   (persistentKey && (a.apiKey === persistentKey || a.access === persistentKey)) ||
                   (envKeyVal && (a.apiKey === envKeyVal || a.access === envKeyVal));
-                // Persistent-key providers used to import their mirrored auth.json entry as
-                // `oauth` (Pi stores the minted key as `access`), leaving one shadow duplicate
-                // of the same key per login. Drop those.
-                if (PERSISTENT_KEY_PROVIDERS.has(provider) && a.type === "oauth" && isSameKey) {
-                  return false;
-                }
                 if (a.type === "api_key" && !isSameKey) {
                   return a.id !== previousMirrorId;
                 }
@@ -505,7 +469,7 @@ export class AccountStore {
               const account: AccountCredential = {
                 id,
                 provider,
-                type: isOAuth && !persistentKey ? "oauth" : "api_key",
+                type: accountType,
                 email,
                 accountId,
                 projectId,
@@ -524,6 +488,14 @@ export class AccountStore {
               this.data.activeAccounts[provider] = account.id;
               modified = true;
             } else {
+              if (PERSISTENT_KEY_PROVIDERS.has(provider) && existing.type !== accountType) {
+                existing.type = accountType;
+                if (accountType === "oauth") {
+                  existing.refresh = refresh || "";
+                  existing.expires = typeof cred.expires === "number" ? cred.expires : 0;
+                }
+                modified = true;
+              }
               if (email && !existing.email) existing.email = email;
               if (accountId && !existing.accountId) existing.accountId = accountId;
               if (projectId && !existing.projectId) existing.projectId = projectId;

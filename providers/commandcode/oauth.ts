@@ -122,11 +122,12 @@ function extractApiKeyFromInput(input: string): string {
 }
 
 /**
- * Validates and stores a Command Code API key in the multi-account store.
+ * Validates and stores a Command Code API key, preserving how the user signed in.
  */
 export async function validateAndStoreCommandCodeApiKey(
   apiKey: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  type: "api_key" | "oauth" = "api_key"
 ): Promise<void> {
   const normalizedKey = apiKey.trim();
   if (!normalizedKey) throw new Error("No Command Code API key provided");
@@ -143,7 +144,7 @@ export async function validateAndStoreCommandCodeApiKey(
   store.upsert({
     id: accountId,
     provider: PROVIDER_ID,
-    type: "api_key",
+    type,
     label: userLabel,
     email: whoami.user?.email || whoami.user?.userName,
     accountId: whoami.user?.id,
@@ -152,9 +153,11 @@ export async function validateAndStoreCommandCodeApiKey(
     planType: billing?.planId || "individual-provider",
     apiKey: normalizedKey,
     access: normalizedKey,
+    ...(type === "oauth" ? { refresh: "", expires: 0 } : {}),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
+  store.setActive(PROVIDER_ID, accountId);
 }
 
 export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
@@ -495,7 +498,7 @@ export async function loginCommandCode(callbacks: OAuthLoginCallbacks): Promise<
     shutdownServer();
   }
 
-  await validateAndStoreCommandCodeApiKey(apiKey, (message) => callbacks.onProgress?.(message));
+  await validateAndStoreCommandCodeApiKey(apiKey, (message) => callbacks.onProgress?.(message), "oauth");
   return {
     key: apiKey,
     access: apiKey,

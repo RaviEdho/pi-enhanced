@@ -1,7 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Credential, Model } from "@earendil-works/pi-ai";
+import type {
+  ApiKeyAuth,
+  ApiKeyCredential,
+  Credential,
+  OAuthAuth,
+  Provider,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import {
-  AccountBalancer,
   AccountStore,
   executeWithMultiAccountFailover,
 } from "../../accounts/index.js";
@@ -20,145 +26,165 @@ import {
   loginKenari,
   refreshKenariToken,
   resolveKenariApiKey,
+  validateAndStoreKenariApiKey,
 } from "./oauth.js";
 import {
   fetchKenariBillingInfo,
   fetchKenariPlans,
   filterKenariModelsForBilling,
   getCachedKenariBilling,
-  isKenariFreeModel,
   loadCachedPlans,
 } from "./plan.js";
 import { streamKenari } from "./stream.js";
 
-/**
- * Registers Kenari inference provider with dynamic model catalog discovery,
- * subscription plan & balance tier filtering, and multi-account failover.
- */
+/** Registers Kenari with native API-key/browser auth, discovery, and failover. */
 export async function registerKenariProvider(pi: ExtensionAPI): Promise<void> {
   const store = AccountStore.getInstance();
-  const balancer = AccountBalancer.getInstance();
+  let models = loadCachedModels() || DEFAULT_KENARI_MODELS;
 
-  const rawKenariModels = loadCachedModels() || DEFAULT_KENARI_MODELS;
-  const cachedPlans = loadCachedPlans();
+  const credentialKey = (credential?: Credential) => credential?.type === "api_key"
+    ? credential.key
+    : credential?.type === "oauth"
+      ? getKenariApiKey(credential)
+      : undefined;
 
-  // Preload plans and billing info in background if credentials exist
+  const getBilling = (token?: string) => {
+    const cached = getCachedKenariBilling(token);
+    if (cached) return cached;
+    const account = store.getActive(KENARI_PROVIDER_ID);
+    return account && token && (account.apiKey === token || account.access === token) &&
+      account.planType && account.planType !== "Free" && account.planType !== "PAYG"
+      ? {
+          planName: account.planType,
+          availableMicroIdr: 0,
+          hasBalance: false,
+          fetchedAt: account.updatedAt,
+        }
+      : null;
+  };
+
+  const resolveKey = async (
+    credential: ApiKeyCredential | undefined,
+    env: (name: string) => Promise<string | undefined>
+  ): Promise<{ key: string; source: string } | undefined> => {
+    const storedKey = credential?.key?.trim();
+    if (storedKey) return { key: storedKey, source: "stored credential" };
+    const contextualKey = (await env("KENARI_API_KEY"))?.trim();
+    if (contextualKey) return { key: contextualKey, source: "KENARI_API_KEY" };
+    const envKey = process.env.KENARI_API_KEY?.trim();
+    if (envKey) return { key: envKey, source: "KENARI_API_KEY" };
+    const account = store.getActive(KENARI_PROVIDER_ID);
+    const key = account?.type === "api_key" ? account.apiKey || account.access : undefined;
+    return key ? { key, source: "account store" } : undefined;
+  };
+
+  const apiKeyAuth: ApiKeyAuth = {
+    name: "Kenari API key",
+    async login(interaction) {
+      const input = await interaction.prompt({
+        type: "secret",
+        message: "Enter your Kenari API key:",
+        placeholder: "kn-...",
+        signal: interaction.signal,
+      });
+      const key = input.trim();
+      await validateAndStoreKenariApiKey(key, interaction.signal, (message) =>
+        interaction.notify({ type: "progress", message })
+      );
+      return { type: "api_key", key };
+    },
+    async check({ ctx, credential }) {
+      const resolved = await resolveKey(credential, (name) => ctx.env(name));
+      return resolved ? { type: "api_key", source: resolved.source } : undefined;
+    },
+    async resolve({ ctx, credential }) {
+      const resolved = await resolveKey(credential, (name) => ctx.env(name));
+      return resolved ? { auth: { apiKey: resolved.key }, source: resolved.source } : undefined;
+    },
+  };
+
+  const oauthAuth: OAuthAuth = {
+    name: KENARI_PROVIDER_NAME,
+    async login(interaction) {
+      const credentials = await loginKenari({
+        onAuth: (info) => interaction.notify({ type: "auth_url", ...info }),
+        onDeviceCode: (info) => interaction.notify({ type: "device_code", ...info }),
+        onSelect: (prompt) => interaction.prompt({
+          type: "select",
+          message: prompt.message,
+          options: prompt.options,
+          signal: interaction.signal,
+        }),
+        onPrompt: (prompt) => interaction.prompt({
+          type: "manual_code",
+          message: prompt.message,
+          placeholder: prompt.placeholder,
+          signal: interaction.signal,
+        }),
+        onProgress: (message) => interaction.notify({ type: "progress", message }),
+        signal: interaction.signal,
+      });
+      return { ...credentials, type: "oauth" };
+    },
+    async refresh(credential) {
+      return { ...await refreshKenariToken(credential), type: "oauth" };
+    },
+    async toAuth(credential) {
+      return { apiKey: getKenariApiKey(credential) };
+    },
+  };
+
   const activeToken = resolveKenariApiKey();
-  let initialBilling = getCachedKenariBilling(activeToken);
-  if (!initialBilling && activeToken) {
-    const currentActive = store.getActive(KENARI_PROVIDER_ID);
-    if (
-      currentActive &&
-      currentActive.planType &&
-      currentActive.planType !== "Free" &&
-      currentActive.planType !== "PAYG"
-    ) {
-      initialBilling = {
-        planName: currentActive.planType,
-        availableMicroIdr: 0,
-        hasBalance: false,
-        fetchedAt: currentActive.updatedAt,
-      };
-    }
-  }
-
-  if (activeToken) {
-    void fetchKenariBillingInfo(activeToken).catch(() => {});
-  }
+  if (activeToken) void fetchKenariBillingInfo(activeToken).catch(() => {});
   void fetchKenariPlans().catch(() => {});
 
-  const initialModels = filterKenariModelsForBilling(rawKenariModels, initialBilling, cachedPlans);
+  const streamWithFailover: Provider<"openai-completions">["streamSimple"] = (model, transcript, options) =>
+    executeWithMultiAccountFailover(
+      KENARI_PROVIDER_ID,
+      model,
+      transcript,
+      options,
+      (m, ctx, opts, resolvedAuth) => streamKenari(m, ctx, opts, resolvedAuth)
+    );
 
-  // Pi resolves the configured `apiKey` *before* invoking refreshModels(), and a
-  // dangling "$ENV_VAR" reference throws while the variable is unset. That throw
-  // is reported as "Could not refresh kenari; showing cached models." even though
-  // this provider authenticates from the account store. Only reference the env
-  // var when it is actually set; otherwise use the stored key, or omit API-key
-  // auth entirely so an unauthenticated provider stays quietly unconfigured.
-  const apiKeyConfig = process.env.KENARI_API_KEY?.trim()
-    ? "$KENARI_API_KEY"
-    : activeToken;
-
-  pi.registerProvider(KENARI_PROVIDER_ID, {
+  const provider: Provider<"openai-completions"> = {
+    id: KENARI_PROVIDER_ID,
     name: KENARI_PROVIDER_NAME,
     baseUrl: KENARI_API_BASE_URL,
-    apiKey: apiKeyConfig,
-    api: "openai-completions",
-
-    models: initialModels,
-
+    auth: { apiKey: apiKeyAuth, oauth: oauthAuth },
+    getModels: () => models,
     async refreshModels(context) {
-      const plans = await fetchKenariPlans(context?.signal).catch(() => loadCachedPlans());
-
-      if (context?.allowNetwork === false || context?.signal?.aborted) {
-        const cached = loadCachedModels() || rawKenariModels;
-        const currentActive = store.getActive(KENARI_PROVIDER_ID);
-        const token = currentActive?.apiKey || currentActive?.access || process.env.KENARI_API_KEY;
-        const billing = getCachedKenariBilling(token);
-        return filterKenariModelsForBilling(cached, billing, plans);
+      if (context.signal.aborted) return;
+      const token = credentialKey(context.credential) || resolveKenariApiKey();
+      if (context.allowNetwork) {
+        await fetchKenariPlans(context.signal).catch(() => {});
       }
-
-      const currentActive = store.getActive(KENARI_PROVIDER_ID);
-      let token = process.env.KENARI_API_KEY;
-      if (currentActive) {
-        try {
-          token = await balancer.ensureFreshToken(currentActive);
-        } catch {
-          // Ignore
+      let nextModels = loadCachedModels() || models;
+      if (context.allowNetwork) {
+        const live = await fetchKenariModels(token, context.signal);
+        if (live?.length) nextModels = live;
+        const billing = token
+          ? await fetchKenariBillingInfo(token, context.signal).catch(() => null)
+          : null;
+        const account = store.getActive(KENARI_PROVIDER_ID);
+        if (billing?.planName && account && (account.apiKey === token || account.access === token) &&
+          billing.planName !== account.planType) {
+          account.planType = billing.planName;
+          store.upsert(account);
         }
       }
-      if (!token && context?.credential) {
-        if (context.credential.type === "api_key" && "key" in context.credential && context.credential.key) {
-          token = context.credential.key;
-        } else if (context.credential.type === "oauth" && "access" in context.credential && context.credential.access) {
-          token = (context.credential as { access: string }).access;
-        }
-      }
-
-      const live = await fetchKenariModels(token, context?.signal);
-      const allModels = live && live.length > 0 ? live : (loadCachedModels() || rawKenariModels);
-
-      let billing = token ? await fetchKenariBillingInfo(token, context?.signal).catch(() => null) : null;
-      if (!billing && token) {
-        billing = getCachedKenariBilling(token);
-      }
-
-      if (billing?.planName && currentActive && billing.planName !== currentActive.planType) {
-        currentActive.planType = billing.planName;
-        currentActive.updatedAt = Date.now();
-        store.upsert(currentActive);
-      }
-
-      return filterKenariModelsForBilling(allModels, billing, plans);
+      await context.publish({ update: () => { models = nextModels; } });
     },
-
-    oauth: {
-      name: KENARI_PROVIDER_NAME,
-      login: loginKenari,
-      refreshToken: refreshKenariToken,
-      getApiKey: getKenariApiKey,
-      modifyModels(models, credentials) {
-        const token = credentials.access;
-        const billing = getCachedKenariBilling(token);
-        const plans = loadCachedPlans();
-        return filterKenariModelsForBilling(
-          models as Model<"openai-completions">[],
-          billing,
-          plans
-        );
-      },
+    filterModels(available, credential) {
+      const token = credentialKey(credential) || resolveKenariApiKey();
+      return filterKenariModelsForBilling(available, getBilling(token), loadCachedPlans());
     },
-
-    streamSimple(model, transcript, options) {
-      return executeWithMultiAccountFailover(
-        KENARI_PROVIDER_ID,
-        model,
-        transcript,
-        options,
-        (m, ctx, opts, resolvedAuth) => streamKenari(m, ctx, opts, resolvedAuth)
-      );
+    stream(model, transcript, options) {
+      return streamWithFailover(model, transcript, options as SimpleStreamOptions | undefined);
     },
-  });
+    streamSimple: streamWithFailover,
+  };
+  pi.registerProvider(provider);
 }
 
 export * from "./constants.js";
