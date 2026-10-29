@@ -94,11 +94,6 @@ function extractKeyBuckets(
     return {};
   }
 
-  if (report.providerId === "hyper") {
-    const hyperBucket = allBuckets.find((b) => b.bucketId === "hypercredits");
-    return { balance: hyperBucket };
-  }
-
   if (report.providerId === "commandcode") {
     const fiveHour = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
     const weekly = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
@@ -302,21 +297,12 @@ function renderProgressBar(
 }
 
 /**
- * Renders the active balance representation (credits or prepaid currency) with optional reset countdown.
+ * Renders the active balance representation (credits or prepaid currency).
  */
 function renderBalance(
   balance: QuotaBucket | undefined,
-  report: ProviderUsageReport,
-  now: number
+  report: ProviderUsageReport
 ): string {
-  if (report.providerId === "hyper") {
-    const balancePart = report.capacitySummaryShort || report.capacitySummary || balance?.description || "Hypercredits";
-    const resetPart = balance?.resetTime
-      ? ` · resets ${formatRelativeTime(balance.resetTime, now)}`
-      : "";
-    return `${balancePart}${resetPart}`;
-  }
-
   if (report.providerId === "kenari") {
     if (balance?.description) {
       return balance.description;
@@ -448,7 +434,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
   }
 
   if (balance || report.capacitySummary) {
-    return `${prefix}  ${renderBalance(balance, report, now)}`;
+    return `${prefix}  ${renderBalance(balance, report)}`;
   }
 
   return `${prefix}  No quota limits reported`;

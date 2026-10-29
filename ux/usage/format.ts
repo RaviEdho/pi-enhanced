@@ -268,11 +268,7 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (report.providerId === "hyper" && report.capacitySummary) {
-    detailStr = bucket.resetTime
-      ? `${report.capacitySummary} · reset ${formatRelativeTime(bucket.resetTime, now)}`
-      : report.capacitySummary;
-  } else if (bucket.usedFraction <= 0) {
+  if (bucket.usedFraction <= 0) {
     detailStr = "ready";
   } else if (bucket.resetTime) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
@@ -280,11 +276,9 @@ function formatBucketEntry(
     detailStr = report.capacitySummary;
   }
 
-  const metric = report.providerId === "hyper" && detailStr
-    ? dim(detailStr)
-    : detailStr
-      ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
-      : pctColored;
+  const metric = detailStr
+    ? `${pctColored} ${dim("·")} ${dim(detailStr)}`
+    : pctColored;
 
   const full = `${bar}   ${metric}`;
   const visibleLen = barWidth + 3 + visibleWidth(metric);

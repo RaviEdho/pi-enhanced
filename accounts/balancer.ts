@@ -3,7 +3,6 @@ import { discoverProject, refreshAntigravityToken } from "../providers/antigravi
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
-import { refreshHyperToken } from "../providers/hyper/oauth.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { getHighestTierAccounts } from "./priority.js";
@@ -75,7 +74,7 @@ export function isRateLimitError(error: unknown): boolean {
   if (!error) return false;
   const msg = error instanceof Error ? error.message : String(error);
   return (
-    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|insufficient.?hypercredits|billing_error|plan_limit_reached|insufficient_balance|free_quota_daily|free_quota_rpm/i.test(
+    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|billing_error|plan_limit_reached|insufficient_balance|free_quota_daily|free_quota_rpm/i.test(
       msg
     ) ||
     (typeof error === "object" &&
@@ -121,7 +120,7 @@ export function extractCooldownMs(error: unknown): number {
   }
 
   // Depleted credits, payment required, or billing errors: back off for 1 hour to prevent re-hammering
-  if (/402|insufficient.?hypercredits|billing_error|payment.?required|insufficient_balance/i.test(msg)) {
+  if (/402|billing_error|payment.?required|insufficient_balance/i.test(msg)) {
     return 60 * 60 * 1000;
   }
 
@@ -388,44 +387,6 @@ export class AccountBalancer {
       if (account.requiresAuthRefresh) {
         throw new Error("Account needs revalidation (run /login openai)");
       }
-    }
-
-    if (account.provider === "hyper") {
-      if (account.type === "api_key" || account.apiKey) {
-        return account.apiKey || account.access || "";
-      }
-      if (account.refresh && (!account.expires || account.expires - Date.now() < EXPIRY_BUFFER_MS)) {
-        try {
-          const cred = await refreshHyperToken(
-            {
-              access: account.access || "",
-              refresh: account.refresh,
-              expires: account.expires || Date.now() + 3600 * 1000,
-            },
-            new AbortController().signal
-          );
-          if (cred && cred.access) {
-            account.access = cred.access;
-            if (cred.refresh) account.refresh = cred.refresh;
-            account.expires = cred.expires;
-            account.updatedAt = Date.now();
-            this.store.upsert(account);
-            return cred.access;
-          }
-        } catch (err) {
-          if (isAuthRevocationError(err)) {
-            account.disabledCause = `Session expired or revoked (run /login ${account.provider})`;
-            account.updatedAt = Date.now();
-            this.store.upsert(account);
-            throw new Error(account.disabledCause);
-          }
-          console.warn(`[AccountBalancer] Charm Hyper token refresh failed for ${account.id}: ${err instanceof Error ? err.message : String(err)}`);
-          if (account.access) return account.access;
-          throw err;
-        }
-      }
-      if (account.access) return account.access;
-      if (account.apiKey) return account.apiKey;
     }
 
     if (account.access) return account.access;

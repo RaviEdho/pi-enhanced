@@ -4,7 +4,6 @@ import { dirname, join } from "node:path";
 import { fetchAntigravityUsage } from "../ux/usage/antigravity.js";
 import { fetchCodexUsage } from "../ux/usage/codex.js";
 import { computeTimeElapsedFraction } from "../ux/usage/format.js";
-import { fetchHyperUsage } from "../ux/usage/hyper.js";
 import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
 import { fetchKenariUsage } from "../ux/usage/kenari.js";
 import { buildOpenAIUsageReport } from "../ux/usage/openai.js";
@@ -204,13 +203,6 @@ export class QuotaManager {
             refreshToken: account.refresh,
             signal,
           });
-        } else if (account.provider === "hyper") {
-          report = await fetchHyperUsage(
-            token,
-            account.email || account.id,
-            signal,
-            account.planType
-          );
         } else if (account.provider === "commandcode") {
           report = await fetchCommandCodeUsage(
             token,

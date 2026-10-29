@@ -1,6 +1,6 @@
 # pi-enhanced
 
-Enhanced Pi extension package providing the **Google Antigravity** provider, **Charm Hyper** inference provider, **Command Code** provider, **Kenari** AI gateway provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
+Enhanced Pi extension package providing the **Google Antigravity** provider, **Command Code** provider, **Kenari** AI gateway provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
 
 ## Features
 
@@ -18,12 +18,6 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
   - Subscription plan gating (GOAT, Pro, Max) and automatic credit bypass rules when on-demand credits exist.
   - Multi-account pooling with transparent 429 rate limit failover.
   - Live quota, monthly pool, and 5-hour/weekly burst window tracking via `/usage` and interactive footer status bar.
-- **Charm Hyper Inference Provider**:
-  - Fast, cost-effective inference for coding agents via Charm Hyper (`https://hyper.charm.land`).
-  - Dual authentication: OAuth 2.0 Device Code Flow and interactive API-key sign-in; `HYPER_API_KEY` is also supported.
-  - Dynamic model discovery from `/v1/provider` with reasoning effort levels, image attachment support, and context window awareness (DeepSeek V4.1 Flash, Qwen 3.8 Max, Kimi K3, GLM 5.3, MiniMax M3, Inkling, etc.).
-  - Multi-account pooling with transparent 429 rate limit & 402 billing failover.
-  - Live Hypercredit (HC) balance tracking in `/usage` and interactive footer status bar.
 - **OAuth 2.0 Integration**: Authenticate via `/login google-antigravity` using Google OAuth (browser callback on port 51121 with manual prompt fallback for remote/headless setups).
 - **Automated Cloud Code Assist Project Discovery**: Automatically detects or provisions the Antigravity free tier (`cloudaicompanionProject`) via Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`).
 - **Full Model Support**:
@@ -39,7 +33,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Tool Calling**: Full support for tool calling with schema normalization for Claude models.
 - **Thinking & Reasoning Support**: Discrete effort-tier routing and thinking budget configuration.
 - **Dynamic OpenAI Codex Discovery & Plan Filtering**: Automatically discovers newly available models from OpenAI's live Codex catalog, including their context windows, input modalities, and reasoning levels, without waiting for Pi's bundled catalog to update. Detects your ChatGPT plan tier from your OAuth token and filters unavailable or hidden models from `/model` and `pi --list-models`, with cached discovery for offline startup.
-- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI / ChatGPT subscriptions, OpenAI Codex, Charm Hyper, Command Code, Kenari). Always prefer the highest healthy tier eligible for the requested model; lower tiers are fallback-only, and selection returns to higher tiers when they recover. Session affinity and weekly reset-pace balancing apply within the preferred tier, with automatic OAuth token refresh and transparent failover on 429 / quota exhaustion. ChatGPT priority: Enterprise > Business/Team > Pro > Plus > Go > Free. Unknown tiers and PAYG accounts remain fallback candidates; Hyper has no comparable subscription-tier metadata.
+- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI / ChatGPT subscriptions, OpenAI Codex, Command Code, Kenari). Always prefer the highest healthy tier eligible for the requested model; lower tiers are fallback-only, and selection returns to higher tiers when they recover. Session affinity and weekly reset-pace balancing apply within the preferred tier, with automatic OAuth token refresh and transparent failover on 429 / quota exhaustion. ChatGPT priority: Enterprise > Business/Team > Pro > Plus > Go > Free. Unknown tiers and PAYG accounts remain fallback candidates.
 - **Provider Quotas with Reset Pace Markers**: Live multi-account quota monitoring via `/usage` showing usage percentage, plan tier, reset countdowns, and real-time reset progress markers (`┃`) on the usage bar.
 - **Autonomous Git Assistant (`/git`, `/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), supports atomic multi-stage commits, PR generation (`/git pr`), smart branching (`/git branch`), merge conflict resolution (`/git resolve`), release drafting (`/git release`), and instant zero-token helpers (`/git sync`, `/git undo`).
 - **Terminal Output Compressor (`tools/compressor/`, `/gain`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, compressing 60–90% of raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Stores full uncompressed outputs in an LRU buffer accessible via `/recall <id>` and provides token reduction statistics via `/gain`.
@@ -53,6 +47,10 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
 - **Interactive User Feedback Tool (`tools/feedback/`)**: Direct, native user feedback tool exposing `ask_user`. Supports open-ended and choice questions, custom typed responses, multi-question flows with review/edit, and cancellation/timeouts. Uses Pi's interactive questionnaire in TUI and Discord select menus, buttons, and text-entry modals through the gateway.
 - **Pi Auth Sync**: Automatically imports credentials from `~/.pi/agent/auth.json` into the accounts pool and syncs the active healthy account back to `auth.json`.
+
+## Retired providers
+
+Charm Hyper has been removed because its usage, quota, and reset data cannot be fetched reliably enough to meet this package's provider requirements. On the next extension load, saved Hyper credentials, pooled accounts, session bindings, and model/quota caches are automatically deleted; other providers and conversation history are preserved. `HYPER_API_KEY` is no longer used—remove it from your shell configuration if set. Select another provider if your default model used Hyper.
 
 ## Usage
 
@@ -90,14 +88,11 @@ Open **Settings** from `/discord`, or run `/discord configure`, to edit the bot 
 # Or login to Command Code (choose account or API key):
 /login commandcode
 
-# Or login to Charm Hyper:
-/login hyper
-
 # Or login to Kenari:
 /login kenari
 ```
 
-Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."`, `HYPER_API_KEY="sk-hyper-..."`, or `KENARI_API_KEY="kn-..."` directly.
+Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."` or `KENARI_API_KEY="kn-..."` directly.
 
 ### 3. Running with Models
 
@@ -106,10 +101,6 @@ Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed autom
 pi --model commandcode/claude-sonnet-5-5
 pi --model commandcode/deepseek/deepseek-v4.1-flash
 pi --model commandcode/google/gemini-3.7-flash
-
-# Interactive mode with Charm Hyper
-pi --model hyper/deepseek-v4.1-flash
-pi --model hyper/qwen3.8-max
 
 # Interactive mode with Kenari
 pi --model kenari/deepseek-v4-1-flash:free

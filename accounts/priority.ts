@@ -56,7 +56,6 @@ export function getAccountTierPriority(account: AccountCredential): number {
         : 0;
     }
 
-    // Hyper currently exposes credits, not comparable subscription tiers.
     default:
       return 0;
   }

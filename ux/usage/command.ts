@@ -20,7 +20,6 @@ import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
-import { fetchHyperUsage } from "./hyper.js";
 import { buildOpenAIUsageReport } from "./openai.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
 
@@ -104,7 +103,6 @@ export async function collectUsageReports(
 
   const antigravityAccounts = store.list("google-antigravity");
   const codexAccounts = store.list("openai-codex");
-  const hyperAccounts = store.list("hyper");
   const commandcodeAccounts = store.list("commandcode");
   const kenariAccounts = store.list("kenari");
 
@@ -363,102 +361,7 @@ export async function collectUsageReports(
     }
   }
 
-  // 4. Charm Hyper multi-account fetch in parallel
-  const isHyperActive = options?.currentProvider === "hyper";
-  const hyperPromises: Promise<ProviderUsageReport>[] = [];
-  if (hyperAccounts.length > 0) {
-    const sessionAccount = isHyperActive
-      ? balancer.getSessionAccount(
-          "hyper",
-          options?.sessionId,
-          options?.currentModelId
-        )
-      : undefined;
-    for (const acc of hyperAccounts) {
-      if (signal?.aborted) break;
-      const isSession = isHyperActive && sessionAccount?.id === acc.id;
-      const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
-      const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.orgName || acc.id;
-
-      if (acc.disabledCause) {
-        hyperPromises.push(
-          Promise.resolve({
-            providerId: "hyper",
-            providerName: "Charm Hyper",
-            accountEmail: label,
-            accountId: acc.id,
-            isSessionAccount: isSession,
-            planType: acc.planType,
-            cooldownMinutes: isCooldown ? mins : undefined,
-            fetchedAt: Date.now(),
-            groups: [],
-            error: acc.disabledCause,
-          })
-        );
-        continue;
-      }
-
-      hyperPromises.push(
-        (async (): Promise<ProviderUsageReport> => {
-          try {
-            const token = await balancer.ensureFreshToken(acc);
-            const report = await fetchHyperUsage(
-              token,
-              label,
-              signal,
-              acc.planType
-            );
-            report.isSessionAccount = isSession;
-            report.accountId = acc.id;
-            report.accountEmail = label;
-            report.cooldownMinutes = isCooldown ? mins : undefined;
-            if (report.error && isAuthRevocationError(report.error)) {
-              acc.disabledCause = `Session expired or revoked (run /login hyper)`;
-              acc.updatedAt = Date.now();
-              store.upsert(acc);
-              report.error = acc.disabledCause;
-            }
-            QuotaManager.getInstance().setReport(acc.id, report);
-            return report;
-          } catch (err) {
-            return {
-              providerId: "hyper",
-              providerName: "Charm Hyper",
-              accountEmail: label,
-              accountId: acc.id,
-              isSessionAccount: isSession,
-              planType: acc.planType,
-              cooldownMinutes: isCooldown ? mins : undefined,
-              fetchedAt: Date.now(),
-              groups: [],
-              error: formatUsageErrorMessage(err, "hyper"),
-            };
-          }
-        })()
-      );
-    }
-  } else {
-    // Fallback to auth.json or HYPER_API_KEY
-    const authMap = loadConfiguredAuth();
-    const hyperAuth = authMap["hyper"];
-    const fallbackToken = hyperAuth?.access || hyperAuth?.key || process.env.HYPER_API_KEY;
-    if (fallbackToken) {
-      hyperPromises.push(
-        (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchHyperUsage(
-            fallbackToken,
-            hyperAuth?.email || "default",
-            signal
-          );
-          report.isSessionAccount = isHyperActive;
-          return report;
-        })()
-      );
-    }
-  }
-
-  // 5. Command Code multi-account fetch in parallel
+  // 4. Command Code multi-account fetch in parallel
   const isCommandCodeActive = options?.currentProvider === "commandcode";
   const commandcodePromises: Promise<ProviderUsageReport>[] = [];
   if (commandcodeAccounts.length > 0) {
@@ -552,7 +455,7 @@ export async function collectUsageReports(
     }
   }
 
-  // 6. Kenari multi-account fetch in parallel
+  // 5. Kenari multi-account fetch in parallel
   const isKenariActive = options?.currentProvider === "kenari";
   const kenariPromises: Promise<ProviderUsageReport>[] = [];
   if (kenariAccounts.length > 0) {
@@ -651,7 +554,6 @@ export async function collectUsageReports(
     ...antigravityPromises,
     ...codexPromises,
     ...openaiPromises,
-    ...hyperPromises,
     ...commandcodePromises,
     ...kenariPromises,
   ]);

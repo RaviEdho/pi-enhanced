@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 2;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "hyper", "openai", "commandcode", "kenari"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "openai", "commandcode", "kenari"]);
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
@@ -256,9 +256,7 @@ export class AccountStore {
     // Guard: Do not write back to auth.json if the provider is not already in auth.json
     // and no environment variable is set (avoids undoing user logout).
     const envVal =
-      provider === "hyper"
-        ? process.env.HYPER_API_KEY?.trim()
-        : provider === "commandcode"
+      provider === "commandcode"
         ? process.env.COMMANDCODE_API_KEY?.trim()
         : provider === "kenari"
         ? process.env.KENARI_API_KEY?.trim()
@@ -434,9 +432,7 @@ export class AccountStore {
             // For API key providers, prune any prior accounts whose key does not match the current key in auth.json
             if (cred.type === "api_key" || persistentKey) {
               const envKeyVal =
-                provider === "hyper"
-                  ? process.env.HYPER_API_KEY?.trim()
-                  : provider === "commandcode"
+                provider === "commandcode"
                   ? process.env.COMMANDCODE_API_KEY?.trim()
                   : provider === "kenari"
                   ? process.env.KENARI_API_KEY?.trim()
@@ -535,37 +531,6 @@ export class AccountStore {
         }
       } catch {
         // Ignore errors
-      }
-    }
-
-    // Check process.env.HYPER_API_KEY
-    if (process.env.HYPER_API_KEY) {
-      const envKey = process.env.HYPER_API_KEY.trim();
-      if (envKey) {
-        authProviders.add("hyper");
-        const id = AccountStore.generateAccountId("hyper", "env-key");
-        const existing = findExisting("hyper", undefined, undefined, id, undefined, envKey);
-        if (!existing) {
-          this.data.accounts.push({
-            id,
-            provider: "hyper",
-            type: "api_key",
-            apiKey: envKey,
-            access: envKey,
-            email: "env-key",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-          if (!this.data.activeAccounts["hyper"]) {
-            this.data.activeAccounts["hyper"] = id;
-          }
-          modified = true;
-        } else if (existing.apiKey !== envKey) {
-          existing.apiKey = envKey;
-          existing.access = envKey;
-          existing.updatedAt = Date.now();
-          modified = true;
-        }
       }
     }
 

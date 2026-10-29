@@ -1,12 +1,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installLogoutHook } from "./accounts/index.js";
+import { removeRetiredHyperData } from "./accounts/retired.js";
 import { registerProviders } from "./providers/index.js";
 import { registerTools } from "./tools/index.js";
 import { registerUX } from "./ux/index.js";
 import { registerDiscordGateway } from "./gateway/index.js";
 
 export default async function (pi: ExtensionAPI) {
-  // Register custom inference providers & dynamic model catalogs (Antigravity, Hyper, Codex)
+  // Purge retired provider credentials before any account store is initialized.
+  await removeRetiredHyperData();
+
+  // Register custom inference providers & dynamic model catalogs.
   await registerProviders(pi);
 
   // Register workflow & UX enhancements (working timer, continue shortcut, quota monitor & footer)
