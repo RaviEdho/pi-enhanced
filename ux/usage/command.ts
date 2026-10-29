@@ -790,11 +790,7 @@ export class UsageViewerComponent implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type === "wheel" && event.wheelDelta) {
-      this.scrollBy(event.wheelDelta > 0 ? 3 : -3);
-      return { handled: true, render: true };
-    }
-    return undefined;
+    return this.frame.handleMouse(event);
   }
 
   render(width: number): string[] {

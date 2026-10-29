@@ -128,7 +128,7 @@ Run `/usage` to view live quotas, progress bars, and reset times across all acco
 pi -p "/usage"
 ```
 
-Custom TUI dialogs share a titled header, optional right-aligned metadata, and a keyboard-hint footer. Their total height is capped at **24 rows** or **terminal height minus 4 rows**, whichever is smaller (centralized in `ux/dialog.ts`). Action buttons and input controls stay pinned below the scrollable content, above the keyboard hints; the selected `→` row remains visible. Use `PgUp`/`PgDn` to scroll content in forms and selectors, or `↑`/`↓` in viewers. Pi-native dialogs and Discord's RPC-rendered dialogs are unchanged.
+Custom TUI dialogs share a titled header, optional right-aligned metadata, and a keyboard-hint footer. Their total height is capped at **24 rows** or **terminal height minus 4 rows**, whichever is smaller (centralized in `ux/dialog.ts`). Action buttons and input controls stay pinned below the scrollable content, above the keyboard hints; the selected `→` row remains visible. Use `PgUp`/`PgDn` to scroll content in forms and selectors, or `↑`/`↓` in viewers. In fullscreen mode, mouse-wheel/trackpad events over custom dialogs scroll their content without leaking into the transcript; settings lists retain native wheel navigation. Pi-native dialogs and Discord's RPC-rendered dialogs are unchanged.
 
 ### 5. Inspect Context Window Breakdown (`/context`)
 

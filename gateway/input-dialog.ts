@@ -1,4 +1,4 @@
-import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { Input, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { DialogFrame } from "../ux/dialog.js";
@@ -76,6 +76,10 @@ export class DiscordInputDialog implements Component, Focusable {
     this.input.handleInput(data);
     this.tui.requestRender();
     return true;
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   render(width: number): string[] {

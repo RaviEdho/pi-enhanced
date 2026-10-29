@@ -1,4 +1,4 @@
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import { DialogFrame } from "../ux/dialog.js";
@@ -86,6 +86,10 @@ export class DiscordToggleDialog implements Component {
     else if (this.selectedIndex === 1) this.allowServerMessages = !this.allowServerMessages;
     else return;
     this.tui.requestRender();
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   render(width: number): string[] {

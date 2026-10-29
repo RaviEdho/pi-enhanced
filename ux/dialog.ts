@@ -4,6 +4,8 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 /** Total dialog height, including borders, actions, margins, and keyboard hints. */
@@ -79,6 +81,13 @@ export class DialogFrame {
   scrollTo(row: number): void {
     this.top = Math.max(0, Math.min(this.maxScroll, row));
     this.tui.requestRender();
+  }
+
+  /** Scroll only the body; consume boundary events so they cannot move the transcript. */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+    this.scrollBy(event.wheelDelta);
+    return { handled: true, render: true };
   }
 
   handleInput(data: string): boolean {
@@ -184,6 +193,7 @@ export class DialogFrame {
       geometry = layout(hints.length);
     }
     const { spacious, gap, bodyHeight, actionHeight } = geometry;
+    const reservedHintRows = hints.length;
     this.renderedBodyHeight = Math.max(1, bodyHeight);
     this.maxScroll = bodyHeight > 0 ? Math.max(0, content.lines.length - bodyHeight) : 0;
     this.top = Math.max(0, Math.min(this.maxScroll, this.top));
@@ -200,6 +210,8 @@ export class DialogFrame {
     } else if (bodyHeight === 0) {
       hints = makeHints();
     }
+    // Keep the dock height stable when scroll-range digits wrap the footer.
+    while (hints.length < reservedHintRows) hints.push("");
     this.actionTop = Math.max(0, Math.min(this.actionTop, actions.lines.length - actionHeight));
     if (selectedAction < this.actionTop) this.actionTop = selectedAction;
     if (selectedAction >= this.actionTop + actionHeight) this.actionTop = selectedAction - actionHeight + 1;

@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { DialogFrame } from "../dialog.js";
 import { analyzeContext } from "./analyzer.js";
 import { buildContextLines, formatNativeKeyHint } from "./format.js";
@@ -144,6 +144,10 @@ export class ContextViewerComponent implements Component {
     }
 
     return false;
+  }
+
+  public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   public render(width: number): string[] {

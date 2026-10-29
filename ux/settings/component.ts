@@ -572,9 +572,12 @@ export class EnhancedSettingsComponent implements Component {
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // Never let confirmation or chrome clicks mutate settings underneath them.
+    // Descriptions and warning dialogs scroll without touching the pinned controls.
+    // Preserve native list mouse navigation when the pointer is over that list.
     const actionRow = this.frame.actionRowAt(event.y);
-    if (this.cacheWarning || actionRow === undefined || event.x < 2) return undefined;
+    if (this.cacheWarning || actionRow === undefined || event.x < 2) {
+      return this.frame.handleMouse(event);
+    }
     const adjustedEvent: TuiMouseEvent = {
       ...event,
       x: event.x - 2,
@@ -583,11 +586,12 @@ export class EnhancedSettingsComponent implements Component {
     this.focusSearch = adjustedEvent.y === 0 && event.type !== "wheel";
     const result = this.settingsList.handleMouse?.(adjustedEvent);
     if (result) {
-      this.skipUnselectableItems("down");
+      const direction = event.type === "wheel" && (event.wheelDelta ?? 0) < 0 ? "up" : "down";
+      this.skipUnselectableItems(direction);
       this.tui.requestRender();
       return result;
     }
-    return undefined;
+    return this.frame.handleMouse(event);
   }
 
   private maxVisibleRows(): number {

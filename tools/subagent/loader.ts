@@ -1,4 +1,4 @@
-import { CancellableLoader, type Component, type TUI } from "@earendil-works/pi-tui";
+import { CancellableLoader, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { DialogFrame } from "../../ux/dialog.js";
 
@@ -43,6 +43,10 @@ export class SubagentBorderedLoader implements Component {
 
   handleInput(data: string): void {
     if (!this.frame.handleInput(data)) this.loader.handleInput(data);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   dispose(): void {

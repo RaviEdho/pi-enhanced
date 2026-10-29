@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Component, Focusable, SelectItem, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { fuzzyFilter, Input, SelectList } from "@earendil-works/pi-tui";
 import { DialogFrame } from "../ux/dialog.js";
 
@@ -108,6 +108,10 @@ export class DiscordModelDialog implements Component, Focusable {
       this.updateList();
     }
     this.tui.requestRender();
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   render(width: number): string[] {

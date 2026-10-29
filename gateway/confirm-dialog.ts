@@ -1,4 +1,4 @@
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import { DialogFrame } from "../ux/dialog.js";
@@ -75,6 +75,10 @@ export class DiscordConfirmationDialog implements Component {
     }
 
     return false;
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   render(width: number): string[] {

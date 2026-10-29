@@ -6,6 +6,8 @@ import {
   type Component,
   type Focusable,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { QuestionItem, SingleAnswerDetail } from "./types.js";
 import { DialogFrame } from "../../ux/dialog.js";
@@ -404,6 +406,10 @@ export class QuestionnaireComponent implements Component, Focusable {
         s.highlightedIndex = s.selectedOptionIndex;
       }
     }
+  }
+
+  public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.frame.handleMouse(event);
   }
 
   public render(width: number): string[] {
