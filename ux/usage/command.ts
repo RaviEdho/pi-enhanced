@@ -842,6 +842,9 @@ export class UsageViewerComponent implements Component {
       const allContentLines = buildUsageLines(this.reports, {
         sessionInfo: this.sessionInfo,
         availableWidth: width,
+        // This viewer has no pinned controls; columns share the bounded body
+        // beneath the header and above the single-row hints on wide terminals.
+        availableHeight: Math.max(1, this.frame.maxHeight - (this.frame.maxHeight >= 8 ? 6 : 3)),
         theme: this.theme,
         now: Date.now(),
       });

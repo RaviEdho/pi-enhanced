@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
 
 /**
@@ -173,6 +173,8 @@ export interface FormatUsageOptions {
   sessionInfo?: SessionUsageInfo;
   colorize?: boolean;
   availableWidth?: number;
+  /** Body rows available before providers flow into the next column. */
+  availableHeight?: number;
   theme?: UsageTheme;
 }
 
@@ -286,8 +288,72 @@ function formatBucketEntry(
   return { bar, metric, full, visibleLen };
 }
 
+const MIN_PROVIDER_COLUMN_WIDTH = 52;
+const PROVIDER_COLUMN_GAP = 4;
+
+/** Wrap within one provider column without losing account identities or error text. */
+function appendUsageLine(lines: string[], text: string, width: number): void {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const leading = rawLine.match(/^ */)?.[0].length ?? 0;
+    const indent = " ".repeat(Math.min(leading, Math.max(0, width - 4)));
+    for (const line of wrapTextWithAnsi(rawLine.slice(leading), Math.max(1, width - indent.length))) {
+      lines.push(truncateToWidth(indent + line, width));
+    }
+  }
+}
+
+/** One indivisible provider block: its accounts always run down the same column. */
+function buildProviderLines(
+  reports: ProviderUsageReport[],
+  width: number,
+  now: number,
+  theme: UsageTheme
+): string[] {
+  const lines: string[] = [];
+  const dim = (text: string) => theme.dim ? theme.dim(text) : theme.fg("dim", text);
+  const append = (text: string) => appendUsageLine(lines, text, width);
+  const countTag = reports.length > 1 ? dim(` (${reports.length} accounts)`) : "";
+  append(`  ${theme.bold(theme.fg("accent", reports[0].providerName))}${countTag}`);
+
+  const buckets = reports.flatMap((report) => report.groups.flatMap((group) => group.buckets));
+  const maxLabel = buckets.reduce((max, bucket) => Math.max(max, visibleWidth(bucket.displayName)), 16);
+  const labelWidth = Math.max(4, Math.min(26, maxLabel, width - 33));
+  const barWidth = Math.max(4, Math.min(25, width - (6 + labelWidth + 2 + 3 + 16)));
+
+  for (let index = 0; index < reports.length; index++) {
+    const report = reports[index];
+    if (index > 0) lines.push("");
+    append(formatAccountBadge(report, theme, 4));
+    if (report.error) {
+      const isAuth = /401|revoked|expired|unauthorized|invalidated|authentication failed|invalid_grant|invalid token|credits check failed/i.test(report.error);
+      const message = isAuth
+        ? `Session expired or revoked (run /login ${report.providerId.replace("openai-", "").replace("google-", "")})`
+        : report.error.startsWith("Session") || report.error.startsWith("Token") || report.error.includes("/login")
+          ? report.error
+          : `Could not fetch usage: ${report.error}`;
+      append(`      ${theme.fg("error", `⚠️  ${message}`)}`);
+    } else if (report.quotaUnavailableReason) {
+      append(`      ${dim(report.quotaUnavailableReason)}`);
+      if (report.usageUrl) append(`      ${dim(`View usage: ${report.usageUrl}`)}`);
+    } else {
+      const accountBuckets = report.groups.flatMap((group) => group.buckets);
+      if (accountBuckets.length === 0) {
+        append(`      ${dim(report.capacitySummary || "No active quota limits reported.")}`);
+      } else {
+        for (const bucket of accountBuckets) {
+          const label = truncateToWidth(bucket.displayName, labelWidth, "…");
+          const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
+          const entry = formatBucketEntry(report, bucket, barWidth, now, theme);
+          append(`      ${label}${padding}  ${entry.full}`);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
 /**
- * Builds formatted lines for provider quotas and accounts following native Pi UI conventions.
+ * Fill columns top-to-bottom in provider order, keeping each provider's accounts together.
  */
 export function buildUsageLines(
   reports: ProviderUsageReport[],
@@ -296,15 +362,14 @@ export function buildUsageLines(
   const now = options?.now ?? Date.now();
   const theme: UsageTheme =
     options?.theme ?? createDefaultCliTheme(options?.colorize !== false);
-  const availableWidth =
+  const availableWidth = Math.max(1, Math.floor(
     options?.availableWidth ??
-    (typeof process !== "undefined" && process.stdout?.columns ? process.stdout.columns : 120);
+    (typeof process !== "undefined" && process.stdout?.columns ? process.stdout.columns : 120)
+  ));
 
   const accent = (s: string) => theme.fg("accent", s);
   const dim = (s: string) => (theme.dim ? theme.dim(s) : theme.fg("dim", s));
   const bold = (s: string) => theme.bold(s);
-  const error = (s: string) => theme.fg("error", s);
-
   const lines: string[] = [];
 
   // Active Session context header if available
@@ -316,142 +381,68 @@ export function buildUsageLines(
     if (options.sessionInfo.accountEmail) {
       parts.push(options.sessionInfo.accountEmail);
     }
-    lines.push(`  ${dim("Active Session:")} ${parts.join(dim(" → "))}`);
+    appendUsageLine(lines, `  ${dim("Active Session:")} ${parts.join(dim(" → "))}`, availableWidth);
     lines.push("");
   }
 
-  // Group reports by provider name
   const byProvider = new Map<string, ProviderUsageReport[]>();
   for (const report of reports) {
-    const list = byProvider.get(report.providerName) || [];
-    list.push(report);
-    byProvider.set(report.providerName, list);
+    const accounts = byProvider.get(report.providerId) ?? [];
+    accounts.push(report);
+    byProvider.set(report.providerId, accounts);
   }
+  if (byProvider.size === 0) return lines;
 
-  // Calculate max bucket label width across all reports for consistent column alignment
-  const allReportBuckets = reports.flatMap((r) => r.groups.flatMap((g) => g.buckets));
-  const maxLabelLen =
-    allReportBuckets.length > 0
-      ? Math.max(...allReportBuckets.map((b) => visibleWidth(b.displayName)))
-      : 16;
-  const labelWidth = Math.max(16, Math.min(26, maxLabelLen));
+  const maxColumns = Math.min(byProvider.size, Math.max(1,
+    Math.floor((availableWidth + PROVIDER_COLUMN_GAP) / (MIN_PROVIDER_COLUMN_WIDTH + PROVIDER_COLUMN_GAP))));
+  const heightBudget = Math.max(1, Math.floor(options?.availableHeight ?? Infinity) - lines.length);
+  const buildColumns = (count: number) => {
+    const usableWidth = availableWidth - PROVIDER_COLUMN_GAP * (count - 1);
+    const baseWidth = Math.floor(usableWidth / count);
+    const widths = Array.from({ length: count }, (_, index) =>
+      baseWidth + (index < usableWidth % count ? 1 : 0));
+    const columns: string[][] = Array.from({ length: count }, () => []);
+    let target = 0;
+    let fits = true;
 
-  let isFirstProvider = true;
-  for (const [providerName, providerReports] of byProvider.entries()) {
-    if (!isFirstProvider) {
-      lines.push("");
-    }
-    isFirstProvider = false;
-
-    const acctCount = providerReports.length;
-    const countTag = acctCount > 1 ? dim(` (${acctCount} accounts)`) : "";
-    lines.push(`  ${bold(accent(providerName))}${countTag}`);
-
-    const canFitTwoColumns =
-      availableWidth >= 100 &&
-      providerReports.length === 2 &&
-      !providerReports.some((r) => r.error || r.quotaUnavailableReason);
-
-    if (canFitTwoColumns) {
-      // 2-Account Side-by-Side Presentation
-      const acc1 = providerReports[0];
-      const acc2 = providerReports[1];
-
-      // Calculate bar width and column 2 start position
-      const leftPrefixW = 6 + labelWidth + 2;
-      const col1MetricWidth = 14;
-      const colGap = 8;
-      const availableForBars =
-        availableWidth - leftPrefixW - colGap - 2 * (3 + col1MetricWidth);
-      const barWidth = Math.max(15, Math.min(25, Math.floor(availableForBars / 2)));
-      const col1Width = barWidth + 3 + col1MetricWidth;
-      const col2Start = leftPrefixW + col1Width + colGap;
-
-      const leftHeader = formatAccountBadge(acc1, theme, 4);
-      const rightHeader = formatAccountBadge(acc2, theme, 0);
-      const padHeaders = " ".repeat(Math.max(2, col2Start - visibleWidth(leftHeader)));
-      lines.push(`${leftHeader}${padHeaders}${rightHeader}`);
-
-      const buckets1 = acc1.groups.flatMap((g) => g.buckets);
-      const buckets2 = acc2.groups.flatMap((g) => g.buckets);
-      const seenIds = new Set<string>();
-      const allBuckets: { id: string; name: string }[] = [];
-      for (const b of [...buckets1, ...buckets2]) {
-        if (!seenIds.has(b.bucketId)) {
-          seenIds.add(b.bucketId);
-          allBuckets.push({ id: b.bucketId, name: b.displayName });
-        }
-      }
-
-      for (const { id, name } of allBuckets) {
-        const b1 = buckets1.find((b) => b.bucketId === id);
-        const b2 = buckets2.find((b) => b.bucketId === id);
-
-        const rawLabel = truncateToWidth(name, labelWidth, "…");
-        const labelPad = " ".repeat(Math.max(0, labelWidth - visibleWidth(rawLabel)));
-        const labelPrefix = `      ${rawLabel}${labelPad}  `;
-
-        const entry1 = formatBucketEntry(acc1, b1, barWidth, now, theme);
-        const entry2 = formatBucketEntry(acc2, b2, barWidth, now, theme);
-
-        const col1Vis = entry1.visibleLen;
-        const padToCol2 = " ".repeat(Math.max(2, col2Start - (leftPrefixW + col1Vis)));
-
-        lines.push(`${labelPrefix}${entry1.full}${padToCol2}${entry2.full}`);
-      }
-    } else {
-      // Single-Column / Stacked Presentation
-      const barBudget = Math.max(
-        15,
-        Math.min(25, availableWidth - (6 + labelWidth + 2 + 3 + 16))
-      );
-
-      for (let aIdx = 0; aIdx < providerReports.length; aIdx++) {
-        const report = providerReports[aIdx];
-        const header = formatAccountBadge(report, theme, 4);
-        lines.push(header);
-
-        if (report.error) {
-          const isAuth =
-            /401|revoked|expired|unauthorized|invalidated|authentication failed|invalid_grant|invalid token|credits check failed/i.test(
-              report.error
-            );
-          const cleanErr = isAuth
-            ? `Session expired or revoked (run /login ${report.providerId.replace("openai-", "").replace("google-", "")})`
-            : (report.error.startsWith("Session") || report.error.startsWith("Token") || report.error.includes("/login")
-                ? report.error
-                : `Could not fetch usage: ${report.error}`);
-          lines.push(`      ${error(`⚠️  ${cleanErr}`)}`);
-        } else if (report.quotaUnavailableReason) {
-          lines.push(`      ${dim(report.quotaUnavailableReason)}`);
-          if (report.usageUrl) {
-            lines.push(`      ${dim(`View usage: ${report.usageUrl}`)}`);
-          }
+    for (const accounts of byProvider.values()) {
+      let block = buildProviderLines(accounts, widths[target], now, theme);
+      const occupied = columns[target].length;
+      if (occupied > 0 && occupied + 1 + block.length > heightBudget) {
+        if (target < count - 1) {
+          target++;
+          block = buildProviderLines(accounts, widths[target], now, theme);
         } else {
-          const allBuckets = report.groups.flatMap((g) => g.buckets);
-          if (allBuckets.length === 0) {
-            if (report.capacitySummary) {
-              lines.push(`      ${dim(report.capacitySummary)}`);
-            } else {
-              lines.push(`      ${dim("No active quota limits reported.")}`);
-            }
-          } else {
-            for (const bucket of allBuckets) {
-              const rawLabel = truncateToWidth(bucket.displayName, labelWidth, "…");
-              const labelPad = " ".repeat(Math.max(0, labelWidth - visibleWidth(rawLabel)));
-              const labelStr = `${rawLabel}${labelPad}`;
-
-              const entry = formatBucketEntry(report, bucket, barBudget, now, theme);
-              lines.push(`      ${labelStr}  ${entry.full}`);
-            }
-          }
-        }
-
-        if (aIdx < providerReports.length - 1) {
-          lines.push("");
+          // No horizontal room remains: retain overflow for vertical scrolling.
+          fits = false;
         }
       }
+      if (columns[target].length > 0) columns[target].push("");
+      // Oversized providers stay intact in their own column and remain scrollable.
+      columns[target].push(...block);
     }
+    return { columns, widths, fits };
+  };
+
+  // Use another column only when the preceding columns run out of body rows.
+  // Re-render at each width because wrapping changes the height of a provider.
+  let layout = buildColumns(1);
+  for (let count = 2; !layout.fits && count <= maxColumns; count++) layout = buildColumns(count);
+  const { columns, widths } = layout;
+  const columnCount = columns.length;
+  const rowCount = Math.max(...columns.map((column) => column.length));
+  for (let row = 0; row < rowCount; row++) {
+    let lastColumn = columnCount - 1;
+    while (lastColumn >= 0 && visibleWidth(columns[lastColumn][row] ?? "") === 0) lastColumn--;
+    let line = "";
+    for (let column = 0; column <= lastColumn; column++) {
+      const cell = columns[column][row] ?? "";
+      line += cell;
+      if (column < lastColumn) {
+        line += " ".repeat(Math.max(0, widths[column] - visibleWidth(cell)) + PROVIDER_COLUMN_GAP);
+      }
+    }
+    lines.push(line);
   }
 
   return lines;
