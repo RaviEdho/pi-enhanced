@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { buildDiscordUiPayload, buildDiscordUiModal } from "./components.mjs";
-import { sendText, truncateDiscordText } from "./messages.mjs";
+import { sendText, splitMessage, truncateDiscordText } from "./messages.mjs";
 import { SessionUi, queueAskUserMessageEdit } from "./session-ui.mjs";
+
+const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Owns pending prompts and their Discord interaction tokens. */
 export function createInteractionManager() {
@@ -13,26 +15,36 @@ export function createInteractionManager() {
       const existing = pendingUiAnswers.get(key);
       if (existing) existing.finish(undefined);
       const token = randomUUID();
+      const commitView = uiRequest.isCommit ? session.beginCommitView() : undefined;
       let finished = false;
       const pending = {
-        token, key, session,
+        token, key, session, channel,
+        commitView,
+        commitEpoch: session.commitEpoch,
         method: uiRequest.method,
         request: uiRequest.request,
         options: uiRequest.options,
         isAskUser: uiRequest.isAskUser,
         isAskUserReview: uiRequest.isAskUserReview,
         isAskUserQuestion: uiRequest.isAskUserQuestion,
+        isCommit: uiRequest.isCommit,
+        commitProposal: uiRequest.commitProposal,
+        workspace: uiRequest.workspace,
+        cardPages: uiRequest.isCommit ? splitMessage(uiRequest.commitProposal || promptText) : undefined,
+        cardPage: 0,
         userId: session.interaction?.userId,
         channelId: session.interaction?.channelId,
-        promptText: truncateDiscordText(promptText, 1800),
+        promptText: uiRequest.isCommit ? promptText : truncateDiscordText(promptText, 1800),
         promptMessage: undefined,
         promptMessagePromise: undefined,
         completionStatus: undefined,
         result: undefined,
         page: 0,
         completing: false,
+        isActive() { return !finished && !pending.completing; },
         parse(answer) {
-          return finished || pending.completing ? { done: false } : parseAnswer(String(answer ?? ""));
+          return finished || pending.completing || (pending.isCommit && !session.isCurrentCommitView(pending.commitView, pending.commitEpoch))
+            ? { done: false } : parseAnswer(String(answer ?? ""));
         },
         claim() {
           if (finished || pending.completing) return false;
@@ -58,6 +70,7 @@ export function createInteractionManager() {
           clearTimeout(timer);
           if (pendingUiAnswers.get(key) === pending) pendingUiAnswers.delete(key);
           if (pendingDiscordUi.get(token) === pending) pendingDiscordUi.delete(token);
+          if (session.cancelCommitPrompt === pending.cancel) session.cancelCommitPrompt = undefined;
           const deferAskUserCompletion = pending.isAskUser && value !== undefined;
           if (deferAskUserCompletion) session.pendingAskUserCompletion = { pending, value };
           if (value === undefined && session.askUserMessage === pending.promptMessage) session.askUserMessage = undefined;
@@ -66,9 +79,7 @@ export function createInteractionManager() {
             const payload = deferAskUserCompletion
               ? buildDiscordUiPayload(pending, undefined, undefined, true)
               : buildDiscordUiPayload(pending, pending.completionStatus);
-            const edit = pending.isAskUser
-              ? queueAskUserMessageEdit(session, pending.promptMessage, payload)
-              : pending.promptMessage.edit(payload);
+            const edit = editPendingMessage(pending, payload);
             void edit.catch(() => undefined);
           }
         },
@@ -77,10 +88,15 @@ export function createInteractionManager() {
       timer.unref?.();
       pendingUiAnswers.set(key, pending);
       pendingDiscordUi.set(token, pending);
+      if (pending.isCommit) {
+        pending.cancel = () => pending.finish(undefined, { updatePrompt: false });
+        session.cancelCommitPrompt = pending.cancel;
+      }
 
       const payload = buildDiscordUiPayload(pending);
       const reusableMessage = uiRequest.isAskUser ? session.askUserMessage : undefined;
       const postPrompt = async () => {
+        if (pending.isCommit) return session.editCommitMessage(channel, payload, pending.commitView, pending.commitEpoch);
         if (reusableMessage && reusableMessage.channelId === channel.id) {
           try {
             return await queueAskUserMessageEdit(session, reusableMessage, payload);
@@ -93,6 +109,10 @@ export function createInteractionManager() {
       const promptMessagePromise = postPrompt();
       pending.promptMessagePromise = promptMessagePromise;
       void promptMessagePromise.then((message) => {
+        if (!message) {
+          pending.finish(undefined, { updatePrompt: false });
+          return;
+        }
         pending.promptMessage = message;
         if (uiRequest.isAskUser && (!finished || pending.result !== undefined)) session.askUserMessage = message;
         if (finished) {
@@ -100,13 +120,49 @@ export function createInteractionManager() {
           const completedPayload = pending.isAskUser && pending.result !== undefined
             ? buildDiscordUiPayload(pending, undefined, undefined, true)
             : buildDiscordUiPayload(pending, pending.completionStatus);
-          const edit = pending.isAskUser
-            ? queueAskUserMessageEdit(session, message, completedPayload)
-            : message.edit(completedPayload);
+          const edit = editPendingMessage(pending, completedPayload);
           void edit.catch(() => undefined);
         }
       }).catch(() => pending.finish(undefined));
     });
+  }
+
+  async function showCommitNotice(session, channel, text, notifyType) {
+    let active = true;
+    const pending = {
+      token: randomUUID(), session, channel,
+      isCommit: true, readOnly: true, method: "notice", options: [],
+      isActive: () => active,
+      commitView: session.beginCommitView(), commitEpoch: session.commitEpoch,
+      cardPages: splitMessage(text), cardPage: 0,
+      workspace: session.session.cwd, notifyType,
+      userId: session.interaction?.userId, channelId: channel.id,
+      request: { title: "Git commit" },
+    };
+    let timer;
+    const dispose = () => {
+      active = false;
+      clearTimeout(timer);
+      pendingDiscordUi.delete(pending.token);
+      if (session.cancelCommitNotice === dispose) session.cancelCommitNotice = undefined;
+    };
+    pending.finish = () => {
+      if (!active) return;
+      dispose();
+      void editPendingMessage(pending, buildDiscordUiPayload(pending, "Page controls expired or closed.")).catch(() => undefined);
+    };
+    if (pending.cardPages.length > 1) {
+      pendingDiscordUi.set(pending.token, pending);
+      session.cancelCommitNotice = dispose;
+      timer = setTimeout(pending.finish, UI_DEFAULT_TIMEOUT_MS);
+      timer.unref?.();
+    }
+    try {
+      return await editPendingMessage(pending, buildDiscordUiPayload(pending));
+    } catch (error) {
+      dispose();
+      throw error;
+    }
   }
 
   async function handleInteraction(interaction) {
@@ -114,7 +170,7 @@ export function createInteractionManager() {
     if (typeof customId !== "string" || !customId.startsWith("piui:")) return;
     const [, token, action] = customId.split(":");
     const pending = pendingDiscordUi.get(token);
-    if (!pending || pending.completing) {
+    if (!pending || pending.completing || (pending.isCommit && !pending.session.isCurrentCommitView(pending.commitView, pending.commitEpoch))) {
       await replyEphemeral(interaction, "This prompt is no longer active.");
       return;
     }
@@ -123,7 +179,31 @@ export function createInteractionManager() {
       return;
     }
     if (interaction.isButton?.() && action === "open" && ["input", "editor"].includes(pending.method)) {
+      if (pending.isCommit && (pending.request.prefill?.length || 0) > 4000) {
+        await replyEphemeral(interaction, "This plan is too long for Discord's editor. Dismiss and rerun /commit with a narrower scope.");
+        return;
+      }
       await interaction.showModal(buildDiscordUiModal(pending));
+      return;
+    }
+    if (interaction.isButton?.() && pending.isCommit && ["card-prev", "card-next"].includes(action)) {
+      pending.cardPage = action === "card-prev"
+        ? Math.max(0, pending.cardPage - 1)
+        : Math.min(pending.cardPages.length - 1, pending.cardPage + 1);
+      await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending), true);
+      return;
+    }
+    if (pending.readOnly) {
+      await replyEphemeral(interaction, "This is a read-only commit status card.");
+      return;
+    }
+    if (interaction.isButton?.() && pending.isCommit && pending.method === "select" && /^choose-\d+$/.test(action)) {
+      const selected = pending.options[Number(action.slice(7))];
+      if (selected === undefined) {
+        await replyEphemeral(interaction, "That action is no longer available.");
+        return;
+      }
+      await completeDiscordUiInteraction(pending, interaction, selected);
       return;
     }
     if (interaction.isButton?.() && pending.isAskUserReview && ["review-submit", "review-edit"].includes(action)) {
@@ -133,7 +213,7 @@ export function createInteractionManager() {
     if (interaction.isButton?.() && ["prev", "next"].includes(action) && pending.method === "select") {
       const pageCount = Math.ceil(pending.options.length / 25);
       pending.page = action === "prev" ? Math.max(0, pending.page - 1) : Math.min(pageCount - 1, pending.page + 1);
-      await interaction.update(buildDiscordUiPayload(pending));
+      await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending), true);
       return;
     }
     if (interaction.isButton?.() && action === "cancel") {
@@ -142,7 +222,7 @@ export function createInteractionManager() {
         return;
       }
       try {
-        await interaction.update(buildDiscordUiPayload(pending, "Prompt dismissed."));
+        await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending, "Prompt dismissed."));
         pending.finish(undefined, { updatePrompt: false });
       } catch {
         pending.finish(undefined);
@@ -182,13 +262,13 @@ export function createInteractionManager() {
   }
 
   function cancelSession(session) {
-    for (const pending of pendingUiAnswers.values()) {
+    for (const pending of [...pendingDiscordUi.values()]) {
       if (pending.session === session) pending.finish(undefined);
     }
   }
 
   return {
-    createSessionUi(session) { return new SessionUi(session, { waitForDiscordAnswer, cancelSession }); },
+    createSessionUi(session) { return new SessionUi(session, { waitForDiscordAnswer, cancelSession, showCommitNotice }); },
     handleInteraction,
     acceptReply(key, content) {
       const pending = pendingUiAnswers.get(key);
@@ -197,9 +277,32 @@ export function createInteractionManager() {
       return true;
     },
     close() {
-      for (const pending of pendingUiAnswers.values()) pending.finish(undefined);
+      for (const pending of [...pendingDiscordUi.values()]) pending.finish(undefined);
     },
   };
+}
+
+function editPendingMessage(pending, payload, activeOnly = false) {
+  if (pending.isCommit) {
+    return pending.session.editCommitMessage(pending.channel, payload, pending.commitView, pending.commitEpoch,
+      activeOnly ? () => pending.isActive() : undefined);
+  }
+  return pending.isAskUser
+    ? queueAskUserMessageEdit(pending.session, pending.promptMessage, payload)
+    : pending.promptMessage.edit(payload);
+}
+
+async function updatePendingInteraction(pending, interaction, payload, activeOnly = false) {
+  if (pending.isCommit) {
+    // Reserve edit order before Discord's acknowledgement can resolve out of
+    // order. Pagination also rechecks activity inside the queue so expiry or
+    // completion cannot be followed by stale controls being restored.
+    const update = editPendingMessage(pending, payload, activeOnly);
+    void update.catch(() => undefined);
+    await interaction.deferUpdate();
+    return update;
+  }
+  return interaction.update(payload);
 }
 
 async function completeDiscordUiInteraction(pending, interaction, answer) {
@@ -217,7 +320,7 @@ async function completeDiscordUiInteraction(pending, interaction, answer) {
     const payload = pending.isAskUser
       ? buildDiscordUiPayload(pending, undefined, undefined, true)
       : buildDiscordUiPayload(pending, "Response received.", value);
-    await interaction.update(payload);
+    await updatePendingInteraction(pending, interaction, payload);
     pending.finish(value, { updatePrompt: false });
   } catch {
     pending.finish(value);

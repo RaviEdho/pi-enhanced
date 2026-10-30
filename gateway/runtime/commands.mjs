@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
-import { buildConversationSettingPayload } from "./components.mjs";
+import { buildCommitCardPayload, buildConversationSettingPayload } from "./components.mjs";
 import { replyEphemeral } from "./interactions.mjs";
-import { discordOptionLabel } from "./messages.mjs";
+import { discordOptionLabel, startTyping } from "./messages.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 import { writePrivateJson } from "./persistence.mjs";
 
@@ -27,6 +27,13 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
             .setRequired(false)
             .setAutocomplete(true)),
         new SlashCommandBuilder()
+          .setName("commit")
+          .setDescription("Review and commit changes in this conversation's working directory")
+          .addStringOption((option) => option
+            .setName("args")
+            .setDescription("Optional instruction or flags, e.g. fix login timeout, -u, -s, or -m")
+            .setRequired(false)),
+        new SlashCommandBuilder()
           .setName("thinking")
           .setDescription("Choose the thinking level for this Discord conversation")
           .addStringOption((option) => option
@@ -40,7 +47,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       // Keep these as global commands only; registering both scopes makes Discord
       // display duplicate entries. Remove guild-scoped copies created by older versions,
       // while preserving any unrelated commands registered directly in those guilds.
-      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning"]);
+      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit"]);
       for (const guild of readyClient.guilds.cache.values()) {
         try {
           const guildCommands = await guild.commands.fetch();
@@ -117,6 +124,10 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
   }
 
   async function handleChatInputCommand(interaction) {
+    if (interaction.commandName === "commit") {
+      await lifecycle.trackTask(handleCommitCommand(interaction));
+      return;
+    }
     if (interaction.commandName === "model" || interaction.commandName === "thinking") {
       await handleConversationSettingCommand(interaction, interaction.commandName);
       return;
@@ -204,6 +215,60 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       await interaction.reply({ content: confirmationText, allowedMentions: { parse: [] } });
     } catch (replyError) {
       log(`Failed to reply to /sethome command: ${safeErrorName(replyError)}`);
+    }
+  }
+
+  async function handleCommitCommand(interaction) {
+    if (lifecycle.isStopping()) {
+      await replyEphemeral(interaction, "The Discord gateway is restarting or stopping. Please try again when it is back online.");
+      return;
+    }
+    if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+      await replyEphemeral(interaction, "You are not authorized to control this bot.");
+      return;
+    }
+    const sessionKey = getConversationSessionKey(interaction);
+    if (!sessionKey || typeof interaction.channel?.send !== "function") {
+      await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread.");
+      return;
+    }
+
+    const args = interaction.options?.getString("args")?.trim() || "";
+    await interaction.deferReply({ ephemeral: true });
+    await interaction.editReply(buildCommitCardPayload("Commit request queued. Staging prompts and commit review will appear in this conversation."));
+    try {
+      await sessions.enqueue(sessionKey, () => sessions.withRunSlot(async () => {
+        // Resolve after dequeuing: earlier work may have switched this conversation's
+        // workspace. The command runs in this child's ctx.cwd, never config.cwd.
+        const session = await sessions.get(sessionKey);
+        const available = await session.request("get_commands");
+        if (!available.success || !available.data?.commands?.some((command) => command.name === "commit" && command.source === "extension")) {
+          await interaction.editReply(buildCommitCardPayload("The /commit extension command is not loaded in this Pi session. Enable pi-enhanced for the gateway's configured Pi executable, then restart the gateway.", { notifyType: "error" }));
+          return;
+        }
+        await interaction.editReply(buildCommitCardPayload("Staging prompts and commit review will appear in this conversation.", { workspace: session.cwd }));
+        const typing = startTyping(interaction.channel);
+        try {
+          // Send the real extension command, not a natural-language agent prompt.
+          // The prompt response arrives only after the command and its dialogs finish.
+          await session.promptAndWait(`/commit${args ? ` ${args}` : ""}`, {
+            channel: interaction.channel,
+            channelId: interaction.channelId,
+            userId: interaction.user.id,
+            typing,
+            workflow: "commit",
+          }, [], { extensionCommand: true });
+          await interaction.editReply(buildCommitCardPayload("Commit workflow finished. See the updated commit card for the result.", { workspace: session.cwd })).catch(() => undefined);
+        } catch (error) {
+          await session.ui.sendCommitNotice(interaction.channel, "Could not complete the commit workflow. Check the gateway logs before retrying.", "error").catch(() => undefined);
+          throw error;
+        } finally {
+          typing.stop();
+        }
+      }));
+    } catch (error) {
+      log(`Discord /commit failed: ${safeErrorName(error)}`);
+      await interaction.editReply(buildCommitCardPayload("Could not complete the commit workflow. Check the conversation and gateway logs before retrying.", { notifyType: "error" })).catch(() => undefined);
     }
   }
 

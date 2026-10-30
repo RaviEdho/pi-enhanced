@@ -1,15 +1,29 @@
 import { spawn } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { log } from "./logging.mjs";
+import { log, safeErrorName } from "./logging.mjs";
+import {
+  clearWorkspaceRequest, loadWorkspace, loadWorkspaceRequest, saveWorkspace,
+  validateWorkspaceDirectory,
+} from "./workspace.mjs";
 
 /** One Pi child process and its newline-delimited RPC transport. */
 export class PiRpcSession {
-  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions }) {
+  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, onWorkspaceChanged = () => {} }) {
     this.sessionDirectory = sessionDirectory;
     this.config = config;
     this.piExecutable = piExecutable;
     this.piArgs = piArgs;
+    this.extensionRoot = extensionRoot;
+    this.onWorkspaceChanged = onWorkspaceChanged;
+    this.cwd = config.cwd;
+    this.sessionFile = undefined;
+    this.appliedRequestId = undefined;
+    this.workspaceChangeNotice = undefined;
+    this.stopping = false;
+    this.replacingChild = false;
     this.child = undefined;
     this.buffer = Buffer.alloc(0);
     this.counter = 0;
@@ -24,6 +38,54 @@ export class PiRpcSession {
 
   async start() {
     mkdirSync(this.sessionDirectory, { recursive: true, mode: 0o700 });
+    this.sessionDirectory = realpathSync(this.sessionDirectory);
+    const saved = loadWorkspace(this.sessionDirectory);
+    const cwd = saved?.cwd || validateWorkspaceDirectory(this.config.cwd);
+    this.appliedRequestId = saved?.appliedRequestId;
+    let pending;
+    try {
+      // Validate the source first, so an unavailable target can still recover
+      // the original conversation, even if no workspace.json was written yet.
+      pending = loadWorkspaceRequest(this.sessionDirectory, { validateTarget: false });
+      if (pending && pending.requestId !== this.appliedRequestId && (pending.previousCwd !== cwd || (saved && pending.sessionFile !== saved.sessionFile))) {
+        throw new Error("Interrupted workspace switch does not match this conversation");
+      }
+    } catch {
+      clearWorkspaceRequest(this.sessionDirectory);
+      pending = undefined;
+      log("Discarded an invalid interrupted workspace request; keeping the previous workspace");
+    }
+    if (pending && pending.requestId !== this.appliedRequestId) {
+      this.replacingChild = true;
+      try {
+        await this.startChild({ cwd: validateWorkspaceDirectory(pending.cwd), forkFrom: pending.sessionFile });
+        if (!this.sessionFile || !existsSync(this.sessionFile)) throw new Error("Recovered workspace fork was not saved");
+        saveWorkspace(this.sessionDirectory, { cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: pending.requestId });
+        this.appliedRequestId = pending.requestId;
+        // Startup recovery has no Discord channel yet; announce it when the
+        // accepted conversation operation supplies its interaction below.
+        this.workspaceChangeNotice = { previousCwd: cwd, cwd: this.cwd };
+      } catch {
+        await this.stopChild();
+        clearWorkspaceRequest(this.sessionDirectory);
+        log("Interrupted workspace switch failed; resuming the previous conversation");
+        await this.startChild({ cwd, sessionFile: pending.sessionFile });
+        this.rememberWorkspace();
+      } finally {
+        this.replacingChild = false;
+      }
+    } else {
+      await this.startChild({ cwd, sessionFile: saved?.sessionFile });
+    }
+    if (pending) clearWorkspaceRequest(this.sessionDirectory);
+  }
+
+  async startChild({ cwd, sessionFile, forkFrom, model, thinkingLevel }) {
+    if (this.stopping) throw new Error("Pi session is stopping");
+    this.closed = false;
+    this.cwd = cwd;
+    this.cwdToken = randomUUID();
+    this.buffer = Buffer.alloc(0);
     const agentEnvironment = { ...process.env };
     delete agentEnvironment.PI_ENHANCED_DISCORD_BOT_TOKEN;
     delete agentEnvironment.DISCORD_BOT_TOKEN;
@@ -37,36 +99,108 @@ export class PiRpcSession {
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_ARGS;
     delete agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD;
     agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD = "1";
+    agentEnvironment.PI_ENHANCED_EXTENSION_ROOT = this.extensionRoot;
+    agentEnvironment.PI_ENHANCED_DISCORD_CWD_REQUEST_PATH = join(this.sessionDirectory, "cwd-request.json");
+    agentEnvironment.PI_ENHANCED_DISCORD_CWD_TOKEN = this.cwdToken;
 
     const sessionArgs = [
       ...this.piArgs,
       "--mode", "rpc",
       "--session-dir", this.sessionDirectory,
-      "--continue",
+      ...(forkFrom ? ["--fork", forkFrom] : sessionFile ? ["--session", sessionFile] : ["--continue"]),
       "--approve",
+      "--append-system-prompt", [
+        "Discord gateway runtime:",
+        `Extension root: ${JSON.stringify(this.extensionRoot)}`,
+        `Gateway source: ${JSON.stringify(join(this.extensionRoot, "gateway"))}`,
+        "These paths identify the extension running the gateway, not your current working directory or necessarily the extensions loaded by this Pi process.",
+        `Read ${JSON.stringify(join(this.extensionRoot, "AGENTS.md"))} before modifying the extension's code.`,
+        "The extension root is also available as PI_ENHANCED_EXTENSION_ROOT.",
+        `This conversation's current workspace is ${JSON.stringify(cwd)}. Use set_working_directory when the user's task clearly targets another project; shell cd and absolute file paths do not update the session cwd used by /commit.`,
+      ].join("\n"),
     ];
-    if (this.config.model?.provider && this.config.model?.id) {
-      sessionArgs.push("--model", `${this.config.model.provider}/${this.config.model.id}`);
+    const selectedModel = model || (!sessionFile && !forkFrom ? this.config.model : undefined);
+    const selectedThinking = thinkingLevel ?? (!sessionFile && !forkFrom ? this.config.thinkingLevel : undefined);
+    if (selectedModel?.provider && selectedModel?.id) {
+      sessionArgs.push("--model", `${selectedModel.provider}/${selectedModel.id}`);
     }
-    if (this.config.thinkingLevel) sessionArgs.push("--thinking", this.config.thinkingLevel);
+    if (selectedThinking) sessionArgs.push("--thinking", selectedThinking);
 
-    this.child = spawn(this.piExecutable, sessionArgs, {
-      cwd: this.config.cwd,
+    const child = spawn(this.piExecutable, sessionArgs, {
+      cwd,
       env: agentEnvironment,
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     });
-    this.child.stdout.on("data", (chunk) => this.consumeStdout(chunk));
-    this.child.on("error", (error) => this.fail(error));
-    this.child.on("exit", (code, signal) => {
+    this.child = child;
+    child.stdout.on("data", (chunk) => {
+      if (this.child === child) this.consumeStdout(chunk);
+    });
+    child.on("error", (error) => {
+      if (this.child === child) this.fail(error);
+    });
+    child.on("exit", (code, signal) => {
+      if (this.child !== child) return;
       this.closed = true;
       this.fail(new Error(`Pi process exited (${signal || code || "unknown"})`));
-      void this.ui.close();
+      if (!this.replacingChild) void this.ui.close();
     });
-    this.child.stdin.on("error", (error) => this.fail(error));
+    child.stdin.on("error", (error) => {
+      if (this.child === child) this.fail(error);
+    });
 
     const state = await this.request("get_state", {}, 120_000);
     if (!state.success) throw new Error("Pi RPC session failed to initialize");
+    this.sessionFile = state.data?.sessionFile;
+    return state.data;
+  }
+
+  rememberWorkspace() {
+    // A newly opened Pi session may not be flushed until its first model turn.
+    if (!this.sessionFile || !existsSync(this.sessionFile)) return;
+    saveWorkspace(this.sessionDirectory, {
+      cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: this.appliedRequestId,
+    });
+  }
+
+  async changeWorkspace(pending) {
+    const response = await this.request("get_state");
+    const state = response.data;
+    if (!response.success || pending.token !== this.cwdToken || pending.previousCwd !== this.cwd || pending.sessionFile !== state?.sessionFile) {
+      clearWorkspaceRequest(this.sessionDirectory);
+      throw new Error("Workspace switch does not match the active Pi session");
+    }
+    const previous = { cwd: this.cwd, sessionFile: state.sessionFile, model: state.model, thinkingLevel: state.thinkingLevel };
+    await this.ui.flushNotifications();
+    await this.ui.flushPendingAskUserCompletion();
+    await this.ui.clearStatusMessages();
+    this.replacingChild = true;
+    try {
+      await this.stopChild();
+      try {
+        await this.startChild({ cwd: pending.cwd, forkFrom: previous.sessionFile, model: state.model, thinkingLevel: state.thinkingLevel });
+        if (!this.sessionFile || !existsSync(this.sessionFile)) throw new Error("Workspace fork was not saved");
+        saveWorkspace(this.sessionDirectory, { cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: pending.requestId });
+        this.appliedRequestId = pending.requestId;
+      } catch (error) {
+        await this.stopChild();
+        clearWorkspaceRequest(this.sessionDirectory);
+        await this.startChild(previous);
+        throw error;
+      }
+      try { clearWorkspaceRequest(this.sessionDirectory); } catch {
+        log("Workspace changed; pending request cleanup will be retried on startup");
+      }
+      this.onWorkspaceChanged(this);
+      this.ui.resetPrompt();
+      // Notify only after the new child and workspace metadata are committed.
+      // A Discord delivery failure must not roll back or interrupt the handoff.
+      await this.ui.notifyWorkspaceChanged(previous.cwd, this.cwd).catch((error) => {
+        log(`Could not send workspace change notification: ${safeErrorName(error)}`);
+      });
+    } finally {
+      this.replacingChild = false;
+    }
   }
 
   consumeStdout(chunk) {
@@ -126,7 +260,7 @@ export class PiRpcSession {
     return response;
   }
 
-  async promptAndWait(message, interaction, images = []) {
+  async promptAndWait(message, interaction, images = [], { extensionCommand = false } = {}) {
     if (this.running) throw new Error("Pi session received overlapping prompts");
     await this.ui.flushPendingAskUserCompletion();
     this.running = true;
@@ -134,21 +268,69 @@ export class PiRpcSession {
     this.interaction = interaction;
     this.ui.resetPrompt();
     try {
-      const settledPromise = new Promise((resolve, reject) => {
-        this.runWaiter = { resolve, reject };
-      });
-      void settledPromise.catch(() => undefined);
-      const accepted = await this.request("prompt", { message, ...(images.length > 0 ? { images } : {}) }, 30_000);
-      if (!accepted.success) throw new Error("Pi rejected the Discord message");
-      if (accepted.data?.disposition === "handled") return "";
-      const settled = await settledPromise;
-      if (settled.aborted) return "The agent run was cancelled.";
-      const response = await this.request("get_last_assistant_text", {}, 30_000);
-      if (!response.success) throw new Error("Could not retrieve the agent response");
-      return typeof response.data?.text === "string" ? response.data.text : "";
+      if (interaction.workflow === "commit") {
+        await this.ui.sendCommitNotice(interaction.channel, "Inspecting Git changes and preparing a proposal…");
+      }
+      if (this.workspaceChangeNotice) {
+        const { previousCwd, cwd } = this.workspaceChangeNotice;
+        this.workspaceChangeNotice = undefined;
+        await this.ui.notifyWorkspaceChanged(previousCwd, cwd).catch((error) => {
+          log(`Could not send recovered workspace change notification: ${safeErrorName(error)}`);
+        });
+      }
+      for (let switches = 0; ; switches += 1) {
+        const settledPromise = new Promise((resolve, reject) => {
+          this.runWaiter = { resolve, reject };
+        });
+        void settledPromise.catch(() => undefined);
+        // Extension commands return only after their handler and dialogs finish.
+        const accepted = await this.request("prompt", { message, ...(images.length > 0 ? { images } : {}) }, extensionCommand ? 60 * 60 * 1000 : 30_000)
+          .catch(async (error) => {
+            if (extensionCommand) await this.stop();
+            throw error;
+          });
+        if (!accepted.success) throw new Error("Pi rejected the Discord message");
+        if (accepted.data?.disposition === "handled") {
+          this.rememberWorkspace();
+          return "";
+        }
+        if (extensionCommand) {
+          await this.stop();
+          throw new Error("Pi did not handle the extension command");
+        }
+        const settled = await settledPromise;
+        if (settled.aborted) {
+          clearWorkspaceRequest(this.sessionDirectory);
+          return "The agent run was cancelled.";
+        }
+        let pending;
+        try {
+          pending = loadWorkspaceRequest(this.sessionDirectory);
+        } catch (error) {
+          clearWorkspaceRequest(this.sessionDirectory);
+          throw error;
+        }
+        if (pending) {
+          if (switches >= 5) {
+            clearWorkspaceRequest(this.sessionDirectory);
+            throw new Error("Too many workspace switches in one request");
+          }
+          await this.changeWorkspace(pending);
+          message = `Gateway workspace handoff completed. The actual session working directory is now ${JSON.stringify(this.cwd)}. Project instructions, tools, and Git commands now use this directory. Continue the user's unfinished task from the preserved conversation; do not repeat completed work. The preceding set_working_directory request has been applied successfully.`;
+          images = [];
+          continue;
+        }
+        this.rememberWorkspace();
+        const response = await this.request("get_last_assistant_text", {}, 30_000);
+        if (!response.success) throw new Error("Could not retrieve the agent response");
+        return typeof response.data?.text === "string" ? response.data.text : "";
+      }
     } finally {
       if (this.runWaiter) this.runWaiter = undefined;
+      this.ui.stopCommitProgress();
+      await this.ui.flushNotifications().catch(() => undefined);
       await this.ui.flushPendingAskUserCompletion();
+      await this.ui.flushCommitMessageEdits();
       await this.ui.clearStatusMessages();
       this.interaction = undefined;
       this.running = false;
@@ -174,19 +356,32 @@ export class PiRpcSession {
   }
 
   async stop() {
+    this.stopping = true;
     if (this.closed && !this.child) return;
     this.closed = true;
     this.fail(new Error("Pi RPC session stopped"));
     await this.ui.close();
-    if (!this.child) return;
-    try {
-      this.child.stdin.end();
-      await Promise.race([onceExit(this.child), delay(3000)]);
-      if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGTERM");
-    } catch {
-      // The child may have already exited.
-    }
+    await this.stopChild();
+  }
+
+  async stopChild() {
+    const child = this.child;
+    if (!child) return;
     this.child = undefined;
+    this.fail(new Error("Pi child process stopped"));
+    // A failed spawn emits error/close without exit and has no PID to wait for.
+    if (!child.pid) return;
+    // Fully stop the old writer before forking/resuming its conversation file.
+    try { child.stdin.end(); } catch { /* stream may already be closed */ }
+    await Promise.race([onceExit(child), delay(3000)]);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      await Promise.race([onceExit(child), delay(3000)]);
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await onceExit(child);
+    }
   }
 }
 

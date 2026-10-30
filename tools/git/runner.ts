@@ -49,12 +49,16 @@ import type {
 
 export async function handleCommitCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
   const cwd = ctx.cwd;
+  const setCommitWorkingMessage = (message?: string) => {
+    ctx.ui.setWorkingMessage?.(message);
+    if (ctx.mode === "rpc") ctx.ui.setWidget("commit", message ? [message] : undefined);
+  };
 
-      const isSingle = /\b(--single|-s)\b/i.test(args);
-      const isMulti = /\b(--multi|-m)\b/i.test(args);
-      const isUnstaged = /\b(--unstaged|-u|--only-unstaged)\b/i.test(args);
+      const isSingle = /(?:^|\s)(--single|-s)(?=\s|$)/i.test(args);
+      const isMulti = /(?:^|\s)(--multi|-m)(?=\s|$)/i.test(args);
+      const isUnstaged = /(?:^|\s)(--unstaged|-u|--only-unstaged)(?=\s|$)/i.test(args);
       const cleanArgs = args
-        .replace(/\b(--single|-s|--multi|-m|--unstaged|-u|--only-unstaged)\b/gi, "")
+        .replace(/(?:^|\s)(--single|-s|--multi|-m|--unstaged|-u|--only-unstaged)(?=\s|$)/gi, "")
         .trim();
       const selectiveMode = cleanArgs.length > 0;
 
@@ -433,6 +437,18 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
 
       const updateWorkingIndicator = () => {
         if (!ctx.hasUI) return;
+        if (ctx.mode === "rpc") {
+          const cost = broadcaster.cost > 0 ? formatCost(broadcaster.cost)
+            : broadcaster.isSubscription ? "Included with subscription" : "$0.00";
+          ctx.ui.setWidget("commit", [
+            broadcaster.status,
+            `Model: ${broadcaster.model}`,
+            `Elapsed: ${formatDuration(Date.now() - startTime)}`,
+            `Usage: ${broadcaster.tokens.toLocaleString()} tokens • ${cost}`,
+            ...broadcaster.recentActions.slice(-4).map((action) => `- ${action.description}`),
+          ]);
+          return;
+        }
 
         let line: string;
         if (transientWarningText) {
@@ -464,7 +480,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       };
 
       updateWorkingIndicator();
-      const workingTimer = setInterval(updateWorkingIndicator, 80);
+      const workingTimer = setInterval(updateWorkingIndicator, ctx.mode === "rpc" ? 2000 : 80);
       workingTimer.unref?.();
       const unsubBroadcaster = broadcaster.subscribe(updateWorkingIndicator);
 
@@ -760,18 +776,18 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         if (selectiveMode && selectiveSnapshot) {
           try {
             const res = await executeSelectiveCommits(stages, selectiveSnapshot, cwd, (stageIdx, total, header) => {
-              ctx.ui.setWorkingMessage?.(`Committing selected changes ${stageIdx}/${total}: ${header}…`);
+              setCommitWorkingMessage(`Committing selected changes ${stageIdx}/${total}: ${header}…`);
             });
 
             let pushFailedMsg: string | undefined;
             if (shouldPush) {
               try {
-                ctx.ui.setWorkingMessage?.("Pushing commits to remote…");
+                setCommitWorkingMessage("Pushing commits to remote…");
                 await pushCommit(cwd);
               } catch (err) {
                 pushFailedMsg = err instanceof Error ? err.message : String(err);
               } finally {
-                ctx.ui.setWorkingMessage?.();
+                setCommitWorkingMessage();
               }
             }
 
@@ -792,7 +808,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             }
             return false;
           } finally {
-            ctx.ui.setWorkingMessage?.();
+            setCommitWorkingMessage();
           }
         }
 
@@ -805,22 +821,25 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           const fullMsg = single.body?.trim() ? `${header}\n\n${single.body.trim()}` : header;
 
           try {
+            setCommitWorkingMessage(`Committing: ${header}…`);
             await createCommit(fullMsg, cwd);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             ctx.ui.notify(`Commit failed: ${msg}`, "error");
             return false;
+          } finally {
+            setCommitWorkingMessage();
           }
 
           let pushFailedMsg: string | undefined;
           if (shouldPush) {
             try {
-              ctx.ui.setWorkingMessage?.("Pushing commit to remote…");
+              setCommitWorkingMessage("Pushing commit to remote…");
               await pushCommit(cwd);
             } catch (err) {
               pushFailedMsg = err instanceof Error ? err.message : String(err);
             } finally {
-              ctx.ui.setWorkingMessage?.();
+              setCommitWorkingMessage();
             }
           }
 
@@ -841,20 +860,20 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           return true;
         } else {
           try {
-            ctx.ui.setWorkingMessage?.(`Committing 1/${stages.length} stages…`);
+            setCommitWorkingMessage(`Committing 1/${stages.length} stages…`);
             const res = await executeMultiCommit(stages, cwd, (stageIdx, total, header) => {
-              ctx.ui.setWorkingMessage?.(`Committing stage ${stageIdx}/${total}: ${header}…`);
+              setCommitWorkingMessage(`Committing stage ${stageIdx}/${total}: ${header}…`);
             });
 
             let pushFailedMsg: string | undefined;
             if (shouldPush) {
               try {
-                ctx.ui.setWorkingMessage?.("Pushing commits to remote…");
+                setCommitWorkingMessage("Pushing commits to remote…");
                 await pushCommit(cwd);
               } catch (err) {
                 pushFailedMsg = err instanceof Error ? err.message : String(err);
               } finally {
-                ctx.ui.setWorkingMessage?.();
+                setCommitWorkingMessage();
               }
             }
 
@@ -878,7 +897,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             ctx.ui.notify(`Multi-stage commit failed: ${msg}`, "error");
             return false;
           } finally {
-            ctx.ui.setWorkingMessage?.();
+            setCommitWorkingMessage();
           }
         }
       };
@@ -1010,6 +1029,20 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           } else {
             actionCommit = `Commit: "${currentFirstHeader}" (${costBadge})`;
             actionPush = `Commit & Push: "${currentFirstHeader}" (${costBadge})`;
+          }
+
+          // RPC menus truncate labels (Discord limits them to 100 characters).
+          // Show every stage, body, and file/hunk selection before approval.
+          if (ctx.mode === "rpc") {
+            const proposal = commitPlan.stages.map((stage, index) => {
+              const header = stage.scope
+                ? `${stage.type}(${stage.scope}): ${stage.subject}`
+                : `${stage.type}: ${stage.subject}`;
+              const files = formatCommitFiles(stage) || overview.stagedFiles.join(", ");
+              const hunks = stage.hunks?.map((selection) => `${selection.filePath}: ${selection.hunkIds.join(", ")}`).join("; ");
+              return `${index + 1}. ${header}${stage.body?.trim() ? `\n${stage.body.trim()}` : ""}${files ? `\nFiles: ${files}` : ""}${hunks ? `\nHunks: ${hunks}` : ""}`;
+            }).join("\n\n");
+            ctx.ui.notify(`Commit proposal (${costBadge})\nModel: ${usage.modelId}\n\n${proposal}`, "info");
           }
 
           const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [

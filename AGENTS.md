@@ -79,7 +79,8 @@ pi-enhanced/
 │   ├── command.ts              # /discord menu, setup/configure/start/stop/teardown/status/logs commands
 │   ├── daemon.mjs              # Standalone Node entry point wiring the runtime modules
 │   ├── runtime/                # Modular routing, sessions, RPC, Discord UI, commands, lifecycle & helpers
-│   ├── index.ts                # Gateway command registration
+│   ├── index.ts                # Gateway command/tool registration and workspace steering
+│   ├── working-directory-tool.ts # Discord-only set_working_directory and handoff requests
 │   └── storage.ts              # Private config, status and process paths
 ├── tools/                      # Agent capability tools
 │   ├── git/                    # Autonomous Git assistant & commit sub-agent

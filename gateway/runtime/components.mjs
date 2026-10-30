@@ -14,7 +14,49 @@ import {
 } from "discord.js";
 import { truncateDiscordText, discordOptionLabel } from "./messages.mjs";
 
+export function buildCommitCardPayload(text, { title = "Git commit", workspace, rows = [], statusText, notifyType = "info" } = {}) {
+  const color = notifyType === "error" ? 0xed4245 : notifyType === "warning" ? 0xfee75c : 0x5865f2;
+  const container = new ContainerBuilder()
+    .setAccentColor(color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${truncateDiscordText(title, 180)}${workspace ? `\n-# Workspace: ${truncateDiscordText(JSON.stringify(workspace), 500)}` : ""}`))
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(text || " "));
+  if (statusText) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${truncateDiscordText(statusText, 500)}`));
+  if (rows.length > 0) {
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+    for (const row of rows) container.addActionRowComponents(row);
+  }
+  return { flags: MessageFlags.IsComponentsV2, components: [container], allowedMentions: { parse: [] } };
+}
+
+function buildCommitUiPayload(pending, statusText, responseValue, disableControls) {
+  const pages = pending.cardPages || [pending.promptText];
+  const page = pending.cardPage || 0;
+  const rows = statusText || pending.readOnly ? [] : buildDiscordUiComponents(pending, disableControls);
+  if (!statusText && pages.length > 1) {
+    rows.unshift(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:card-prev`).setLabel("Previous page").setStyle(ButtonStyle.Secondary).setDisabled(disableControls || page === 0),
+      new ButtonBuilder().setCustomId(`piui:${pending.token}:card-next`).setLabel("Next page").setStyle(ButtonStyle.Secondary).setDisabled(disableControls || page >= pages.length - 1),
+    ));
+  }
+  const selected = statusText === "Response received." && pending.method === "select" && responseValue !== undefined
+    ? ` Selected: ${responseValue}` : "";
+  const pageLabel = pages.length > 1 ? `Page ${page + 1}/${pages.length}. ` : "";
+  const instruction = pending.readOnly ? "" : pending.method === "editor" && (pending.request?.prefill?.length || 0) > 4000
+    ? "Editing disabled: plan exceeds Discord's 4000-character limit."
+    : pending.commitProposal ? "Review the details. Actions apply to the entire proposal, not just this page."
+      : "Review the details before choosing an action.";
+  return buildCommitCardPayload(pages[page], {
+    title: pending.commitProposal ? "Commit proposal" : pending.request?.title || "Git commit",
+    workspace: pending.workspace,
+    notifyType: pending.notifyType,
+    rows,
+    statusText: `${pageLabel}${statusText || instruction}${selected}`,
+  });
+}
+
 export function buildDiscordUiPayload(pending, statusText, responseValue = pending.result, disableControls = false) {
+  if (pending.isCommit) return buildCommitUiPayload(pending, statusText, responseValue, disableControls);
   const optionGuide = "Select an option below, or reply with its number or exact text.";
   const hasDropdownGuide =
     pending.isAskUser &&
@@ -104,6 +146,22 @@ export function buildDiscordUiPayload(pending, statusText, responseValue = pendi
 }
 
 export function buildDiscordUiComponents(pending, disabled = false) {
+  if (pending.isCommit && pending.method === "select" && pending.options.length <= 4) {
+    const buttons = pending.options.map((option, index) => {
+      let label = option;
+      let style = ButtonStyle.Primary;
+      const stages = /^(?:Commit|Commit & Push) all (\d+) stages/i.exec(option)?.[1];
+      if (/^Commit & Push/i.test(option)) label = stages ? `Commit & Push all (${stages})` : "Commit & Push";
+      else if (/^Commit only staged/i.test(option)) label = "Staged only";
+      else if (/^Commit only unstaged/i.test(option)) label = "Unstaged only";
+      else if (/^Stage all and commit/i.test(option)) label = "Stage all";
+      else if (/^Commit(?::| all)/i.test(option)) { label = stages ? `Commit all (${stages})` : "Commit"; style = ButtonStyle.Success; }
+      else if (/^Edit commit/i.test(option)) { label = /plan/i.test(option) ? "Edit plan" : "Edit message"; style = ButtonStyle.Secondary; }
+      return new ButtonBuilder().setCustomId(`piui:${pending.token}:choose-${index}`).setLabel(truncateDiscordText(label, 80)).setStyle(style).setDisabled(disabled);
+    });
+    buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Cancel").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    return [new ActionRowBuilder().addComponents(buttons)];
+  }
   if (pending.isAskUserReview) {
     return [new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -167,7 +225,7 @@ export function buildDiscordUiComponents(pending, disabled = false) {
 
   const buttonLabel = pending.method === "editor" ? "Open editor" : "Enter response";
   return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`piui:${pending.token}:open`).setLabel(buttonLabel).setStyle(ButtonStyle.Primary).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(`piui:${pending.token}:open`).setLabel(buttonLabel).setStyle(ButtonStyle.Primary).setDisabled(disabled || (pending.isCommit && (pending.request?.prefill?.length || 0) > 4000)),
     new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
   )];
 }

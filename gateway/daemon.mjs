@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { loadGatewayConfig } from "./runtime/config.mjs";
@@ -11,6 +12,8 @@ import { createSessionManager } from "./runtime/sessions.mjs";
 import { createThreadRegistry } from "./runtime/threads.mjs";
 
 // This remains the standalone Node entry point used by /discord and restarts.
+// Discover the running installation, independent of the workspace or child Pi's extensions.
+const extensionRoot = realpathSync(fileURLToPath(new URL("../", import.meta.url)));
 const { config, paths, piExecutable, piArgs, startReason } = loadGatewayConfig();
 const allowedUsers = new Set(config.allowedUserIds);
 const allowedChannels = new Set(config.allowedChannelIds);
@@ -28,7 +31,10 @@ const interactions = createInteractionManager();
 // Lazy callbacks break the lifecycle/command dependency without shared mutable state.
 const sessions = createSessionManager({
   sessionRoot: paths.sessionRoot,
-  createSession: (directory) => new PiRpcSession(directory, { config, piExecutable, piArgs, interactions }),
+  createSession: (directory) => new PiRpcSession(directory, {
+    config, piExecutable, piArgs, interactions, extensionRoot,
+    onWorkspaceChanged: (session) => commands.cancelSession(session),
+  }),
   onSessionClosed: (session) => commands.cancelSession(session),
 });
 const lifecycle = createLifecycle({
