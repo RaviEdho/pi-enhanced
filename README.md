@@ -5,6 +5,11 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 ## Features
 
 - **Background Discord Agent Gateway (`/discord`)**: Run a detached Discord bot independently of the interactive Pi terminal. DMs and server threads are restricted to configured user/channel allowlists; a bot mention in an allowlisted server channel creates a thread with a durable, per-thread/per-user Pi session. The gateway uses your configured Pi model, extensions, and tools, routes Pi UI questions through Discord buttons, select menus, and text-entry modals, renames new threads to their generated session title when available, and offers the `discord_gateway_restart` tool for deferred self-restarts after code changes.
+- **Ollama Cloud Provider**:
+  - Sign in with `/login ollama-cloud` or set `OLLAMA_API_KEY`. Discover cloud models and their tool, vision, thinking and context metadata dynamically.
+  - On login, the account plan and purchased balance are checked. Free accounts without purchased credits hide models observed to be restricted in a Free-account probe; paid plans or accounts with purchased credits retain the full catalog. Unknown access is not hidden. The snapshot is an observation, not an Ollama entitlement guarantee.
+  - `/usage` and the quota footer show included and purchased balances or legacy limits when reported. Model prices are estimates parsed from Ollama's pricing page; unknown rates use Pi's required numeric zero placeholders and are labeled unknown or incomplete. Output limits are estimates. Actual billing can differ, including off-peak rates.
+  - Ollama's catalog is public and is not known to filter by account entitlement. Native model-specific thinking controls are not currently mapped to Pi's effort slider.
 - **Kenari AI Gateway Provider**:
   - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
   - Dual authentication: Choose browser loopback PKCE sign-in or API-key login via `/login kenari`, or set `KENARI_API_KEY`.
@@ -102,9 +107,12 @@ Use Discord **`/stop`** in an active gateway thread or DM to force stop its curr
 
 # Or login to Kenari:
 /login kenari
+
+# Or log in to Ollama Cloud:
+/login ollama-cloud
 ```
 
-Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."` or `KENARI_API_KEY="kn-..."` directly.
+Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically where supported. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."`, `KENARI_API_KEY="kn-..."`, or `OLLAMA_API_KEY` directly.
 
 ### 3. Running with Models
 

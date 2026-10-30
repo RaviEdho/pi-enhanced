@@ -6,6 +6,7 @@ import { fetchCodexUsage } from "../ux/usage/codex.js";
 import { computeTimeElapsedFraction } from "../ux/usage/format.js";
 import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
 import { fetchKenariUsage } from "../ux/usage/kenari.js";
+import { fetchOllamaCloudUsage } from "../ux/usage/ollama-cloud.js";
 import { buildOpenAIUsageReport } from "../ux/usage/openai.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { AccountStore } from "./store.js";
@@ -169,7 +170,9 @@ export class QuotaManager {
   ): Promise<ProviderUsageReport | null> {
     const entry = this.cache.get(account.id);
     const now = Date.now();
-    if (entry && now - entry.fetchedAt < maxAgeMs) {
+    // Ollama recommends polling its per-user balance endpoint at most once per minute.
+    if (account.provider === "ollama-cloud") maxAgeMs = Math.max(maxAgeMs, 60_000);
+    if (account.provider !== "ollama-cloud" && entry && now - entry.fetchedAt < maxAgeMs) {
       return entry.report;
     }
 
@@ -210,6 +213,8 @@ export class QuotaManager {
             signal,
             account.planType
           );
+        } else if (account.provider === "ollama-cloud") {
+          report = await fetchOllamaCloudUsage(token, account.email || account.label || "Ollama Cloud", signal);
         } else if (account.provider === "kenari") {
           report = await fetchKenariUsage(
             token,

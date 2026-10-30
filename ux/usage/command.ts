@@ -20,6 +20,7 @@ import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
+import { fetchOllamaCloudUsage, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import { buildOpenAIUsageReport } from "./openai.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
@@ -550,6 +551,36 @@ export async function collectUsageReports(
     }
   }
 
+  // Ollama's balance endpoint recommends polling no more often than once a minute.
+  const ollamaAccounts = store.list("ollama-cloud");
+  const isOllamaActive = options?.currentProvider === "ollama-cloud";
+  const ollamaPromises: Promise<ProviderUsageReport>[] = [];
+  if (ollamaAccounts.length) {
+    const sessionAccount = isOllamaActive ? balancer.getSessionAccount("ollama-cloud", options?.sessionId, options?.currentModelId) : undefined;
+    for (const acc of ollamaAccounts) {
+      if (signal?.aborted) break;
+      const label = acc.email || acc.label || "Ollama Cloud";
+      const isSession = isOllamaActive && sessionAccount?.id === acc.id;
+      ollamaPromises.push((async () => {
+        const base: ProviderUsageReport = { providerId: "ollama-cloud", providerName: "Ollama Cloud", accountEmail: label, accountId: acc.id, isSessionAccount: isSession, fetchedAt: Date.now(), groups: [] };
+        if (acc.blockedUntil && acc.blockedUntil > Date.now()) base.cooldownMinutes = Math.max(1, Math.ceil((acc.blockedUntil - Date.now()) / 60000));
+        if (acc.disabledCause) return { ...base, error: acc.disabledCause };
+        try {
+          const token = acc.apiKey || await balancer.ensureFreshToken(acc);
+          const quota = QuotaManager.getInstance();
+          const report = await fetchOllamaCloudUsage(token, label, signal);
+          if (!report.error) quota.setReport(acc.id, report);
+          return { ...report, accountEmail: label, accountId: acc.id, isSessionAccount: isSession, cooldownMinutes: base.cooldownMinutes };
+        } catch {
+          return { ...base, error: "Unable to access Ollama Cloud credentials" };
+        }
+      })());
+    }
+  } else {
+    const auth = getOllamaFallbackAuth();
+    if (auth) ollamaPromises.push(fetchOllamaCloudUsage(auth.token, auth.label, signal).then(report => ({ ...report, isSessionAccount: isOllamaActive })));
+  }
+
   // Await all provider account queries concurrently
   const settled = await Promise.allSettled([
     ...antigravityPromises,
@@ -557,6 +588,7 @@ export async function collectUsageReports(
     ...openaiPromises,
     ...commandcodePromises,
     ...kenariPromises,
+    ...ollamaPromises,
   ]);
   for (const s of settled) {
     if (s.status === "fulfilled") {

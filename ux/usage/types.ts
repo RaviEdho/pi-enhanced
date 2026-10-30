@@ -7,6 +7,8 @@ export interface QuotaBucket {
   usedFraction: number;
   resetTime?: string;
   description?: string;
+  /** Raw balance when this bucket represents monetary credits. */
+  balanceUsd?: number;
   /**
    * How this bucket is rendered in `/usage`. Defaults to `"bar"`.
    * Use `"value"` for balances, credits and coupons: they have no meaningful

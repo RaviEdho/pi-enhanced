@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balancer.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
+import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { isModelCoveredByPlan } from "../../providers/commandcode/plan.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
@@ -341,6 +342,22 @@ function renderBalance(
   );
 }
 
+function renderOllamaFooter(report: ProviderUsageReport, prefix: string, now: number, _theme: ExtensionContext["ui"]["theme"]): string {
+  if (report.error || report.groups.length === 0) return `${prefix}  Quota unavailable`;
+  const buckets = report.groups.flatMap((group) => group.buckets).filter((bucket) => bucket.balanceUsd !== 0);
+  const parts = buckets.map((bucket) => {
+    if (bucket.bucketId === "ollama-cloud-included") {
+      if (bucket.displayMode === "value") return bucket.description || "unavailable";
+      return `[${makeProgressBar(bucket.usedFraction, 10, undefined, false)}] ${Math.round(bucket.usedFraction * 100)}%${bucket.resetTime ? ` (${formatRelativeTime(bucket.resetTime, now)})` : ""}`;
+    }
+    if (bucket.displayMode === "value") return `${bucket.displayName}: ${bucket.description || "unavailable"}`;
+    const label = bucket.displayName;
+    const bar = `${label} [${makeProgressBar(bucket.usedFraction, 10, undefined, false)}] ${Math.round(bucket.usedFraction * 100)}%${bucket.resetTime ? ` (${formatRelativeTime(bucket.resetTime, now)})` : ""}`;
+    return bucket.description ? `${bar} (${bucket.description})` : bar;
+  });
+  return parts.length ? `${prefix}  ${parts.join(" · ")}` : prefix;
+}
+
 /**
  * Builds Line 2 Right Side: Active account usage bar.
  */
@@ -353,10 +370,14 @@ function buildUsageBar(ctx: ExtensionContext): string {
   const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
 
   if (!account) {
-    return "";
+    if (model.provider !== "ollama-cloud") return "";
+    const auth = getOllamaFallbackAuth();
+    if (!auth) return "";
+    const report = QuotaManager.getInstance().getReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`);
+    return report ? renderOllamaFooter(report, auth.label, Date.now(), ctx.ui.theme) : `${auth.label}  ···`;
   }
 
-  const prefix = account.email ? account.email : account.id;
+  const prefix = account.provider === "ollama-cloud" ? (account.email || account.label || "Ollama Cloud") : (account.email || account.id);
 
   const now = Date.now();
   // Check 429 cooldown
@@ -376,6 +397,8 @@ function buildUsageBar(ctx: ExtensionContext): string {
   if (!report || report.groups.length === 0) {
     return `${prefix}  ···`;
   }
+
+  if (report.providerId === "ollama-cloud") return renderOllamaFooter(report, prefix, now, ctx.ui.theme);
 
   const { primary, secondary, balance } = extractKeyBuckets(report, model.id);
 
@@ -628,6 +651,13 @@ const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is a
 const TOOL_CALL_THROTTLE_MS = 15 * 1000; // Throttle tool call quota checks to once every 15s
 const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every 2 minutes
 
+async function refreshOllamaFallback(): Promise<void> {
+  const auth = getOllamaFallbackAuth();
+  if (!auth) return;
+  const report = await fetchOllamaCloudUsage(auth.token, auth.label, AbortSignal.timeout(5000));
+  QuotaManager.getInstance().setReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`, report);
+}
+
 /**
  * Triggers a non-blocking background quota refresh for all eligible candidate accounts
  * of the currently active model provider.
@@ -650,7 +680,10 @@ async function refreshCandidateAccounts(
   const candidates = allAccounts.filter(
     (acc) => !acc.disabledCause && isAccountEligibleForModel(acc, model.id)
   );
-  if (candidates.length === 0) return;
+  if (candidates.length === 0) {
+    if (model.provider === "ollama-cloud") await refreshOllamaFallback();
+    return;
+  }
 
   const quotaManager = QuotaManager.getInstance();
   const maxAgeMs = force ? 0 : DEFAULT_CACHE_TTL_MS;
@@ -660,7 +693,7 @@ async function refreshCandidateAccounts(
       try {
         const token = account.provider === "openai" && account.type === "oauth"
           ? account.access || ""
-          : await balancer.ensureFreshToken(account);
+          : account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
         await quotaManager.ensureFreshQuota(
           account,
           token,
@@ -692,13 +725,16 @@ async function refreshSessionAccountQuota(
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
   const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
-  if (!account) return;
+  if (!account) {
+    if (model.provider === "ollama-cloud") await refreshOllamaFallback();
+    return;
+  }
 
   const quotaManager = QuotaManager.getInstance();
   try {
     const token = account.provider === "openai" && account.type === "oauth"
       ? account.access || ""
-      : await balancer.ensureFreshToken(account);
+      : account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
     await quotaManager.ensureFreshQuota(
       account,
       token,
