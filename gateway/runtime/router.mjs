@@ -90,9 +90,12 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
             : "";
           const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}`;
           const session = await sessions.get(sessionKey);
+          // Observe background title generation during the run, not just after it.
+          threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
             channel: target, userId: message.author.id, channelId: target.id, typing,
           }, images);
+          // Retry if the early watch expired before the title became available.
           threads.watchThreadTitle(target, session);
           return result;
         });
