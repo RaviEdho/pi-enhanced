@@ -6,6 +6,7 @@ import { replyEphemeral } from "./interactions.mjs";
 import { discordOptionLabel, startTyping } from "./messages.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 import { writePrivateJson } from "./persistence.mjs";
+import { getThreadSessionKey } from "./threads.mjs";
 
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -27,6 +28,17 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
             .setRequired(false)
             .setAutocomplete(true)),
         new SlashCommandBuilder()
+          .setName("steer")
+          .setDescription("Send an instruction to the active agent instead of waiting in the message queue")
+          .addStringOption((option) => option
+            .setName("message")
+            .setDescription("Instruction to apply before the agent's next model call")
+            .setRequired(true)
+            .setMinLength(1)),
+        new SlashCommandBuilder()
+          .setName("stop")
+          .setDescription("Force stop the running agent in this conversation"),
+        new SlashCommandBuilder()
           .setName("commit")
           .setDescription("Review and commit changes in this conversation's working directory")
           .addStringOption((option) => option
@@ -47,7 +59,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       // Keep these as global commands only; registering both scopes makes Discord
       // display duplicate entries. Remove guild-scoped copies created by older versions,
       // while preserving any unrelated commands registered directly in those guilds.
-      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit"]);
+      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit", "stop", "steer"]);
       for (const guild of readyClient.guilds.cache.values()) {
         try {
           const guildCommands = await guild.commands.fetch();
@@ -124,6 +136,14 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
   }
 
   async function handleChatInputCommand(interaction) {
+    if (interaction.commandName === "steer") {
+      await lifecycle.trackTask(handleSteerCommand(interaction));
+      return;
+    }
+    if (interaction.commandName === "stop") {
+      await lifecycle.trackTask(handleStopCommand(interaction));
+      return;
+    }
     if (interaction.commandName === "commit") {
       await lifecycle.trackTask(handleCommitCommand(interaction));
       return;
@@ -218,6 +238,75 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     }
   }
 
+  async function handleSteerCommand(interaction) {
+    if (lifecycle.isStopping()) {
+      await replyEphemeral(interaction, "The Discord gateway is restarting or stopping. Please try again when it is back online.");
+      return;
+    }
+    if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+      await replyEphemeral(interaction, "You are not authorized to control this bot.");
+      return;
+    }
+    const sessionKey = getConversationSessionKey(interaction);
+    if (!sessionKey) {
+      await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread.");
+      return;
+    }
+    const message = interaction.options?.getString("message")?.trim();
+    if (!message) {
+      await replyEphemeral(interaction, "Provide a non-empty steering message.");
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      // Do not enqueue behind the run being steered or open an idle session.
+      // Keep the run's interaction/UI owner unchanged, even in shared threads.
+      const session = sessions.peek(sessionKey);
+      const conversationLabel = interaction.guildId == null
+        ? `DM with ${interaction.user.username}`
+        : `Discord thread ${interaction.channelId}`;
+      const prompt = `Discord message from ${interaction.user.username} (user ID ${interaction.user.id}) in ${conversationLabel}:\n\n${message}`;
+      const result = await session?.steer(prompt);
+      if (!result) {
+        await interaction.editReply("There is no active agent run to steer. Send a normal message to start one; /commit workflows and workspace handoffs cannot be steered.");
+        return;
+      }
+      if (!result.success) throw new Error("Pi rejected the steering message");
+      await interaction.editReply(result.data?.disposition === "handled"
+        ? "The steering message was handled by Pi."
+        : "Steering message sent to the active run. Pi will apply it after the current turn's tool calls, before its next model call.");
+    } catch (error) {
+      log(`Discord /steer failed: ${safeErrorName(error)}`);
+      await interaction.editReply("Could not confirm the steering message. Check the conversation and gateway logs before retrying.").catch(() => undefined);
+    }
+  }
+
+  async function handleStopCommand(interaction) {
+    if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+      await replyEphemeral(interaction, "You are not authorized to control this bot.");
+      return;
+    }
+    const sessionKey = getConversationSessionKey(interaction);
+    if (!sessionKey) {
+      await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread.");
+      return;
+    }
+
+    // Never enqueue cancellation behind the work it must interrupt. Keep /stop
+    // available during a restart drain so a stuck run cannot block the restart.
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const stopped = await sessions.stopRunning(sessionKey);
+      await interaction.editReply(stopped
+        ? "Stopped the running agent in this conversation."
+        : "There is no agent running in this conversation.");
+    } catch (error) {
+      log(`Discord /stop failed: ${safeErrorName(error)}`);
+      await interaction.editReply("Could not stop the agent. Check the gateway logs before retrying.").catch(() => undefined);
+    }
+  }
+
   async function handleCommitCommand(interaction) {
     if (lifecycle.isStopping()) {
       await replyEphemeral(interaction, "The Discord gateway is restarting or stopping. Please try again when it is back online.");
@@ -258,8 +347,14 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
             typing,
             workflow: "commit",
           }, [], { extensionCommand: true });
-          await interaction.editReply(buildCommitCardPayload("Commit workflow finished. See the updated commit card for the result.", { workspace: session.cwd })).catch(() => undefined);
+          await interaction.editReply(buildCommitCardPayload(session.forceStopped
+            ? "Commit workflow stopped. Any changes already made are not undone."
+            : "Commit workflow finished. See the updated commit card for the result.", { workspace: session.cwd })).catch(() => undefined);
         } catch (error) {
+          if (session.forceStopped) {
+            await interaction.editReply(buildCommitCardPayload("Commit workflow stopped. Any changes already made are not undone.", { workspace: session.cwd })).catch(() => undefined);
+            return;
+          }
           await session.ui.sendCommitNotice(interaction.channel, "Could not complete the commit workflow. Check the gateway logs before retrying.", "error").catch(() => undefined);
           throw error;
         } finally {
@@ -392,7 +487,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     if (config.allowServerMessages === false || !interaction.channel?.isThread?.()) return undefined;
     const registration = threads.get(interaction.channelId);
     if (!registration || (!allowedChannels.has("*") && !allowedChannels.has(registration.parentChannelId))) return undefined;
-    return `guild:${registration.parentChannelId}:thread:${interaction.channelId}:user:${userId}`;
+    return getThreadSessionKey(interaction.channelId, registration);
   }
 
   async function handleConversationSettingInteraction(interaction) {

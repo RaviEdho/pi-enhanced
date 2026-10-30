@@ -1,7 +1,8 @@
 import {
-  getDiscordImageAttachments, loadDiscordImages, sendText, startTyping, stripBotMention,
+  getDiscordImageAttachments, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext,
+  sendText, startTyping, stripBotMention,
 } from "./messages.mjs";
-import { makeThreadName } from "./threads.mjs";
+import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 
 /** Authorization and Discord-to-Pi conversation routing. */
@@ -17,7 +18,10 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     if (typeof channel?.isThread === "function" && channel.isThread()) {
       const registration = threads.get(message.channelId);
       if (!registration || (!allowedChannels.has("*") && !allowedChannels.has(registration.parentChannelId))) return undefined;
-      return { kind: "thread", parentChannelId: registration.parentChannelId };
+      return {
+        kind: "thread", parentChannelId: registration.parentChannelId,
+        sessionKey: getThreadSessionKey(message.channelId, registration),
+      };
     }
     if (!allowedChannels.has("*") && !allowedChannels.has(message.channelId)) return undefined;
     if (!client.user || !message.mentions?.users?.has(client.user.id)) return undefined;
@@ -41,7 +45,8 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     if (seenMessages.size > 3000) seenMessages.delete(seenMessages.values().next().value);
 
     const imageAttachments = getDiscordImageAttachments(message);
-    if (!content && imageAttachments.length === 0) {
+    const isReply = hasDiscordReply(message);
+    if (!content && imageAttachments.length === 0 && !isReply) {
       const hasAttachments = (message.attachments?.size || 0) > 0;
       await sendText(message.channel, hasAttachments
         ? "I can read text and PNG, JPEG, GIF, or WebP image attachments. This message has no supported image or text."
@@ -55,18 +60,19 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       sessionKey = `dm:${message.channelId}:${message.author.id}`;
       conversationLabel = `DM with ${message.author.username}`;
     } else if (route.kind === "thread") {
-      sessionKey = `guild:${route.parentChannelId}:thread:${message.channelId}:user:${message.author.id}`;
+      sessionKey = route.sessionKey;
       conversationLabel = `Discord thread ${message.channelId}`;
     } else {
       try {
         const thread = await message.startThread({ name: makeThreadName(message.author.username, content), autoArchiveDuration: 1440 });
-        threads.register(thread.id, {
+        const registration = {
           parentChannelId: message.channelId,
           createdByUserId: message.author.id,
           createdAt: new Date().toISOString(),
-        });
+        };
+        threads.register(thread.id, registration);
         target = thread;
-        sessionKey = `guild:${message.channelId}:thread:${thread.id}:user:${message.author.id}`;
+        sessionKey = getThreadSessionKey(thread.id, registration);
         conversationLabel = `Discord thread ${thread.id}`;
         log(`Created thread ${thread.id} in allowlisted channel ${message.channelId}`);
       } catch (error) {
@@ -79,16 +85,19 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       const typing = startTyping(target);
       try {
         const result = await sessions.withRunSlot(async () => {
+          const replyContext = await loadDiscordReplyContext(message);
           const { images, skippedCount } = await loadDiscordImages(imageAttachments);
-          if (!content && images.length === 0) {
+          if (!content && images.length === 0 && !isReply) {
             await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.");
             return undefined;
           }
-          const messageContent = content || "Please inspect the attached image(s) and describe what you see.";
+          const messageContent = content || (isReply
+            ? "Please respond to the message I am replying to."
+            : "Please inspect the attached image(s) and describe what you see.");
           const imageNote = skippedCount > 0
             ? `\n\n[Gateway note: ${skippedCount} image attachment(s) could not be included. Analyze only the images attached to this prompt.]`
             : "";
-          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}`;
+          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${replyContext}`;
           const session = await sessions.get(sessionKey);
           // Observe background title generation during the run, not just after it.
           threads.watchThreadTitle(target, session);
@@ -97,7 +106,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           }, images);
           // Retry if the early watch expired before the title became available.
           threads.watchThreadTitle(target, session);
-          return result;
+          return session.forceStopped ? "The agent run was cancelled." : result;
         });
         if (result === undefined) return;
         if (result.trim()) await sendText(target, result);

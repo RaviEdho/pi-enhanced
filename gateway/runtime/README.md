@@ -16,10 +16,10 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
-| `commands.mjs` | Register slash commands and model/thinking autocomplete; handle commit workflows, setting changes, and home-channel configuration. |
+| `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
-| `messages.mjs` | Split/send text, manage typing, and safely download supported Discord CDN images. |
-| `threads.mjs` | Own thread registration, persistence, pruning, and generated-title watchers. |
+| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, and safely download supported Discord CDN images. |
+| `threads.mjs` | Own thread registration, shared conversation keys, persistence, pruning, and generated-title watchers. |
 | `lifecycle.mjs` | Own PID/status files, process handlers, restart requests, draining, and replacement startup. |
 | `persistence.mjs` | Write private JSON files through temporary-file replacement. |
 | `logging.mjs` | Format logs and sanitized error summaries. |
@@ -30,11 +30,54 @@ callbacks where commands and lifecycle depend on each other.
 
 ## Coordination contracts
 
+- Resolve reply context only for authorized, accepted messages inside the queued run.
+  Fetch only the directly referenced same-channel message via Discord's message API;
+  never traverse reply chains or ingest channel history. Treat its text/author and
+  attachment links as quoted context, not a new user's instructions. An unreadable
+  reference becomes an explicit unavailable-context note without aborting the run.
+- All allowlisted participants in a server thread use one shared session and queue,
+  including `/model`, `/thinking`, autocomplete, and `/commit`. Resolve its key with
+  `getThreadSessionKey(threadId, registration)`, never the current speaker's ID.
+  Keep the starter's legacy `:user:<createdByUserId>` suffix to preserve the exact
+  hashed session directory, history, workspace, model, and thinking level without
+  copying or merging files. Registrations without a starter use a thread-only key.
+  Other participants' old sessions stay untouched; do not backfill Discord history.
+  DMs keep their existing per-channel/user keys. All participants still require
+  allowlist authorization; prompt/picker/approval ownership stays with the initiator.
+- Label every incoming message with its author username and stable user ID. The
+  appended system prompt distinguishes participants, attributes preferences and
+  approvals to their authors, and refuses identity overrides from message text or
+  quoted context. Apply this to resumed sessions and workspace handoffs too.
 - Route work through `sessions.enqueue(key, task)` to preserve conversation order.
   Use `sessions.withRunSlot(task)` for agent runs to enforce global concurrency.
 - Register accepted asynchronous work with `lifecycle.trackTask(promise)`. Message
   handlers also run through `lifecycle.handleMessage(task)`, so a restart cannot
   overtake thread creation or other pre-queue work.
+- `/steer message:<instruction>` requires the same user and conversation-route
+  authorization as other conversation commands. Peek at the existing session and
+  send Pi's native `steer` RPC immediately, bypassing the conversation queue and
+  global run-slot acquisition. Track the request with lifecycle so restarts drain
+  it too. Require an active settlement waiter, not merely `running`; refuse idle,
+  stopped, post-settlement, workspace-replacement, and `/commit` sessions, and new
+  requests during restart drain. Never create a session or orphan a steering queue
+  on an idle child. Label the instruction with the command author's username and
+  stable ID, but keep the active run's interaction and UI ownership unchanged.
+  Pi delivers steering after the current turn's tool calls, before the next model
+  call. The existing prompt waiter owns settlement and the final Discord reply;
+  steering must not create a second waiter, reset UI, or duplicate the reply.
+  Normal Discord messages keep their existing queued behavior.
+- `/stop` requires the same user and conversation-route authorization as other
+  conversation commands, but bypasses the queue and remains available during a
+  restart drain. Never open a session just to cancel it. Stop only the active
+  conversation's running child, invalidate its UI/pickers, discard pending cwd
+  handoffs, and preserve saved history/workspace for the next request. Signal
+  the child without waiting for stdin shutdown; kill its tool descendants
+  independently of Pi's signal handler, then force kill Pi after one second
+  if it is unresponsive. Reopening must wait for process/UI cleanup and share
+  one initialization per conversation, including simultaneous setting requests.
+  Treat interrupted prompts and commit workflows as cancellation, not provider
+  failures or successful commits. Existing queued requests remain queued;
+  completed filesystem/Git operations are not rolled back.
 - `/commit` sends the literal extension command through RPC after checking
   `get_commands`; never fall back to a natural-language prompt if it is missing.
   Use the conversation queue, a global run slot, and lifecycle task tracking.

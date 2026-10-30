@@ -12,6 +12,7 @@ export function createSessionManager({
   sessionIdleMs = 20 * 60 * 1000,
 }) {
   const sessions = new Map();
+  const openingSessions = new Map();
   const sessionQueues = new Map();
   const runQueue = [];
   let activeRuns = 0;
@@ -64,11 +65,27 @@ export function createSessionManager({
 
   async function get(key) {
     assertOpen();
+    if (openingSessions.has(key)) return openingSessions.get(key);
+    const opening = getOrStart(key);
+    openingSessions.set(key, opening);
+    try {
+      return await opening;
+    } finally {
+      if (openingSessions.get(key) === opening) openingSessions.delete(key);
+    }
+  }
+
+  async function getOrStart(key) {
+    assertOpen();
     const session = sessions.get(key);
     if (session && !session.closed) {
       session.lastUsedAt = Date.now();
       return session;
     }
+    // A forced stop rejects the active RPC immediately, but its process/UI
+    // cleanup must finish before any caller can reopen the same history file.
+    if (session?.stopPromise) await session.stopPromise;
+    assertOpen();
     if (sessions.size >= maxOpenSessions) await closeLeastRecentlyUsedIdleSession();
     assertOpen();
     const hash = createHash("sha256").update(key).digest("hex");
@@ -86,6 +103,15 @@ export function createSessionManager({
       await stopSession(created);
       throw error;
     }
+  }
+
+  async function stopRunning(key) {
+    const session = sessions.get(key);
+    if (!session || session.closed || !session.running) return false;
+    onSessionClosed(session);
+    await session.stop({ force: true });
+    if (sessions.get(key) === session) sessions.delete(key);
+    return true;
   }
 
   async function closeLeastRecentlyUsedIdleSession() {
@@ -120,6 +146,7 @@ export function createSessionManager({
     peek: (key) => sessions.get(key),
     enqueue,
     withRunSlot,
+    stopRunning,
     closeIdle,
     hasWork: () => activeRuns > 0 || sessionQueues.size > 0,
     close() {

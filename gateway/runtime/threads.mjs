@@ -84,6 +84,14 @@ export function createThreadRegistry({ threadsPath }) {
   }
 }
 
+/** One session per thread, retaining the starter's legacy persistence key. */
+export function getThreadSessionKey(threadId, registration) {
+  const key = `guild:${registration.parentChannelId}:thread:${threadId}`;
+  // Existing session directories hash this exact key. Pin it to the registered
+  // starter, never the current speaker, to resume history/workspace without a copy.
+  return registration.createdByUserId ? `${key}:user:${registration.createdByUserId}` : key;
+}
+
 export function makeThreadName(username, prompt) {
   const summary = prompt.replace(/\s+/g, " ").trim();
   const name = summary ? `${username}: ${summary}` : `${username}: Pi conversation`;
