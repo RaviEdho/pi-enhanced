@@ -12,7 +12,7 @@ Start with an imperative verb. Capitalize only the first word unless the user's 
 Preserve ticket references exactly. Write in the user's language.
 Do not use quotes, markdown, or trailing punctuation. Do not answer the request.`;
 const MAX_SOURCE_BYTES = 960;
-const TITLE_TIMEOUT_MS = 20_000;
+const TITLE_TIMEOUT_MS = 40_000;
 
 function extractUserText(message: { role: string; content?: unknown }): string {
   if (message.role !== "user") return "";
@@ -94,8 +94,13 @@ async function generateTitle(
   isCurrentSession: (sessionId: string) => boolean
 ): Promise<void> {
   try {
+    // Ollama's OpenAI-compatible endpoint can ignore developer instructions for
+    // some models, so send the title prompt as a system message instead.
+    const titleModel = model.provider === "ollama-cloud"
+      ? { ...model, compat: { ...model.compat, supportsDeveloperRole: false } }
+      : model;
     const result = await ctx.modelRegistry.complete(
-      model,
+      titleModel,
       {
         systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
         messages: [
@@ -107,7 +112,11 @@ async function generateTitle(
         ],
       },
       {
-        maxTokens: 48,
+        // Reasoning models may spend output tokens thinking even when "off"
+        // is not supported by their provider. Leave room for the actual title.
+        maxTokens: model.provider === "ollama-cloud" && model.reasoning
+          ? Math.min(model.maxTokens, 4096)
+          : 48,
         maxRetries: 0,
         reasoning: "off",
         timeoutMs: TITLE_TIMEOUT_MS,
