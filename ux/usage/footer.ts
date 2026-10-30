@@ -11,11 +11,9 @@ import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { PlanModeManager } from "../plan/manager.js";
-import { isModelCoveredByPlan } from "../../providers/commandcode/plan.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import {
   computeTimeElapsedFraction,
-  formatRelativeTime,
   makeProgressBar,
 } from "./format.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
@@ -56,11 +54,11 @@ function formatCwd(cwd: string, home: string | undefined): string {
 
 interface KeyBuckets {
   primary?: QuotaBucket;
-  secondary?: QuotaBucket[];
-  balance?: QuotaBucket;
+  secondary: QuotaBucket[];
+  balances: QuotaBucket[];
 }
 
-/** Resolves known durations without relying on provider primary/secondary names. */
+/** Resolve durations for ordering only; never invent a marker interval. */
 function quotaWindowSeconds(bucket: QuotaBucket): number {
   if (bucket.windowSeconds && Number.isFinite(bucket.windowSeconds) && bucket.windowSeconds > 0) {
     return bucket.windowSeconds;
@@ -73,125 +71,30 @@ function quotaWindowSeconds(bucket: QuotaBucket): number {
   return duration ? Number(duration[1]) * (duration[2] === "hour" ? 3600 : 86400) : 0;
 }
 
-/** Keeps the longest budget window primary, independent of current consumption. */
-function longestQuotaWindow(buckets: QuotaBucket[]): QuotaBucket | undefined {
-  return buckets.reduce<QuotaBucket | undefined>(
-    (longest, bucket) =>
-      !longest || quotaWindowSeconds(bucket) > quotaWindowSeconds(longest) ? bucket : longest,
-    undefined
+function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBuckets {
+  const all = report.groups.flatMap((group) => group.buckets).filter(
+    (bucket) => report.providerId !== "ollama-cloud" || bucket.balanceUsd !== 0
   );
-}
-
-/**
- * Extracts primary and secondary quota buckets for the active model.
- */
-function extractKeyBuckets(
-  report: ProviderUsageReport,
-  modelId?: string
-): KeyBuckets {
-  const cleanModel = (modelId || "").toLowerCase();
-  const allBuckets = report.groups.flatMap((g) => g.buckets);
-  if (allBuckets.length === 0) {
-    return {};
-  }
-
-  if (report.providerId === "commandcode") {
-    const fiveHour = allBuckets.find((b) => b.bucketId === "commandcode-5hour");
-    const weekly = allBuckets.find((b) => b.bucketId === "commandcode-weekly");
-    const credits = allBuckets.find((b) => b.bucketId === "commandcode-credits");
-    const extra = allBuckets.find((b) => b.bucketId === "commandcode-extra");
-    const balanceBucket = extra ?? credits;
-
-    // Monthly pool drives the progress bar; 5-hour and weekly windows are secondary entries.
-    const secondaries = [fiveHour, weekly].filter(
-      (b): b is QuotaBucket => b !== undefined
-    );
-    if (credits) {
-      return { primary: credits, secondary: secondaries, balance: balanceBucket };
-    }
-    if (weekly) {
-      return {
-        primary: weekly,
-        secondary: fiveHour ? [fiveHour] : undefined,
-        balance: balanceBucket,
-      };
-    }
-    if (fiveHour) {
-      return { primary: fiveHour, balance: balanceBucket };
-    }
-    return { balance: balanceBucket };
-  }
-
-  if (report.providerId === "kenari") {
-    const fiveHour = allBuckets.find((b) => b.bucketId === "kenari-5hour");
-    const weekly = allBuckets.find((b) => b.bucketId === "kenari-weekly");
-    const monthly = allBuckets.find((b) => b.bucketId === "kenari-monthly");
-    const balance = allBuckets.find((b) => b.bucketId === "kenari-balance");
-
-    const primary = monthly ?? weekly ?? fiveHour;
-    return {
-      primary,
-      secondary: [fiveHour, weekly].filter(
-        (b): b is QuotaBucket => b !== undefined && b !== primary
-      ),
-      balance,
-    };
-  }
+  const isBalance = (bucket: QuotaBucket): boolean => {
+    const window = normalizeWindowToken(bucket.window);
+    return bucket.displayMode === "value" ||
+      [QUOTA_WINDOW.prepaid, QUOTA_WINDOW.balance, QUOTA_WINDOW.coupon, QUOTA_WINDOW.onDemand].some((value) => value === window);
+  };
+  const balances = all.filter(isBalance);
+  let windows = all.filter((bucket) => !isBalance(bucket));
 
   if (report.providerId === "google-antigravity") {
-    const isClaudeOrGpt = cleanModel.includes("claude") || cleanModel.includes("gpt");
-    const targetPrefix = isClaudeOrGpt ? "3p" : "gemini";
-    const filtered = allBuckets.filter((b) =>
-      b.bucketId.toLowerCase().includes(targetPrefix)
-    );
-    const candidateList = filtered.length > 0 ? filtered : allBuckets;
-    const weekly = candidateList.find(
-      (b) =>
-        b.bucketId.toLowerCase().includes("weekly") ||
-        (b.windowSeconds && b.windowSeconds >= 6 * 86400)
-    );
-    const fiveHour = candidateList.find(
-      (b) =>
-        b !== weekly &&
-        (b.bucketId.toLowerCase().includes("5h") ||
-          (b.windowSeconds && b.windowSeconds <= 86400))
-    );
-    const primary = weekly ?? candidateList[0];
-    return {
-      primary,
-      secondary: fiveHour && fiveHour !== primary ? [fiveHour] : undefined,
-    };
+    const model = (modelId || "").toLowerCase();
+    const prefix = model.includes("claude") || model.includes("gpt") ? "3p" : "gemini";
+    const filtered = windows.filter((bucket) => bucket.bucketId.toLowerCase().includes(prefix));
+    windows = filtered;
+  } else if (report.providerId === "openai-codex") {
+    // Shared chat limits only, excluding feature-specific quotas.
+    windows = windows.filter((bucket) => bucket.bucketId === "codex-primary" || bucket.bucketId === "codex-secondary");
   }
 
-  if (report.providerId === "openai-codex") {
-    // Only compare the shared chat limits, not feature-specific quotas (e.g. code review).
-    const windows = [
-      allBuckets.find((b) => b.bucketId === "codex-primary"),
-      allBuckets.find((b) => b.bucketId === "codex-secondary"),
-    ].filter((b): b is QuotaBucket => b !== undefined);
-    const primary = longestQuotaWindow(windows) ?? allBuckets[0];
-    return { primary, secondary: windows.filter((b) => b !== primary) };
-  }
-
-  // Generic fallback for any other provider
-  const isBalanceBucket = (b: QuotaBucket): boolean =>
-    b.displayMode === "value" ||
-    b.window === QUOTA_WINDOW.prepaid ||
-    b.window === QUOTA_WINDOW.balance ||
-    b.window === QUOTA_WINDOW.coupon ||
-    b.window === QUOTA_WINDOW.onDemand ||
-    (quotaWindowSeconds(b) === 0 &&
-      (b.bucketId.toLowerCase().includes("balance") ||
-        b.bucketId.toLowerCase().includes("credit")));
-  const balanceBucket = allBuckets.find(isBalanceBucket);
-  const windowBuckets = allBuckets.filter((b) => !isBalanceBucket(b));
-  const primary = longestQuotaWindow(windowBuckets);
-
-  return {
-    primary,
-    secondary: windowBuckets.filter((b) => b !== primary),
-    balance: balanceBucket,
-  };
+  windows.sort((a, b) => quotaWindowSeconds(b) - quotaWindowSeconds(a));
+  return { primary: windows[0], secondary: windows.slice(1), balances };
 }
 
 /**
@@ -249,6 +152,22 @@ function renderFooterLine1(
   return line;
 }
 
+function formatFooterCountdown(resetTime: string, now: number): string {
+  const totalMinutes = Math.floor(Math.max(0, Date.parse(resetTime) - now) / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days) return `${days}d${String(hours).padStart(2, "0")}h`;
+  if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  return `${minutes}m`;
+}
+
+function bucketWindowLabel(bucket: QuotaBucket): string {
+  const window = normalizeWindowToken(bucket.window);
+  if (window === QUOTA_WINDOW.default && !quotaWindowSeconds(bucket)) return bucket.displayName;
+  return quotaWindowShortLabel(window, bucket.windowSeconds) || bucket.displayName;
+}
+
 /**
  * Renders the stable budget bar and secondary countdowns for windows with usage.
  */
@@ -266,10 +185,8 @@ function renderProgressBar(
     primary.usedFraction
   );
   const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
-  const ready =
-    primary.usedFraction <= 0 && (timeElapsed === 0 || timeElapsed === undefined);
-  const resetSegment = primary.resetTime
-    ? ` (${ready ? "ready" : formatRelativeTime(primary.resetTime, now)})`
+  const resetSegment = primary.resetTime && Number.isFinite(Date.parse(primary.resetTime))
+    ? ` (${formatFooterCountdown(primary.resetTime, now)})`
     : "";
 
   let secondarySegment = "";
@@ -277,15 +194,14 @@ function renderProgressBar(
     (a, b) => quotaWindowSeconds(b) - quotaWindowSeconds(a)
   );
   for (const secondary of sortedSecondaries) {
+    if (secondary.usedFraction <= 0) continue;
     const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel =
-      quotaWindowShortLabel(secondary.window, secondary.windowSeconds) ||
-      secondary.displayName;
+    const secLabel = bucketWindowLabel(secondary);
     const countdown =
       secondary.usedFraction > 0 &&
       secondary.resetTime &&
       Number.isFinite(Date.parse(secondary.resetTime))
-        ? ` (${formatRelativeTime(secondary.resetTime, now)})`
+        ? ` (${formatFooterCountdown(secondary.resetTime, now)})`
         : "";
     const text = `${secLabel}: ${secPct}%${countdown}`;
     const color = secondary.usedFraction >= 0.95 ? "error" :
@@ -293,69 +209,33 @@ function renderProgressBar(
     secondarySegment += ` · ${color ? theme.fg(color, text) : text}`;
   }
 
-  const primaryLabel = quotaWindowShortLabel(primary.window, primary.windowSeconds) || primary.displayName;
+  const primaryLabel = bucketWindowLabel(primary);
   return `${primaryLabel} [${progressBar}] ${usedPct}%${resetSegment}${secondarySegment}`;
 }
 
-/**
- * Renders the active balance representation (credits or prepaid currency).
- */
-function renderBalance(
-  balance: QuotaBucket | undefined,
-  report: ProviderUsageReport
+/** Render quota and named value balances together for every provider. */
+function renderUsageReport(
+  report: ProviderUsageReport,
+  prefix: string,
+  modelId: string,
+  now: number,
+  theme: ExtensionContext["ui"]["theme"]
 ): string {
-  if (report.providerId === "kenari") {
-    if (balance?.description) {
-      return balance.description;
-    }
-    if (report.capacitySummaryShort) {
-      return report.capacitySummaryShort;
-    }
-    if (report.capacitySummary) {
-      return report.capacitySummary;
-    }
+  if (report.error && report.groups.length === 0) return `${prefix}  Quota unavailable`;
+  const { primary, secondary, balances } = extractKeyBuckets(report, modelId);
+  const parts: string[] = [];
+  if (primary) parts.push(renderProgressBar(primary, secondary, now, theme));
+  for (const balance of balances) {
+    const value = balance.description || (balance.balanceUsd !== undefined ? `$${balance.balanceUsd.toFixed(2)}` : "unavailable");
+    parts.push(`${balance.displayName}: ${value}`);
   }
-
-  if (report.providerId === "commandcode") {
-    const allBuckets = report.groups.flatMap((g) => g.buckets);
-    const extra = allBuckets.find((b) => b.bucketId === "commandcode-extra");
-    const credits = allBuckets.find((b) => b.bucketId === "commandcode-credits");
-    const target = extra ?? credits ?? balance;
-    if (target?.description) {
-      const cleanDesc = target.description.replace(/\s*\([^)]*\)$/, "");
-      return cleanDesc;
-    }
-    if (report.capacitySummaryShort) {
-      return report.capacitySummaryShort;
-    }
-    if (report.capacitySummary) {
-      return report.capacitySummary;
-    }
+  if (!parts.length && report.providerId !== "ollama-cloud") {
+    const summary = report.capacitySummaryShort || report.capacitySummary;
+    if (summary) parts.push(summary);
   }
-
-  return (
-    balance?.description ||
-    report.capacitySummaryShort ||
-    report.capacitySummary ||
-    balance?.displayName ||
-    "Active balance"
-  );
-}
-
-function renderOllamaFooter(report: ProviderUsageReport, prefix: string, now: number, _theme: ExtensionContext["ui"]["theme"]): string {
-  if (report.error || report.groups.length === 0) return `${prefix}  Quota unavailable`;
-  const buckets = report.groups.flatMap((group) => group.buckets).filter((bucket) => bucket.balanceUsd !== 0);
-  const parts = buckets.map((bucket) => {
-    if (bucket.bucketId === "ollama-cloud-included") {
-      if (bucket.displayMode === "value") return bucket.description || "unavailable";
-      return `[${makeProgressBar(bucket.usedFraction, 10, undefined, false)}] ${Math.round(bucket.usedFraction * 100)}%${bucket.resetTime ? ` (${formatRelativeTime(bucket.resetTime, now)})` : ""}`;
-    }
-    if (bucket.displayMode === "value") return `${bucket.displayName}: ${bucket.description || "unavailable"}`;
-    const label = bucket.displayName;
-    const bar = `${label} [${makeProgressBar(bucket.usedFraction, 10, undefined, false)}] ${Math.round(bucket.usedFraction * 100)}%${bucket.resetTime ? ` (${formatRelativeTime(bucket.resetTime, now)})` : ""}`;
-    return bucket.description ? `${bar} (${bucket.description})` : bar;
-  });
-  return parts.length ? `${prefix}  ${parts.join(" · ")}` : prefix;
+  if (parts.length) return `${prefix}  ${parts.join(" · ")}`;
+  if (report.providerId === "ollama-cloud" && report.groups.length > 0) return prefix;
+  return `${prefix}  ${report.error || report.quotaUnavailableReason ? "Quota unavailable" : "No quota limits reported"}`;
 }
 
 /**
@@ -374,7 +254,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
     const auth = getOllamaFallbackAuth();
     if (!auth) return "";
     const report = QuotaManager.getInstance().getReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`);
-    return report ? renderOllamaFooter(report, auth.label, Date.now(), ctx.ui.theme) : `${auth.label}  ···`;
+    return report ? renderUsageReport(report, auth.label, model.id, Date.now(), ctx.ui.theme) : `${auth.label}  ···`;
   }
 
   const prefix = account.provider === "ollama-cloud" ? (account.email || account.label || "Ollama Cloud") : (account.email || account.id);
@@ -394,73 +274,11 @@ function buildUsageBar(ctx: ExtensionContext): string {
   }
 
   const report = QuotaManager.getInstance().getReport(account.id);
-  if (!report || report.groups.length === 0) {
+  if (!report) {
     return `${prefix}  ···`;
   }
 
-  if (report.providerId === "ollama-cloud") return renderOllamaFooter(report, prefix, now, ctx.ui.theme);
-
-  const { primary, secondary, balance } = extractKeyBuckets(report, model.id);
-
-  if (!primary && !balance && !report.capacitySummary) {
-    return `${prefix}  No quota limits reported`;
-  }
-
-  // Determine whether progress bar or balance is active / in use
-  let showProgressBar = false;
-
-  if (primary && !balance) {
-    // Only quota window is available
-    showProgressBar = true;
-  } else if (!primary && (balance || report.capacitySummary)) {
-    // Only balance is available
-    showProgressBar = false;
-  } else if (primary && balance) {
-    // Both are available: determine dynamically based on provider, active model, and quota health
-    const hasAvailableBalance =
-      (balance.description && !balance.description.includes("Rp 0")) ||
-      balance.remainingFraction > 0;
-    // A short limit can trigger prepaid fallback even when the main budget has headroom.
-    const quotaExhausted = [primary, ...(secondary ?? [])].some((b) => b.usedFraction >= 1.0);
-
-    if (report.providerId === "commandcode") {
-      const isCovered = isModelCoveredByPlan(model.id, report.planType);
-      if (!isCovered && hasAvailableBalance) {
-        // Model requires credits bypass; balance is in use
-        showProgressBar = false;
-      } else if (quotaExhausted && hasAvailableBalance) {
-        // Rate-limit window is exhausted; balance is in use
-        showProgressBar = false;
-      } else {
-        // Rate limit window is actively governing the session
-        showProgressBar = true;
-      }
-    } else if (report.providerId === "kenari") {
-      if (quotaExhausted && hasAvailableBalance) {
-        // A plan window is exhausted; fallback balance is in use
-        showProgressBar = false;
-      } else {
-        // Plan quota window is actively in use
-        showProgressBar = true;
-      }
-    } else {
-      if (quotaExhausted && hasAvailableBalance) {
-        showProgressBar = false;
-      } else {
-        showProgressBar = true;
-      }
-    }
-  }
-
-  if (showProgressBar && primary) {
-    return `${prefix}  ${renderProgressBar(primary, secondary, now, ctx.ui.theme)}`;
-  }
-
-  if (balance || report.capacitySummary) {
-    return `${prefix}  ${renderBalance(balance, report)}`;
-  }
-
-  return `${prefix}  No quota limits reported`;
+  return renderUsageReport(report, prefix, model.id, now, ctx.ui.theme);
 }
 
 /**

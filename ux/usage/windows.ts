@@ -81,6 +81,7 @@ export function quotaWindowShortLabel(
   seconds?: number
 ): string {
   if (!token) return "";
+  token = normalizeWindowToken(token);
   const mapped = QUOTA_WINDOW_SHORT_LABEL[token];
   if (mapped) return mapped;
   const hourMatch = token.match(/^(\d+)-hour$/);
@@ -120,13 +121,20 @@ export function windowShortForSeconds(seconds: number): string {
 export function normalizeWindowToken(raw: string | undefined | null): string {
   const value = (raw ?? "").toLowerCase().trim();
   if (!value) return QUOTA_WINDOW.default;
-  if (value.includes("week")) return QUOTA_WINDOW.weekly;
-  if (value.includes("month")) return QUOTA_WINDOW.monthly;
+  if (value.includes("week") || value === "wk") return QUOTA_WINDOW.weekly;
+  if (value.includes("month") || value === "mo") return QUOTA_WINDOW.monthly;
   if (value === "daily" || value === "1d" || value === "1day" || value === "1-day") {
     return QUOTA_WINDOW.daily;
   }
   const hourMatch = value.match(/^(\d+)\s*-?\s*h(?:our)?s?$/);
   if (hourMatch) return `${hourMatch[1]}-hour`;
+  const dayMatch = value.match(/^(\d+)\s*-?\s*d(?:ay)?s?$/);
+  if (dayMatch) {
+    const days = Number(dayMatch[1]);
+    if (days === 7) return QUOTA_WINDOW.weekly;
+    if (days === 30) return QUOTA_WINDOW.monthly;
+    return `${days}-day`;
+  }
   if (value.includes("day")) return value;
   return value;
 }
