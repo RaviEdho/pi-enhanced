@@ -234,25 +234,24 @@ pi-enhanced/
 5. **Type Safety**:
    - Always run `npm run typecheck` before committing.
 
-6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight & "Perfect Provider" Standard)**:
+6. **New Provider / Endpoint Integration Procedure (Mandatory Pre-flight & Recommended Provider Standards)**:
    - **Always audit provider documentation and API completeness before writing any integration code.**
-   - **The "Perfect Provider" Qualification Rules**:
-     For a provider to be deemed qualified or ideal for addition into `pi-enhanced`, they must adhere to three core API standards:
+   - **Recommended Provider Standards**:
+     The following three standards are highly recommended, but none is mandatory for adding a provider. Identify and disclose gaps, limitations, and proposed mitigations in the pre-flight report; obtain user confirmation before implementation. Do not fabricate missing model capabilities, prices, plan identities, quota values, or reset mechanics:
      1. **Dynamic Model Discovery with Pricing & Reasoning Capabilities**:
-        - Must provide an API that queries available models dynamically.
-        - Per-token pricing (input, output, cache read/write) and available reasoning effort sliders/levels (e.g. `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) must be clearly visible and extractable.
-        - *Bonus points*: The catalog endpoint accepts an authentication key or bearer token and filters the response strictly to the models accessible under that specific credential's subscription plan tier (eliminating phantom model choices and runtime 403/404 errors).
+        - Prefer an API that queries available models dynamically, with extractable per-token pricing (input, output, cache read/write) and available reasoning effort sliders/levels (e.g. `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`).
+        - Prefer a catalog endpoint that accepts credentials and filters models to those accessible under the account's subscription plan, reducing phantom model choices and runtime 403/404 errors.
+        - When metadata is unavailable, report it as unknown rather than assuming prices or capabilities. Follow the separate zero-hardcoded-model-names rule.
      2. **Programmatic Plan & Subscription Differentiation**:
-        - Must provide an unambiguous, programmatic mechanism for the extension to determine the account's active plan tier (e.g. `pay-as-you-go` / `prepaid`, `pro`, `max`, `team`, `enterprise`, etc.).
+        - Prefer an unambiguous, programmatic mechanism for the extension to determine the account's active plan tier (e.g. `pay-as-you-go` / `prepaid`, `pro`, `max`, `team`, `enterprise`, etc.).
         - Acceptable discovery mechanisms include:
           - Dedicated subscription, account, or billing endpoints (e.g. `/v1/me`, `/v1/subscription`, `/v1/account`, `/billing/credits`).
           - Decodable OAuth token claims (e.g. JWT claims like `chatgpt_plan_type`, `tier`, or plan IDs).
           - Live usage/quota payload fields that return the active plan or product name.
-        - *Why this is mandatory*: Without programmatic plan identification, the extension cannot know which quota windows apply (e.g. weekly subscription allowance vs. non-expiring prepaid credits), which model tiers or priority rate limits are active, or how to truthfully format reset countdowns in the status footer and `/usage` view without guessing or fabricating data.
+        - Without reliable plan identification, do not infer the active tier, model entitlements, quota windows, or reset countdowns. Use independently documented account or quota data where available and otherwise report the information as unknown.
      3. **Parseable Usage, Quota & Reset Mechanics (`/usage` Readiness)**:
-        - Must provide an API exposing usage, remaining quota, and reset timings. It does not need to be standardized, but it must be reliably parseable so we can integrate it directly into the `/usage` module and status footer.
-        - Must show available or consumed quota alongside when the quota resets.
-        - Must identify the provider's exact reset architecture:
+        - Prefer a reliably parseable API exposing usage, remaining quota, and reset timings for integration into the `/usage` module and status footer.
+        - Prefer available or consumed quota alongside reset timings, and identification of the provider's exact reset architecture. If any of these are unavailable or uncertain, display only verified information and do not invent values or reset behavior:
           - **Global / Bulk Reset**: Fixed-schedule all-at-once replenishment (e.g. daily at 00:00 UTC, weekly on Sundays at 00:00 UTC, monthly billing boundaries).
           - **Rolling Window Reset**: Continuous replenishment where older requests/tokens roll off after a sliding duration (e.g. 5-hour rolling window, 24-hour sliding window, per-minute request replenishment).
    - **Audit Evaluation Checklist**:
