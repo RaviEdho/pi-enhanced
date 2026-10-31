@@ -2,7 +2,7 @@ import type { ApiKeyAuth, ApiKeyCredential, Model, Provider } from "@earendil-wo
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getOllamaFallbackAuth } from "../../ux/usage/ollama-cloud.js";
-import { fetchOllamaEntitlement, loadOllamaFreeAccessSnapshot, type OllamaEntitlement } from "./entitlements.js";
+import { fetchOllamaEntitlement, OLLAMA_FREE_RESTRICTED_MODELS, type OllamaEntitlement } from "./entitlements.js";
 import { fetchOllamaModels, loadOllamaCatalog, saveOllamaCatalog, OLLAMA_BASE_URL, OLLAMA_PROVIDER_ID } from "./models.js";
 
 /** Register Ollama Cloud using Pi's existing OpenAI-compatible streaming adapter. */
@@ -86,8 +86,7 @@ export async function registerOllamaProvider(pi: ExtensionAPI): Promise<void> {
     filterModels(available, credential) {
       const key = (credential?.type === "api_key" ? credential.key?.trim() : undefined) || resolvedEnvKey || process.env.OLLAMA_API_KEY?.trim();
       if (!key || account?.key !== key || account.entitlement.plan !== "free" || account.entitlement.purchasedBalance !== 0) return available;
-      const snapshot = loadOllamaFreeAccessSnapshot();
-      return snapshot ? available.filter((model) => !Object.hasOwn(snapshot.models, model.id) || snapshot.models[model.id] !== "restricted") : available;
+      return available.filter((model) => !OLLAMA_FREE_RESTRICTED_MODELS.has(model.id));
     },
     stream: streams.stream,
     streamSimple: streams.streamSimple,

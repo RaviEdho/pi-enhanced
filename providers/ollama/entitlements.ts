@@ -1,39 +1,11 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-
-/** Shared observations from an explicitly authorized probe of a Free account with
- * zero purchased balance. Only explicit model entitlement denials are restricted;
- * inconclusive responses must be recorded as unknown. No credentials belong here. */
-export interface OllamaFreeAccessSnapshot {
-  version: 1;
-  checkedAt: number;
-  models: Record<string, "accessible" | "restricted" | "unknown">;
-}
-export const OLLAMA_FREE_ACCESS_PATH = join(homedir(), ".pi", "agent", "cache", "ollama-cloud-free-access.json");
-
-export function loadOllamaFreeAccessSnapshot(): OllamaFreeAccessSnapshot | null {
-  const read = (path: string | URL): OllamaFreeAccessSnapshot | null => {
-    try {
-      const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-      const data = value as OllamaFreeAccessSnapshot;
-      if (data.version !== 1 || !Number.isFinite(data.checkedAt) || data.checkedAt > Date.now() || !data.models || typeof data.models !== "object" || Array.isArray(data.models)) return null;
-      if (!Object.values(data.models).every((s) => s === "accessible" || s === "restricted" || s === "unknown")) return null;
-      return data;
-    } catch { return null; }
-  };
-  const bundled = read(new URL("./free-access-snapshot.json", import.meta.url));
-  const local = read(OLLAMA_FREE_ACCESS_PATH);
-  return local && (!bundled || local.checkedAt > bundled.checkedAt) ? local : bundled;
-}
-
-/** Store a complete shared observation snapshot; callers perform any probes themselves. */
-export function saveOllamaFreeAccessSnapshot(snapshot: OllamaFreeAccessSnapshot): void {
-  mkdirSync(dirname(OLLAMA_FREE_ACCESS_PATH), { recursive: true, mode: 0o700 });
-  writeFileSync(OLLAMA_FREE_ACCESS_PATH, JSON.stringify(snapshot), { mode: 0o600 });
-  chmodSync(OLLAMA_FREE_ACCESS_PATH, 0o600);
-}
+/** Models explicitly denied to a Free account with zero purchased balance.
+ * Unknown models remain visible; this list does not describe paid entitlements. */
+export const OLLAMA_FREE_RESTRICTED_MODELS: ReadonlySet<string> = new Set([
+  "kimi-k2.6", "deepseek-v4.1-flash", "kimi-k2.7-code", "minimax-m3.1-flash",
+  "kimi-k3", "deepseek-v4-pro:0813", "deepseek-v4.1-flash:1017", "mistral-large-4",
+  "muse-spark-open", "minimax-m3", "glm-5.3-flash", "mistral-large-3:675b",
+  "glm-5.2", "glm-5.3", "minimax-m2.7", "mimo-v2.6-flash", "mimo-v2.6-pro",
+]);
 
 export interface OllamaEntitlement { plan: string | null; purchasedBalance: number | null }
 
