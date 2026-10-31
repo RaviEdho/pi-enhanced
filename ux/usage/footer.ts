@@ -164,7 +164,6 @@ function formatFooterCountdown(resetTime: string, now: number): string {
 }
 
 function bucketWindowLabel(bucket: QuotaBucket): string {
-  if (bucket.bucketId === "cloudflare-neurons") return "free";
   const window = normalizeWindowToken(bucket.window);
   if (window === QUOTA_WINDOW.default && !quotaWindowSeconds(bucket)) return bucket.displayName;
   return quotaWindowShortLabel(window, bucket.windowSeconds) || bucket.displayName;

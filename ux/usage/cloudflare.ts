@@ -64,7 +64,7 @@ async function poll(connection: Connection, now: Date): Promise<ProviderUsageRep
     if (!Number.isFinite(total)) throw new Error("Invalid analytics total");
     report.planType = plan === "unknown" ? undefined : plan;
     const usedFraction = Math.min(1, total / 10_000);
-    report.groups = [{ displayName: "Daily free allocation", buckets: [{ bucketId: "cloudflare-neurons", displayName: "Free allocation", window: "daily", windowSeconds: 86_400, remainingFraction: 1 - usedFraction, usedFraction, resetTime: next.toISOString() }] }];
+    report.groups = [{ displayName: "Daily free allocation", buckets: [{ bucketId: "cloudflare-neurons", displayName: "Daily", window: "daily", windowSeconds: 86_400, remainingFraction: 1 - usedFraction, usedFraction, resetTime: next.toISOString() }] }];
   } catch {
     report.error = "Workers AI analytics unavailable. Check account ID and token permissions (Account Analytics: Read); inference-only tokens may not grant analytics access.";
   }
