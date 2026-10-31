@@ -199,7 +199,7 @@ export class SessionUi {
       "Workspace changed:",
       `From: ${JSON.stringify(previousCwd)}`,
       `To: ${JSON.stringify(cwd)}`,
-    ].join("\n"));
+    ].join("\n"), this.interaction.replyToMessageId);
   }
 
   async handleRequest(request) {
@@ -223,7 +223,7 @@ export class SessionUi {
             if (/^Commit proposal \(/.test(text)) this.commitProposal = text;
             else await this.sendCommitNotice(interaction.channel, text, request.notifyType);
           } else {
-            await sendText(interaction.channel, text);
+            await sendText(interaction.channel, text, interaction.replyToMessageId);
           }
         });
         this.notificationPromise = notification;

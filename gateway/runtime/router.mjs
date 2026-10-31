@@ -37,7 +37,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     const content = stripBotMention(message.content || "", client.user?.id);
     if (interactions.acceptReply(`${message.channelId}:${message.author.id}`, content)) return;
     if (lifecycle.isStopping()) {
-      await sendText(message.channel, "The gateway is restarting after the current work finishes. Please send this again once the bot reconnects.");
+      await sendText(message.channel, "The gateway is restarting after the current work finishes. Please send this again once the bot reconnects.", message.id);
       return;
     }
     if (seenMessages.has(message.id)) return;
@@ -50,7 +50,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       const hasAttachments = (message.attachments?.size || 0) > 0;
       await sendText(message.channel, hasAttachments
         ? "I can read text and PNG, JPEG, GIF, or WebP image attachments. This message has no supported image or text."
-        : "Please send a text message or attach an image.");
+        : "Please send a text message or attach an image.", message.id);
       return;
     }
     let target = message.channel;
@@ -77,7 +77,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         log(`Created thread ${thread.id} in allowlisted channel ${message.channelId}`);
       } catch (error) {
         log(`Could not create Discord thread: ${summarizeDiscordError(error)}`);
-        await sendText(message.channel, "I couldn't start a conversation thread. Check that the bot can create public threads and send messages in threads.");
+        await sendText(message.channel, "I couldn't start a conversation thread. Check that the bot can create public threads and send messages in threads.", message.id);
         return;
       }
     }
@@ -88,7 +88,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           const replyContext = await loadDiscordReplyContext(message);
           const { images, skippedCount } = await loadDiscordImages(imageAttachments);
           if (!content && images.length === 0 && !isReply) {
-            await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.");
+            await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.", message.id);
             return undefined;
           }
           const messageContent = content || (isReply
@@ -102,18 +102,18 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           // Observe background title generation during the run, not just after it.
           threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
-            channel: target, userId: message.author.id, channelId: target.id, typing,
+            channel: target, userId: message.author.id, channelId: target.id, replyToMessageId: message.id, typing,
           }, images);
           // Retry if the early watch expired before the title became available.
           threads.watchThreadTitle(target, session);
           return session.forceStopped ? "The agent run was cancelled." : result;
         });
         if (result === undefined) return;
-        if (result.trim()) await sendText(target, result);
-        else await sendText(target, "The agent finished without a text response.");
+        if (result.trim()) await sendText(target, result, message.id);
+        else await sendText(target, "The agent finished without a text response.", message.id);
       } catch (error) {
         log(`Pi run failed: ${safeErrorName(error)}`);
-        await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.");
+        await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.", message.id);
       } finally {
         typing.stop();
       }

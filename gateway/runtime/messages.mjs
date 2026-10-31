@@ -35,10 +35,15 @@ export function startTyping(channel) {
   };
 }
 
-export async function sendText(channel, text) {
+export async function sendText(channel, text, replyToMessageId) {
   if (!channel?.send) return;
-  for (const chunk of splitMessage(String(text || ""))) {
-    await channel.send({ content: chunk, allowedMentions: { parse: [] } });
+  const chunks = splitMessage(String(text || ""));
+  for (const [index, chunk] of chunks.entries()) {
+    await channel.send({
+      content: chunk,
+      allowedMentions: { parse: [], repliedUser: false },
+      ...(index === 0 && replyToMessageId ? { reply: { messageReference: replyToMessageId, failIfNotExists: false } } : {}),
+    });
   }
 }
 
