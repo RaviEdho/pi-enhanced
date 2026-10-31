@@ -7,6 +7,29 @@ import type { CloudflareCatalogModel, CloudflareWorkersPlan } from "./types.js";
 
 const PROVIDER_ID = "cloudflare-workers-ai";
 
+// GPT-OSS rejects OpenAI-style text parts and null tool-call content. Leave
+// non-text parts untouched so cross-provider image histories are not lost.
+function normalizeGptOssPayload(value: unknown, modelId: string): unknown {
+  if (modelId !== "@cf/openai/gpt-oss-120b" && modelId !== "@cf/openai/gpt-oss-20b") return value;
+  if (!value || typeof value !== "object") return value;
+  const payload = value as Record<string, unknown>;
+  if (!Array.isArray(payload.messages)) return value;
+  const messages = payload.messages.map((message: unknown) => {
+    if (!message || typeof message !== "object") return message;
+    const item = message as Record<string, unknown>;
+    if (Array.isArray(item.content) && item.content.every((part: unknown) =>
+      typeof part === "object" && part !== null && (part as Record<string, unknown>).type === "text" &&
+      typeof (part as Record<string, unknown>).text === "string")) {
+      return { ...item, content: item.content.map((part: { text: string }) => part.text).join("\n") };
+    }
+    if (item.content === null && item.role === "assistant" && Array.isArray(item.tool_calls)) {
+      return { ...item, content: "" };
+    }
+    return message;
+  });
+  return { ...payload, messages };
+}
+
 type Connection = { apiToken: string; accountId: string };
 export function connectionFor(credential?: Credential): Connection | undefined {
   const apiKey = credential?.type === "api_key" ? credential as ApiKeyCredential : undefined;
@@ -57,6 +80,20 @@ export async function registerCloudflareProvider(pi: ExtensionAPI): Promise<void
   };
   const provider: Provider = {
     ...base,
+    stream(model, context, options) {
+      return base.stream(model, context, {
+        ...options,
+        onPayload: async (payload, requestModel) =>
+          normalizeGptOssPayload((await options?.onPayload?.(payload, requestModel)) ?? payload, model.id),
+      } as typeof options);
+    },
+    streamSimple(model, context, options) {
+      return base.streamSimple(model, context, {
+        ...options,
+        onPayload: async (payload, requestModel) =>
+          normalizeGptOssPayload((await options?.onPayload?.(payload, requestModel)) ?? payload, model.id),
+      });
+    },
     filterModels(models, credential) {
       return allowed(base.filterModels ? base.filterModels(models, credential) : models, credential);
     },
