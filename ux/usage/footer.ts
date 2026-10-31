@@ -10,6 +10,7 @@ import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balan
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
+import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import {
@@ -163,6 +164,7 @@ function formatFooterCountdown(resetTime: string, now: number): string {
 }
 
 function bucketWindowLabel(bucket: QuotaBucket): string {
+  if (bucket.bucketId === "cloudflare-neurons") return "free";
   const window = normalizeWindowToken(bucket.window);
   if (window === QUOTA_WINDOW.default && !quotaWindowSeconds(bucket)) return bucket.displayName;
   return quotaWindowShortLabel(window, bucket.windowSeconds) || bucket.displayName;
@@ -182,7 +184,7 @@ function renderProgressBar(
     primary.resetTime,
     primary.windowSeconds,
     now,
-    primary.usedFraction
+    primary.bucketId === "cloudflare-neurons" ? undefined : primary.usedFraction
   );
   const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
   const resetSegment = primary.resetTime && Number.isFinite(Date.parse(primary.resetTime))
@@ -245,6 +247,12 @@ function buildUsageBar(ctx: ExtensionContext): string {
   const model = ctx.model;
   if (!model) return "";
 
+  if (model.provider === "cloudflare-workers-ai") {
+    const connection = getCloudflareConnection();
+    if (!connection) return "";
+    const report = QuotaManager.getInstance().getReport(cloudflareCacheKey(connection));
+    return report ? renderUsageReport(report, "Cloudflare", model.id, Date.now(), ctx.ui.theme) : "Cloudflare  ···";
+  }
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
   const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
@@ -469,6 +477,13 @@ const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is a
 const TOOL_CALL_THROTTLE_MS = 15 * 1000; // Throttle tool call quota checks to once every 15s
 const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every 2 minutes
 
+async function refreshCloudflare(): Promise<void> {
+  const connection = getCloudflareConnection();
+  if (!connection) return;
+  const report = await fetchCloudflareUsage(connection);
+  QuotaManager.getInstance().setReport(cloudflareCacheKey(connection), report);
+}
+
 async function refreshOllamaFallback(): Promise<void> {
   const auth = getOllamaFallbackAuth();
   if (!auth) return;
@@ -491,6 +506,7 @@ async function refreshCandidateAccounts(
     return;
   }
   if (!model) return;
+  if (model.provider === "cloudflare-workers-ai") return refreshCloudflare();
 
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
@@ -539,6 +555,7 @@ async function refreshSessionAccountQuota(
     return;
   }
   if (!model) return;
+  if (model.provider === "cloudflare-workers-ai") return refreshCloudflare();
 
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();

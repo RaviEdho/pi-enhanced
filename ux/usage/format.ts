@@ -256,7 +256,8 @@ function formatBucketEntry(
     bucket.resetTime,
     bucket.windowSeconds,
     now,
-    bucket.usedFraction
+    // Cloudflare's allocation resets at midnight UTC even with no usage.
+    bucket.bucketId === "cloudflare-neurons" ? undefined : bucket.usedFraction
   );
   const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
 
@@ -270,7 +271,7 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0) {
+  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons") {
     detailStr = "ready";
   } else if (bucket.resetTime) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
