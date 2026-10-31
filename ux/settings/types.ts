@@ -113,9 +113,9 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
   },
   "git.commitModel": {
     key: "git.commitModel",
-    label: "Git Commit Model",
+    label: "Git Agent Model",
     category: "Agent Tools",
-    description: "Model for /commit and /git commit; choose Use session model to follow the active Pi model",
+    description: "Model for /commit, /git commit, and /git summary; choose Use session model to follow the active Pi model",
     defaultValue: COMMIT_MODEL_SESSION_VALUE,
     options: [COMMIT_MODEL_SESSION_VALUE],
   },

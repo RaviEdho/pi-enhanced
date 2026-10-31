@@ -193,7 +193,7 @@ Configurable options include:
 - `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
 - `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
 - `compressor.enabled`: Output Compressor - terminal noise reduction for bash/powershell (`enabled` / `disabled`)
-- `git.commitModel`: Model used by `/commit` and `/git commit` (choose an available model or `session`; defaults to the active session model)
+- `git.commitModel` (Git Agent Model): Model used by `/commit`, `/git commit`, and `/git summary` (choose an available model or `session`; defaults to the active session model)
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)

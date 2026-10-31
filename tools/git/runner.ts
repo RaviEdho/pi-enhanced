@@ -38,8 +38,7 @@ import {
 } from "./format.js";
 import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
-import { EnhancedSettingsStore } from "../../ux/settings/store.js";
-import { COMMIT_MODEL_SESSION_VALUE } from "../../ux/settings/types.js";
+import { resolveGitAgentModel } from "./model.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -89,21 +88,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         }
       }
 
-      // 2. Resolve the configured commit model (or use the active session model).
-      const configuredCommitModel = EnhancedSettingsStore.getInstance().get("git.commitModel");
-      const model = configuredCommitModel === COMMIT_MODEL_SESSION_VALUE
-        ? ctx.model
-        : ctx.modelRegistry.getAvailable().find(
-            (candidate) => `${candidate.provider}/${candidate.id}` === configuredCommitModel
-          );
-      if (!model) {
-        const message = configuredCommitModel === COMMIT_MODEL_SESSION_VALUE
-          ? "No active model selected in Pi session."
-          : `Configured commit model '${configuredCommitModel}' is unavailable. Choose an available model in /settings-enhanced.`;
-        if (ctx.hasUI) ctx.ui.notify(message, "error");
-        else process.stderr.write(`${message}\n`);
-        return;
-      }
+      // 2. Resolve the shared Git agent model.
+      const model = resolveGitAgentModel(ctx);
+      if (!model) return;
 
       // 3. Check working tree status (staged and unstaged)
       let { staged, unstaged } = await getWorkingTreeStatus(cwd);
