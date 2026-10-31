@@ -256,8 +256,8 @@ function formatBucketEntry(
     bucket.resetTime,
     bucket.windowSeconds,
     now,
-    // Cloudflare's allocation resets at midnight UTC even with no usage.
-    bucket.bucketId === "cloudflare-neurons" ? undefined : bucket.usedFraction
+    // Fixed-period allocations advance even when no usage has occurred.
+    bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included" ? undefined : bucket.usedFraction
   );
   const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
 
@@ -271,7 +271,7 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons") {
+  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons" && bucket.bucketId !== "ollama-cloud-included") {
     detailStr = "ready";
   } else if (bucket.resetTime) {
     detailStr = formatRelativeTime(bucket.resetTime, now);

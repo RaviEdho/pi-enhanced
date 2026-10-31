@@ -74,7 +74,7 @@ function quotaWindowSeconds(bucket: QuotaBucket): number {
 
 function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBuckets {
   const all = report.groups.flatMap((group) => group.buckets).filter(
-    (bucket) => report.providerId !== "ollama-cloud" || bucket.balanceUsd !== 0
+    (bucket) => report.providerId !== "ollama-cloud" || bucket.displayMode !== "value" || bucket.balanceUsd !== 0
   );
   const isBalance = (bucket: QuotaBucket): boolean => {
     const window = normalizeWindowToken(bucket.window);
@@ -184,7 +184,7 @@ function renderProgressBar(
     primary.resetTime,
     primary.windowSeconds,
     now,
-    primary.bucketId === "cloudflare-neurons" ? undefined : primary.usedFraction
+    primary.bucketId === "cloudflare-neurons" || primary.bucketId === "ollama-cloud-included" ? undefined : primary.usedFraction
   );
   const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
   const resetSegment = primary.resetTime && Number.isFinite(Date.parse(primary.resetTime))

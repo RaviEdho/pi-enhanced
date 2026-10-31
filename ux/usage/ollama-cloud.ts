@@ -93,7 +93,7 @@ async function pollOllamaCloudUsage(
       return report;
     }
     const data = await response.json() as {
-      included?: { balance_usd?: unknown; allowance_usd?: unknown; period?: { until?: unknown }; session?: { remaining_percent?: unknown; resets_at?: unknown }; weekly?: { remaining_percent?: unknown; resets_at?: unknown } };
+      included?: { balance_usd?: unknown; allowance_usd?: unknown; period?: { from?: unknown; until?: unknown }; session?: { remaining_percent?: unknown; resets_at?: unknown }; weekly?: { remaining_percent?: unknown; resets_at?: unknown } };
       purchased?: { balance_usd?: unknown };
     };
     const buckets: QuotaBucket[] = [];
@@ -112,9 +112,12 @@ async function pollOllamaCloudUsage(
       const allowance = included.allowance_usd;
       if (validAmount(allowance) && allowance > 0) {
         const remaining = Math.min(1, balance / allowance);
-        buckets.push({ bucketId: "ollama-cloud-included", displayName: "Included credits", window: "included", balanceUsd: balance, remainingFraction: remaining, usedFraction: 1 - remaining, resetTime: reset(included.period?.until), description: `$${balance.toFixed(2)} / $${allowance.toFixed(2)} available` });
+        const from = reset(included.period?.from);
+        const until = reset(included.period?.until);
+        const durationMs = from && until ? Date.parse(until) - Date.parse(from) : 0;
+        buckets.push({ bucketId: "ollama-cloud-included", displayName: "Monthly", window: "monthly", windowSeconds: durationMs > 0 ? durationMs / 1000 : undefined, balanceUsd: balance, remainingFraction: remaining, usedFraction: 1 - remaining, resetTime: until, description: `$${balance.toFixed(2)} / $${allowance.toFixed(2)} available` });
       } else {
-        buckets.push({ bucketId: "ollama-cloud-included", displayName: "Included credits", window: "balance", displayMode: "value", balanceUsd: balance, remainingFraction: 1, usedFraction: 0, description: `$${balance.toFixed(2)} available` });
+        buckets.push({ bucketId: "ollama-cloud-included", displayName: "Monthly", window: "balance", displayMode: "value", balanceUsd: balance, remainingFraction: 1, usedFraction: 0, description: `$${balance.toFixed(2)} available` });
       }
     }
     if (validAmount(data?.purchased?.balance_usd)) {
