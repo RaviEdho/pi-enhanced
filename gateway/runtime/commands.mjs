@@ -263,16 +263,31 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       // Do not enqueue behind the run being steered or open an idle session.
       // Keep the run's interaction/UI owner unchanged, even in shared threads.
       const session = sessions.peek(sessionKey);
+      // A different participant can steer this shared run. Never let their
+      // instructions borrow the initiating participant's history permissions.
+      const owner = session?.running && session.interaction?.userId !== interaction.user.id ? session.interaction : undefined;
+      const previousScope = owner?.historyScope;
+      // A unique invalid scope lets a rejected steer restore authority only if
+      // no other steer or lifecycle transition has changed it in the meantime.
+      const revokedScope = owner ? { kind: "revoked" } : undefined;
+      if (owner) owner.historyScope = revokedScope;
+      const restoreScope = () => {
+        if (owner && session.running && session.interaction === owner && owner.historyScope === revokedScope) owner.historyScope = previousScope;
+      };
       const conversationLabel = interaction.guildId == null
         ? `DM with ${interaction.user.username}`
         : `Discord thread ${interaction.channelId}`;
       const prompt = `Discord message from ${interaction.user.username} (user ID ${interaction.user.id}) in ${conversationLabel}:\n\n${message}`;
       const result = await session?.steer(prompt);
       if (!result) {
+        restoreScope();
         await interaction.editReply("There is no active agent run to steer. Send a normal message to start one; /commit workflows and workspace handoffs cannot be steered.");
         return;
       }
-      if (!result.success) throw new Error("Pi rejected the steering message");
+      if (!result.success) {
+        restoreScope();
+        throw new Error("Pi rejected the steering message");
+      }
       await interaction.editReply(result.data?.disposition === "handled"
         ? "The steering message was handled by Pi."
         : "Steering message sent to the active run. Pi will apply it after the current turn's tool calls, before its next model call.");

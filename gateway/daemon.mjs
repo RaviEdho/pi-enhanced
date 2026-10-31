@@ -32,7 +32,7 @@ const interactions = createInteractionManager();
 const sessions = createSessionManager({
   sessionRoot: paths.sessionRoot,
   createSession: (directory) => new PiRpcSession(directory, {
-    config, piExecutable, piArgs, interactions, extensionRoot,
+    config, piExecutable, piArgs, interactions, extensionRoot, client, configPath: paths.configPath,
     onWorkspaceChanged: (session) => commands.cancelSession(session),
   }),
   onSessionClosed: (session) => commands.cancelSession(session),

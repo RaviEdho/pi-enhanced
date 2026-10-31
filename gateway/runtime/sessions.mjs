@@ -84,7 +84,7 @@ export function createSessionManager({
     }
     // A forced stop rejects the active RPC immediately, but its process/UI
     // cleanup must finish before any caller can reopen the same history file.
-    if (session?.stopPromise) await session.stopPromise;
+    if (session) await stopSession(session);
     assertOpen();
     if (sessions.size >= maxOpenSessions) await closeLeastRecentlyUsedIdleSession();
     assertOpen();

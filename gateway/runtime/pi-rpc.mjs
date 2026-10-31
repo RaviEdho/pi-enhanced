@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { log, safeErrorName } from "./logging.mjs";
+import { createHistoryIpc } from "./history.mjs";
 import {
   clearWorkspaceRequest, loadWorkspace, loadWorkspaceRequest, saveWorkspace,
   validateWorkspaceDirectory,
@@ -11,7 +12,8 @@ import {
 
 /** One Pi child process and its newline-delimited RPC transport. */
 export class PiRpcSession {
-  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, onWorkspaceChanged = () => {} }) {
+  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, onWorkspaceChanged = () => {} }) {
+    this.historyOptions = { client, configPath };
     this.sessionDirectory = sessionDirectory;
     this.config = config;
     this.piExecutable = piExecutable;
@@ -37,6 +39,12 @@ export class PiRpcSession {
   }
 
   async start() {
+    const historyIpc = await createHistoryIpc({ ...this.historyOptions, session: this });
+    if (this.stopping) {
+      historyIpc.close();
+      throw new Error("Pi session is stopping");
+    }
+    this.historyIpc = historyIpc;
     mkdirSync(this.sessionDirectory, { recursive: true, mode: 0o700 });
     this.sessionDirectory = realpathSync(this.sessionDirectory);
     const saved = loadWorkspace(this.sessionDirectory);
@@ -99,6 +107,8 @@ export class PiRpcSession {
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_ARGS;
     delete agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD;
     agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD = "1";
+    agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_PORT = String(this.historyIpc.port);
+    agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_TOKEN = this.historyIpc.token;
     agentEnvironment.PI_ENHANCED_EXTENSION_ROOT = this.extensionRoot;
     agentEnvironment.PI_ENHANCED_DISCORD_CWD_REQUEST_PATH = join(this.sessionDirectory, "cwd-request.json");
     agentEnvironment.PI_ENHANCED_DISCORD_CWD_TOKEN = this.cwdToken;
@@ -150,6 +160,10 @@ export class PiRpcSession {
     child.on("exit", (code, signal) => {
       if (this.child !== child) return;
       this.closed = true;
+      if (!this.replacingChild) {
+        this.historyIpc?.close();
+        this.historyIpc = undefined;
+      }
       this.fail(new Error(`Pi process exited (${signal || code || "unknown"})`));
       if (!this.replacingChild) void this.ui.close();
     });
@@ -384,6 +398,8 @@ export class PiRpcSession {
   stop({ force = false } = {}) {
     if (this.stopPromise) return this.stopPromise;
     this.stopping = true;
+    this.historyIpc?.close();
+    this.historyIpc = undefined;
     this.closed = true;
     this.forceStopped = force;
     this.stopPromise = (async () => {

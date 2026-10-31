@@ -165,7 +165,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
       options: [
         "Bot token",
         "Allowed users",
-        "Allowed server channels",
+        "Allowed channels",
         "Notification channel",
         "Workspace",
         "Default model",
@@ -179,7 +179,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
       case "Allowed users":
         await configureWhitelist(ctx, config, "users");
         break;
-      case "Allowed server channels":
+      case "Allowed channels":
         await configureWhitelist(ctx, config, "channels");
         break;
       case "Notification channel":
@@ -241,15 +241,15 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
   }
 
   const channelIdsInput = await promptDiscordInput(ctx, {
-    title: "Allowed Server Channels",
-    instruction: 'Comma-separated channel IDs, or "*" for all server channels.',
+    title: "Allowed Channels",
+    instruction: 'Comma-separated server or DM channel IDs, or "*" for all channels. This also authorizes history sources.',
     initialValue: existing?.allowedChannelIds.join(", ") || "",
     placeholder: "Comma-separated channel IDs or *",
   });
   if (channelIdsInput === undefined) return;
   const allowedChannelIds = parseAllowlist(channelIdsInput);
   if (allowedChannelIds.length === 0) {
-    notify(ctx, "Add at least one allowed server channel ID.", "error");
+    notify(ctx, "Add at least one allowed channel ID.", "error");
     return;
   }
 
@@ -313,7 +313,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
   const usersAreWildcard = allowedUserIds.includes("*");
   const channelsAreWildcard = allowedChannelIds.includes("*");
   const userAccessLine = `Users (DMs + servers): ${usersAreWildcard ? "everyone (*)" : `${allowedUserIds.length} allowed`}`;
-  const channelAccessLine = `Server channels: ${channelsAreWildcard ? "all channels (*)" : `${allowedChannelIds.length} allowed`}`;
+  const channelAccessLine = `Channels (server routing + history/discovery): ${channelsAreWildcard ? "all channels (*)" : `${allowedChannelIds.length} allowed`}`;
   const dmAccessLine = `DM access: ${existing?.allowDirectMessages === false ? "Off" : "On"}`;
   const serverAccessLine = `Server access: ${existing?.allowServerMessages === false ? "Off" : "On"}`;
   const highlightedAccessLines = [
@@ -328,7 +328,8 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     channelAccessLine,
     dmAccessLine,
     serverAccessLine,
-    "Mention the bot to start a server thread.",
+    "Mention the bot to start a server thread. Allowed channels also authorize history sources, including the requester's DM.",
+    "History and channel discovery results may be visible to shared-thread participants.",
     `Notifications: ${homeChannelId || "off"}`,
     "",
     "UNATTENDED TOOLS",
@@ -416,10 +417,10 @@ async function configureWhitelist(
 ): Promise<void> {
   const isUsers = kind === "users";
   const currentValues = isUsers ? config.allowedUserIds : config.allowedChannelIds;
-  const title = isUsers ? "Allowed Users" : "Allowed Server Channels";
+  const title = isUsers ? "Allowed Users" : "Allowed Channels";
   const instruction = isUsers
     ? 'Comma-separated user IDs, or "*" for everyone (DMs and servers). Leave blank to keep current.'
-    : 'Comma-separated channel IDs, or "*" for all server channels. Leave blank to keep current.';
+    : 'Comma-separated server or DM channel IDs, or "*" for all channels. Also authorizes history sources; leave blank to keep current.';
   const value = await promptDiscordInput(ctx, {
     title,
     instruction,
@@ -430,17 +431,17 @@ async function configureWhitelist(
 
   const allowlist = parseAllowlist(value);
   if (allowlist.length === 0) {
-    notify(ctx, `Add at least one ${isUsers ? "user" : "server channel"} ID, or enter * by itself.`, "error");
+    notify(ctx, `Add at least one ${isUsers ? "user" : "channel"} ID, or enter * by itself.`, "error");
     return;
   }
 
   const isWildcard = allowlist.includes("*");
   const summary = isUsers
     ? `Allowed users: ${isWildcard ? "everyone (*)" : `${allowlist.length} user ID(s)`}`
-    : `Allowed server channels: ${isWildcard ? "all server channels (*)" : `${allowlist.length} channel ID(s)`}`;
+    : `Allowed channels: ${isWildcard ? "all channels (*)" : `${allowlist.length} channel ID(s)`}`;
   const approved = await confirmDiscordAction(ctx, {
-    title: isUsers ? "Save Allowed Users?" : "Save Allowed Server Channels?",
-    content: [summary],
+    title: isUsers ? "Save Allowed Users?" : "Save Allowed Channels?",
+    content: isUsers ? [summary] : [summary, "This list also authorizes history sources, including the current requester’s DM. Shared-thread participants may see history results."],
     highlightedLines: isWildcard ? [summary] : [],
     confirmLabel: isUsers ? "Save users" : "Save channels",
     rejectLabel: "Keep current access",
@@ -451,7 +452,7 @@ async function configureWhitelist(
     ctx,
     config,
     isUsers ? { allowedUserIds: allowlist } : { allowedChannelIds: allowlist },
-    `Allowed ${isUsers ? "users" : "server channels"} updated.`
+    `Allowed ${isUsers ? "users" : "channels"} updated.`
   );
 }
 

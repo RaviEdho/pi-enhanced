@@ -103,6 +103,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
             channel: target, userId: message.author.id, channelId: target.id, replyToMessageId: message.id, typing,
+            historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images);
           // Retry if the early watch expired before the title became available.
           threads.watchThreadTitle(target, session);

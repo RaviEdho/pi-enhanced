@@ -12,7 +12,8 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `config.mjs` | Read and validate configuration, paths, executable arguments, and startup reason. |
 | `router.mjs` | Authorize messages, choose DM/thread conversations, deduplicate, and schedule replies. |
 | `sessions.mjs` | Own the session pool, conversation queues, global run slots, and idle eviction. |
-| `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, and workspace handoffs. |
+| `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, workspace handoffs, and history IPC lifecycle. |
+| `history.mjs` | Authenticate session IPC and authorize bounded history reads and server channel discovery against the active requester and current configuration. |
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
@@ -32,9 +33,16 @@ callbacks where commands and lifecycle depend on each other.
 
 - Resolve reply context only for authorized, accepted messages inside the queued run.
   Fetch only the directly referenced same-channel message via Discord's message API;
-  never traverse reply chains or ingest channel history. Treat its text/author and
+  never traverse reply chains or automatically ingest channel history. Treat its text/author and
   attachment links as quoted context, not a new user's instructions. An unreadable
   reference becomes an explicit unavailable-context note without aborting the run.
+- Explicit history-tool calls use the existing channel whitelist (including `*`): DM turns can
+  read only the active requester's own allowed DM; thread turns can read allowed text,
+  announcement, or ordinary voice channels in the same server, with the destination parent also allowed. Both requester and bot need View Channel and Read Message History, plus Connect for voice. Voice text chat requires no voice join; stage channels are excluded. Recheck DM recipient or requester
+  and bot membership/permissions, config, and active turn around fetches; reject
+  thread sources and cross-server access. Different-participant
+  steering revokes history for that run. Shared results can reach participants
+  without source access and persist in sessions. Discovery uses the same IPC and active scope, only in server threads: fresh guild, roles, members and channels, current whitelist and both parties' channel permissions using the same channel types and voice Connect requirement; voice results have type `voice`. Names are untrusted, results are capped at 50 with explicit truncation. Channel names and IDs can also persist and be seen by all shared-thread participants. IPC is not an OS sandbox.
 - All allowlisted participants in a server thread use one shared session and queue,
   including `/model`, `/thinking`, autocomplete, and `/commit`. Resolve its key with
   `getThreadSessionKey(threadId, registration)`, never the current speaker's ID.

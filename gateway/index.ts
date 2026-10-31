@@ -2,12 +2,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { handleDiscordCommand } from "./command.js";
 import { createDiscordGatewayRestartTool } from "./restart-tool.js";
 import { createWorkingDirectoryTool } from "./working-directory-tool.js";
+import { createDiscordHistoryTool, createDiscordListChannelsTool } from "./history-tool.js";
 import { existsSync } from "node:fs";
 
 export function registerDiscordGateway(pi: ExtensionAPI): void {
   if (process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD === "1") {
     pi.registerTool(createDiscordGatewayRestartTool());
     pi.registerTool(createWorkingDirectoryTool());
+    pi.registerTool(createDiscordHistoryTool());
+    pi.registerTool(createDiscordListChannelsTool());
     pi.on("before_agent_start", (event, ctx) => {
       if (!event.systemPromptOptions) return;
       const guidelines = event.systemPromptOptions.promptGuidelines ??= [];
