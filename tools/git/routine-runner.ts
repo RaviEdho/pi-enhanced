@@ -99,7 +99,12 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext): Promise
   const summary = `Branch: ${branch || "unborn"}\n\n${statusRaw.trim()}\n\nRecent Commits:\n${lastCommits.trim()}`;
 
   if (ctx.hasUI) {
+    const root = (await execGit(["rev-parse", "--show-toplevel"], cwd)).trim();
+    const { getSummaryChanges } = await import("./summary-runner.js");
+    const changes = await getSummaryChanges(root);
     const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
+      ...(changes.staged.length ? ["Summarize staged changes (/git summary staged)"] : []),
+      ...(changes.unstaged.length || changes.untracked.length ? ["Summarize unstaged and untracked changes (/git summary unstaged)"] : []),
       "Commit changes (/git commit)",
       "Sync with remote (/git sync)",
       "Create Pull Request (/git pr)",
@@ -107,7 +112,10 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext): Promise
       "Undo last commit (/git undo)",
     ]);
 
-    if (choice?.includes("Commit")) {
+    if (choice?.startsWith("Summarize")) {
+      const { handleSummaryCommand } = await import("./summary-runner.js");
+      await handleSummaryCommand(ctx, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
+    } else if (choice?.includes("Commit")) {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);
     } else if (choice?.includes("Sync")) {

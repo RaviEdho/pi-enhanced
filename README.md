@@ -250,6 +250,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git sync                     # Safe pull --rebase & push to upstream
 /git undo                     # Soft-undo last commit, keeping changes in working tree
 /git status                   # Interactive status overview
+/git summary [staged|unstaged] # AI summary of staged or unstaged and untracked changes; menu options appear when relevant
 ```
 
 - **Instruction-Based Selective Commits**: With `/commit <instruction>`, the instruction goes directly to the isolated agent without the staged/unstaged choice prompt. The agent selects relevant whole files or numbered diff hunks; other changes and their staged/unstaged state are preserved. You still review the proposal before committing.
