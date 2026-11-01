@@ -9,11 +9,11 @@ export function maskedKeyIdentity(key: string): string {
 /** Resolve the same safe account identifier for all usage views. */
 export function usageAccountIdentity(account: AccountCredential): string {
   const email = account.email && account.email !== "env-key" ? account.email : undefined;
-  const key = account.apiKey || (account.type === "api_key" || account.provider === "ollama-cloud" || account.provider === "zro" || account.provider === "kenari" ? account.access : undefined);
+  const key = account.apiKey || (account.type === "api_key" || account.provider === "ollama-cloud" || account.provider === "kenari" ? account.access : undefined);
   return email || account.label || account.accountId || (key ? maskedKeyIdentity(key) : account.id);
 }
 
 export function fallbackUsageIdentity(label: string, token: string): string {
-  return label && label !== "default" && label !== "Zro" && label !== "Ollama Cloud"
+  return label && label !== "default" && label !== "Ollama Cloud"
     ? label : maskedKeyIdentity(token);
 }

@@ -25,7 +25,6 @@ import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } f
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
 import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
-import { buildOpenAIUsageReport } from "./openai.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
 
 function fallbackCacheKey(provider: string, ...parts: string[]): string {
@@ -304,61 +303,6 @@ export async function collectUsageReports(
     }
   }
 
-  // 3. OpenAI (ChatGPT subscription) multi-account fetch in parallel
-  const isOpenAIActive = options?.currentProvider === "openai";
-  const openaiAccounts = store.list("openai").filter((a) => a.type === "oauth");
-  const openaiPromises: Promise<ProviderUsageReport>[] = [];
-  if (openaiAccounts.length > 0) {
-    const sessionAccount = isOpenAIActive
-      ? balancer.getSessionAccount(
-          "openai",
-          options?.sessionId,
-          options?.currentModelId
-        )
-      : undefined;
-    for (const acc of openaiAccounts) {
-      if (signal?.aborted) break;
-      const isSession = isOpenAIActive && sessionAccount?.id === acc.id;
-      const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
-      const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = usageAccountIdentity(acc);
-
-      if (acc.disabledCause) {
-        openaiPromises.push(
-          Promise.resolve({
-            providerId: "openai",
-            providerName: "OpenAI (ChatGPT)",
-            accountEmail: label,
-            accountId: acc.id,
-            isSessionAccount: isSession,
-            planType: acc.planType,
-            cooldownMinutes: isCooldown ? mins : undefined,
-            fetchedAt: Date.now(),
-            groups: [],
-            error: acc.disabledCause,
-          })
-        );
-        continue;
-      }
-
-      // Usage display must not probe legacy endpoints or refresh credentials:
-      // these tokens only authorize the public OpenAI API, which has no
-      // documented subscription-quota endpoint for this login flow.
-      openaiPromises.push(QuotaManager.getInstance().refreshReport(acc.id,
-        async () => buildOpenAIUsageReport({ ...acc, email: label, accountId: acc.id }), 0,
-      ).then(report => ({ ...report, isSessionAccount: isSession, cooldownMinutes: isCooldown ? mins : undefined })));
-    }
-  } else {
-    // Fallback to auth.json if openai is configured with OAuth
-    const authMap = loadConfiguredAuth();
-    const openaiAuth = authMap["openai"];
-    if (openaiAuth?.access && openaiAuth.type === "oauth") {
-      openaiPromises.push(QuotaManager.getInstance().refreshReport(
-        fallbackCacheKey("openai", openaiAuth.access), async () => buildOpenAIUsageReport(openaiAuth), 0,
-      ).then(report => ({ ...report, isSessionAccount: isOpenAIActive })));
-    }
-  }
-
   // 4. Command Code multi-account fetch in parallel
   const isCommandCodeActive = options?.currentProvider === "commandcode";
   const commandcodePromises: Promise<ProviderUsageReport>[] = [];
@@ -582,7 +526,6 @@ export async function collectUsageReports(
   const settled = await Promise.allSettled([
     ...antigravityPromises,
     ...codexPromises,
-    ...openaiPromises,
     ...commandcodePromises,
     ...kenariPromises,
     ...ollamaPromises,

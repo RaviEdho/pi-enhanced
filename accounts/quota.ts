@@ -7,7 +7,6 @@ import { computeTimeElapsedFraction } from "../ux/usage/format.js";
 import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
 import { fetchKenariUsage } from "../ux/usage/kenari.js";
 import { fetchOllamaCloudUsage } from "../ux/usage/ollama-cloud.js";
-import { buildOpenAIUsageReport } from "../ux/usage/openai.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { usageAccountIdentity } from "../ux/usage/identity.js";
 import { AccountStore } from "./store.js";
@@ -204,9 +203,7 @@ export class QuotaManager {
     try {
       const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
         let report: ProviderUsageReport;
-        if (account.provider === "openai" && account.type === "oauth") {
-          report = buildOpenAIUsageReport({ ...account, email: usageAccountIdentity(account), accountId: account.id });
-        } else if (account.provider === "ollama-cloud") {
+        if (account.provider === "ollama-cloud") {
           report = await fetchOllamaCloudUsage(token, usageAccountIdentity(account), signal);
         } else if (account.provider === "google-antigravity") {
           report = await fetchAntigravityUsage(

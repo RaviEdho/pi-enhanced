@@ -7,13 +7,12 @@ import type { AccountCredential } from "./types.js";
  * the fallback tier; never infer a subscription tier from a credit balance.
  */
 export function getAccountTierPriority(account: AccountCredential): number {
-  const tokenPlan = account.provider === "openai" || account.provider === "openai-codex"
+  const tokenPlan = account.provider === "openai-codex"
     ? getCodexPlanType(account.access)
     : null;
   const plan = (tokenPlan ?? account.planType ?? "").trim().toLowerCase();
 
   switch (account.provider) {
-    case "openai":
     case "openai-codex":
       switch (plan) {
         case "enterprise": return 5;

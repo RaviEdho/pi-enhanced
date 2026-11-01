@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 2;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "openai", "commandcode", "kenari"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari"]);
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
@@ -100,7 +100,7 @@ export class AccountStore {
         }
 
         const loadedAccounts = (parsed.accounts as AccountCredential[]).filter(
-          (a) => a && typeof a === "object" && SUPPORTED_PROVIDERS.has(a.provider)
+          (a) => a && typeof a === "object" && (SUPPORTED_PROVIDERS.has(a.provider) || a.provider === "openai")
         );
 
         const loadedBindings =
@@ -117,19 +117,8 @@ export class AccountStore {
         };
 
         for (const acc of this.data.accounts) {
-          // v1 incorrectly probed the Codex quota endpoint with SIWC tokens and
-          // saved the same disable message as a real revocation. Allow one
-          // proper OpenAI refresh, not unconditional trust in the old token.
-          if (
-            previousVersion < 2 &&
-            acc.provider === "openai" &&
-            acc.type === "oauth" &&
-            acc.disabledCause === "Session expired or revoked (run /login openai)"
-          ) {
-            acc.disabledCause = null;
-            acc.requiresAuthRefresh = true;
-            acc.updatedAt = Date.now();
-          }
+          // Preserve unmanaged OpenAI credentials without changing their state.
+          if (!SUPPORTED_PROVIDERS.has(acc.provider)) continue;
           if (acc.disabledCause && /401|invalidated|revoked|authentication failed|credits check failed/i.test(acc.disabledCause)) {
             const prov = acc.provider.replace("openai-", "").replace("google-", "");
             acc.disabledCause = `Session expired or revoked (run /login ${prov})`;
@@ -421,7 +410,7 @@ export class AccountStore {
 
             const planType =
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
-              (provider === "openai-codex" || provider === "openai" ? extractPlanTypeFromJwt(access) : undefined) ||
+              (provider === "openai-codex" ? extractPlanTypeFromJwt(access) : undefined) ||
               (provider === "commandcode" ? "individual-provider" : undefined) ||
               (provider === "google-antigravity" ? "free-tier" : undefined) ||
               (provider === "kenari" ? "PAYG" : undefined);
@@ -509,16 +498,6 @@ export class AccountStore {
                 existing.access = access;
                 if (refresh) existing.refresh = refresh;
                 if (credExpires) existing.expires = credExpires;
-                if (provider === "openai") {
-                  // A new SIWC login issues its own client ID. Accepted new
-                  // credentials supersede recovery/auth-failure state, but an
-                  // unchanged auth.json mirror must never resurrect a failure.
-                  if (clientId) existing.clientId = clientId;
-                  delete existing.requiresAuthRefresh;
-                  if (existing.disabledCause === "Session expired or revoked (run /login openai)") {
-                    existing.disabledCause = null;
-                  }
-                }
                 existing.updatedAt = Date.now();
                 modified = true;
               }
@@ -644,10 +623,7 @@ export class AccountStore {
    */
   public list(provider?: string): AccountCredential[] {
     this.reloadIfModified();
-    if (!provider) {
-      return [...this.data.accounts];
-    }
-    return this.data.accounts.filter((a) => a.provider === provider);
+    return this.data.accounts.filter((a) => SUPPORTED_PROVIDERS.has(a.provider) && (!provider || a.provider === provider));
   }
 
   /**
@@ -655,7 +631,7 @@ export class AccountStore {
    */
   public get(id: string): AccountCredential | undefined {
     this.reloadIfModified();
-    return this.data.accounts.find((a) => a.id === id);
+    return this.data.accounts.find((a) => a.id === id && SUPPORTED_PROVIDERS.has(a.provider));
   }
 
   /**
@@ -663,6 +639,7 @@ export class AccountStore {
    */
   public getActive(provider: string): AccountCredential | undefined {
     this.reloadIfModified();
+    if (!SUPPORTED_PROVIDERS.has(provider)) return undefined;
     const activeId = this.data.activeAccounts[provider];
     if (activeId) {
       const acc = this.get(activeId);

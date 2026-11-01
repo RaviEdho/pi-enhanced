@@ -23,7 +23,7 @@ export function bucketDurationForOrdering(bucket: QuotaBucket): number {
 }
 
 export function bucketTimeElapsed(bucket: QuotaBucket, now: number): number | undefined {
-  const fixed = bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included" || bucket.bucketId === "zro-free";
+  const fixed = bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included";
   return computeTimeElapsedFraction(bucket.resetTime, bucket.windowSeconds, now, fixed ? undefined : bucket.usedFraction);
 }
 

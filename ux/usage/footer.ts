@@ -217,7 +217,7 @@ function renderUsageReport(
     if (summary) parts.push(summary);
   }
   if (parts.length) return `${prefix}  ${parts.join(" · ")}`;
-  if (report.providerId === "ollama-cloud" && report.groups.length > 0) return prefix;
+  if ((report.providerId === "ollama-cloud" && report.groups.length > 0) || hasZeroBalance) return prefix;
   return `${prefix}  ${report.error || report.quotaUnavailableReason ? "Quota unavailable" : "No quota limits reported"}`;
 }
 
@@ -259,10 +259,6 @@ function buildUsageBar(ctx: ExtensionContext): string {
     const secs = remainingSec % 60;
     const cooldownStr = mins > 0 ? `${mins}m${secs}s` : `${secs}s`;
     return `${prefix}  [COOLDOWN ~${cooldownStr}]`;
-  }
-
-  if (account.provider === "openai" && account.type === "oauth") {
-    return `${prefix}  Quota unavailable (/usage)`;
   }
 
   const report = QuotaManager.getInstance().getReport(account.id);
@@ -510,9 +506,7 @@ async function refreshCandidateAccounts(
   await Promise.allSettled(
     candidates.map(async (account) => {
       try {
-        const token = account.provider === "openai" && account.type === "oauth"
-          ? account.access || ""
-          : account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
+        const token = account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
         await quotaManager.ensureFreshQuota(
           account,
           token,
@@ -552,9 +546,7 @@ async function refreshSessionAccountQuota(
 
   const quotaManager = QuotaManager.getInstance();
   try {
-    const token = account.provider === "openai" && account.type === "oauth"
-      ? account.access || ""
-      : account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
+    const token = account.provider === "ollama-cloud" && account.apiKey ? account.apiKey : await balancer.ensureFreshToken(account);
     await quotaManager.ensureFreshQuota(
       account,
       token,
