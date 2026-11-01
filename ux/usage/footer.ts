@@ -18,7 +18,7 @@ import {
   makeProgressBar,
 } from "./format.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
-import { normalizeWindowToken, quotaWindowShortLabel, QUOTA_WINDOW } from "./windows.js";
+import { normalizeWindowToken, quotaWindowSeconds as resolveWindowSeconds, quotaWindowShortLabel, QUOTA_WINDOW } from "./windows.js";
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -26,6 +26,11 @@ function formatTokens(count: number): string {
   if (count < 1000000) return `${Math.round(count / 1000)}k`;
   if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
   return `${Math.round(count / 1000000)}M`;
+}
+
+function maskedKeyIdentity(key: string): string {
+  const trimmed = key.trim();
+  return trimmed.length > 12 ? `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}` : "key";
 }
 
 function formatCost(cost: number): string {
@@ -61,21 +66,11 @@ interface KeyBuckets {
 
 /** Resolve durations for ordering only; never invent a marker interval. */
 function quotaWindowSeconds(bucket: QuotaBucket): number {
-  if (bucket.windowSeconds && Number.isFinite(bucket.windowSeconds) && bucket.windowSeconds > 0) {
-    return bucket.windowSeconds;
-  }
-  const window = normalizeWindowToken(bucket.window);
-  if (window === QUOTA_WINDOW.monthly) return 30 * 86400;
-  if (window === QUOTA_WINDOW.weekly) return 7 * 86400;
-  if (window === QUOTA_WINDOW.daily) return 86400;
-  const duration = window.match(/^(\d+)-(hour|day)$/);
-  return duration ? Number(duration[1]) * (duration[2] === "hour" ? 3600 : 86400) : 0;
+  return resolveWindowSeconds(bucket.window, bucket.windowSeconds);
 }
 
 function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBuckets {
-  const all = report.groups.flatMap((group) => group.buckets).filter(
-    (bucket) => report.providerId !== "ollama-cloud" || bucket.displayMode !== "value" || bucket.balanceUsd !== 0
-  );
+  const all = report.groups.flatMap((group) => group.buckets);
   const isBalance = (bucket: QuotaBucket): boolean => {
     const window = normalizeWindowToken(bucket.window);
     return bucket.displayMode === "value" ||
@@ -250,7 +245,8 @@ function buildUsageBar(ctx: ExtensionContext): string {
     const connection = getCloudflareConnection();
     if (!connection) return "";
     const report = QuotaManager.getInstance().getReport(cloudflareCacheKey(connection));
-    return report ? renderUsageReport(report, "Cloudflare", model.id, Date.now(), ctx.ui.theme) : "Cloudflare  ···";
+    const identity = report?.accountEmail || connection.accountId.trim();
+    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme) : `${identity}  ···`;
   }
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
@@ -261,10 +257,15 @@ function buildUsageBar(ctx: ExtensionContext): string {
     const auth = getOllamaFallbackAuth();
     if (!auth) return "";
     const report = QuotaManager.getInstance().getReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`);
-    return report ? renderUsageReport(report, auth.label, model.id, Date.now(), ctx.ui.theme) : `${auth.label}  ···`;
+    const identity = auth.label !== "default" ? auth.label : maskedKeyIdentity(auth.token);
+    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme) : `${identity}  ···`;
   }
 
-  const prefix = account.provider === "ollama-cloud" ? (account.email || account.label || "Ollama Cloud") : (account.email || account.id);
+  const isKeyProvider = account.provider === "ollama-cloud";
+  const accountKey = account.apiKey || account.access;
+  const prefix = isKeyProvider
+    ? (account.email && account.email !== "env-key" ? account.email : undefined) || account.label || (accountKey ? maskedKeyIdentity(accountKey) : account.id)
+    : account.email || account.id;
 
   const now = Date.now();
   // Check 429 cooldown

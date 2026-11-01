@@ -35,19 +35,36 @@ export function fetchCloudflareUsage(connection: Connection): Promise<ProviderUs
   return promise;
 }
 
+async function fetchAccountName(connection: Connection, signal: AbortSignal): Promise<string | undefined> {
+  try {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(connection.accountId.trim())}`, {
+      headers: { Authorization: `Bearer ${connection.apiToken.trim()}` }, signal,
+    });
+    if (!response.ok) return undefined;
+    const payload = await response.json() as { success?: boolean; result?: { id?: unknown; name?: unknown } };
+    const name = payload.result?.name;
+    return payload.success === true && payload.result?.id === connection.accountId.trim() && typeof name === "string" && name.trim()
+      ? name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function poll(connection: Connection, now: Date): Promise<ProviderUsageReport> {
   const report: ProviderUsageReport = { providerId: PROVIDER, providerName: "Cloudflare Workers AI", fetchedAt: now.getTime(), groups: [], usageUrl: "https://dash.cloudflare.com/" };
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const next = new Date(start.getTime() + 86400_000);
   const signal = AbortSignal.timeout(10_000);
   try {
-    const [response, plan] = await Promise.all([
+    const [response, plan, accountName] = await Promise.all([
       fetch("https://api.cloudflare.com/client/v4/graphql", {
         method: "POST", headers: { Authorization: `Bearer ${connection.apiToken.trim()}`, "Content-Type": "application/json" },
         body: JSON.stringify({ query: QUERY, variables: { accountTag: connection.accountId.trim(), start: start.toISOString(), end: now.toISOString() } }), signal,
       }),
       detectCloudflareWorkersPlan({ ...connection, signal }),
+      fetchAccountName(connection, signal),
     ]);
+    report.accountEmail = accountName;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload: any = await response.json();
     if (Array.isArray(payload?.errors) && payload.errors.length) throw new Error("GraphQL error");

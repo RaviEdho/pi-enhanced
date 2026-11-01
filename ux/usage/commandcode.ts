@@ -101,11 +101,13 @@ export async function fetchCommandCodeUsage(
       description: `$${monthlyRemaining.toFixed(2)} remaining ($${totalPool.toFixed(2)} monthly)`,
     });
 
-    if (purchasedRemaining > 0) {
+    if (typeof credData?.credits?.purchasedCredits === "number" && Number.isFinite(credData.credits.purchasedCredits)) {
       creditBuckets.push({
         bucketId: "commandcode-extra",
         displayName: "Extra Credits",
         window: QUOTA_WINDOW.onDemand,
+        displayMode: "value",
+        balanceUsd: purchasedRemaining,
         usedFraction: 0,
         remainingFraction: 1,
         description: `$${purchasedRemaining.toFixed(2)} on-demand (never expires)`,

@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
+import { quotaWindowSeconds } from "./windows.js";
 
 /**
  * Pluggable theme interface compatible with Pi's active theme or fallback ANSI formatting.
@@ -245,7 +246,7 @@ function formatBucketEntry(
   if (bucket.displayMode === "value") {
     const valueText = bucket.description || "—";
     const resetSuffix =
-      bucket.resetTime && !valueText.includes("expires")
+      bucket.resetTime && Number.isFinite(Date.parse(bucket.resetTime)) && !valueText.includes("expires")
         ? ` · ${formatRelativeTime(bucket.resetTime, now)}`
         : "";
     const metric = dim(`${valueText}${resetSuffix}`);
@@ -257,7 +258,7 @@ function formatBucketEntry(
     bucket.windowSeconds,
     now,
     // Fixed-period allocations advance even when no usage has occurred.
-    bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included" ? undefined : bucket.usedFraction
+    bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included" || bucket.bucketId === "zro-free" ? undefined : bucket.usedFraction
   );
   const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
 
@@ -271,9 +272,9 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons" && bucket.bucketId !== "ollama-cloud-included") {
+  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons" && bucket.bucketId !== "ollama-cloud-included" && bucket.bucketId !== "zro-free") {
     detailStr = "ready";
-  } else if (bucket.resetTime) {
+  } else if (bucket.resetTime && Number.isFinite(Date.parse(bucket.resetTime))) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
   } else if (report.capacitySummary) {
     detailStr = report.capacitySummary;
@@ -333,15 +334,21 @@ function buildProviderLines(
           ? report.error
           : `Could not fetch usage: ${report.error}`;
       append(`      ${theme.fg("error", `⚠️  ${message}`)}`);
-    } else if (report.quotaUnavailableReason) {
-      append(`      ${dim(report.quotaUnavailableReason)}`);
-      if (report.usageUrl) append(`      ${dim(`View usage: ${report.usageUrl}`)}`);
     } else {
+      if (report.quotaUnavailableReason) {
+        append(`      ${dim(report.quotaUnavailableReason)}`);
+        if (report.usageUrl) append(`      ${dim(`View usage: ${report.usageUrl}`)}`);
+      }
       const accountBuckets = report.groups.flatMap((group) => group.buckets);
-      if (accountBuckets.length === 0) {
+      if (accountBuckets.length === 0 && !report.quotaUnavailableReason) {
         append(`      ${dim(report.capacitySummary || "No active quota limits reported.")}`);
-      } else {
-        for (const bucket of accountBuckets) {
+      } else if (accountBuckets.length > 0) {
+        // Stable sorting keeps unknown-duration and value buckets in provider order.
+        const sortedBuckets = [...accountBuckets].sort((a, b) => {
+          const duration = (bucket: typeof a) => bucket.displayMode === "value" ? 0 : quotaWindowSeconds(bucket.window, bucket.windowSeconds);
+          return duration(b) - duration(a);
+        });
+        for (const bucket of sortedBuckets) {
           const label = truncateToWidth(bucket.displayName, labelWidth, "…");
           const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
           const entry = formatBucketEntry(report, bucket, barWidth, now, theme);

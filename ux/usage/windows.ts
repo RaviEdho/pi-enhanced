@@ -29,6 +29,17 @@ export type QuotaWindowToken = (typeof QUOTA_WINDOW)[keyof typeof QUOTA_WINDOW];
 
 const DAY_SECONDS = 86_400;
 
+/** Resolve a quota window's duration for ordering, without inventing reset timing. */
+export function quotaWindowSeconds(window: string | undefined, seconds?: number): number {
+  if (seconds && Number.isFinite(seconds) && seconds > 0) return seconds;
+  const normalized = normalizeWindowToken(window);
+  if (normalized === QUOTA_WINDOW.monthly) return 30 * DAY_SECONDS;
+  if (normalized === QUOTA_WINDOW.weekly) return 7 * DAY_SECONDS;
+  if (normalized === QUOTA_WINDOW.daily) return DAY_SECONDS;
+  const duration = normalized.match(/^(\d+)-(hour|day)$/);
+  return duration ? Number(duration[1]) * (duration[2] === "hour" ? 3600 : DAY_SECONDS) : 0;
+}
+
 /**
  * Canonical user-facing labels for the shared window concepts.
  *
