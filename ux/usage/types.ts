@@ -35,6 +35,8 @@ export interface ProviderUsageReport {
   resetCredits?: number;
   cooldownMinutes?: number;
   fetchedAt: number;
+  /** Last successful data shown after a failed refresh; never stored as a successful report. */
+  staleAt?: string;
   groups: QuotaGroup[];
   capacitySummary?: string;
   /**

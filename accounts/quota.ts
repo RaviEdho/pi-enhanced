@@ -9,6 +9,7 @@ import { fetchKenariUsage } from "../ux/usage/kenari.js";
 import { fetchOllamaCloudUsage } from "../ux/usage/ollama-cloud.js";
 import { buildOpenAIUsageReport } from "../ux/usage/openai.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
+import { usageAccountIdentity } from "../ux/usage/identity.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
 
@@ -159,6 +160,36 @@ export class QuotaManager {
     return entry.report;
   }
 
+  /** Fetch a credential-scoped report once, sharing the cache and in-flight request across views. */
+  public async refreshReport(
+    key: string,
+    fetchReport: () => Promise<ProviderUsageReport>,
+    maxAgeMs: number = DEFAULT_CACHE_TTL_MS,
+  ): Promise<ProviderUsageReport> {
+    const entry = this.cache.get(key);
+    if (entry && Date.now() - entry.fetchedAt < maxAgeMs) return entry.report;
+    const existing = this.inFlightFetches.get(key);
+    if (existing) {
+      const report = await existing;
+      if (report) return report;
+    }
+    const promise = (async () => {
+      try {
+        const report = await fetchReport();
+        if (!report.error) {
+          this.setReport(key, report);
+          return report;
+        }
+        const stale = this.cache.get(key);
+        return stale ? { ...stale.report, error: report.error, staleAt: new Date(stale.fetchedAt).toISOString() } : report;
+      } finally {
+        this.inFlightFetches.delete(key);
+      }
+    })();
+    this.inFlightFetches.set(key, promise);
+    return promise;
+  }
+
   /**
    * Opportunistically fetches and caches quota for an account if not already cached or expired.
    */
@@ -169,32 +200,19 @@ export class QuotaManager {
     maxAgeMs: number = DEFAULT_CACHE_TTL_MS
   ): Promise<ProviderUsageReport | null> {
     const entry = this.cache.get(account.id);
-    const now = Date.now();
-    // Ollama recommends polling its per-user balance endpoint at most once per minute.
-    if (account.provider === "ollama-cloud") maxAgeMs = Math.max(maxAgeMs, 60_000);
-    if (account.provider !== "ollama-cloud" && entry && now - entry.fetchedAt < maxAgeMs) {
-      return entry.report;
-    }
-
-    if (account.provider === "openai" && account.type === "oauth") {
-      const report = buildOpenAIUsageReport({ ...account, accountId: account.id });
-      this.setReport(account.id, report);
-      return report;
-    }
-
-    const inFlight = this.inFlightFetches.get(account.id);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const fetchPromise = (async (): Promise<ProviderUsageReport | null> => {
-      try {
-        let report: ProviderUsageReport | null = null;
-        if (account.provider === "google-antigravity") {
+    const age = account.provider === "ollama-cloud" ? Math.max(maxAgeMs, 60_000) : maxAgeMs;
+    try {
+      const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
+        let report: ProviderUsageReport;
+        if (account.provider === "openai" && account.type === "oauth") {
+          report = buildOpenAIUsageReport({ ...account, email: usageAccountIdentity(account), accountId: account.id });
+        } else if (account.provider === "ollama-cloud") {
+          report = await fetchOllamaCloudUsage(token, usageAccountIdentity(account), signal);
+        } else if (account.provider === "google-antigravity") {
           report = await fetchAntigravityUsage(
             token,
             account.projectId || "aicode-consumers",
-            account.email || account.id,
+            usageAccountIdentity(account),
             signal,
             account.planType
           );
@@ -202,48 +220,38 @@ export class QuotaManager {
           report = await fetchCodexUsage({
             accessToken: token,
             accountId: account.accountId,
-            email: account.email || account.id,
+            email: usageAccountIdentity(account),
             refreshToken: account.refresh,
             signal,
           });
         } else if (account.provider === "commandcode") {
           report = await fetchCommandCodeUsage(
             token,
-            account.email || account.id,
+            usageAccountIdentity(account),
             signal,
             account.planType
           );
-        } else if (account.provider === "ollama-cloud") {
-          report = await fetchOllamaCloudUsage(token, account.email || account.label || "Ollama Cloud", signal);
         } else if (account.provider === "kenari") {
           report = await fetchKenariUsage(
             token,
-            account.email || account.id,
+            usageAccountIdentity(account),
             signal,
             account.planType
           );
+        } else {
+          return { providerId: account.provider, providerName: account.provider, fetchedAt: Date.now(), groups: [], error: "Usage unavailable" };
         }
-
-        if (report && !report.error) {
-          if (report.planType && report.planType !== account.planType) {
-            account.planType = report.planType;
-            account.updatedAt = Date.now();
-            AccountStore.getInstance().upsert(account);
-          }
-          this.setReport(account.id, report);
-          return report;
-        }
-      } catch {
-        // Ignore background fetch error
-      } finally {
-        this.inFlightFetches.delete(account.id);
+        return report;
+      }, age);
+      if (!report.error && report.planType && report.planType !== account.planType) {
+        account.planType = report.planType;
+        account.updatedAt = Date.now();
+        AccountStore.getInstance().upsert(account);
       }
-
-      return entry ? entry.report : null;
-    })();
-
-    this.inFlightFetches.set(account.id, fetchPromise);
-    return fetchPromise;
+      return report.error ? entry?.report ?? null : report;
+    } catch {
+      return entry?.report ?? null;
+    }
   }
 
   /**

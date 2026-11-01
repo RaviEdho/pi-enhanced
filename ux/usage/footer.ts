@@ -13,11 +13,10 @@ import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } f
 import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
-import {
-  computeTimeElapsedFraction,
-  makeProgressBar,
-} from "./format.js";
+import { makeProgressBar } from "./format.js";
+import { balanceDisplayValue, bucketTimeElapsed, hasValidReset, isValueBucket } from "./buckets.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
+import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
 import { normalizeWindowToken, quotaWindowSeconds as resolveWindowSeconds, quotaWindowShortLabel, QUOTA_WINDOW } from "./windows.js";
 
 function formatTokens(count: number): string {
@@ -26,11 +25,6 @@ function formatTokens(count: number): string {
   if (count < 1000000) return `${Math.round(count / 1000)}k`;
   if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
   return `${Math.round(count / 1000000)}M`;
-}
-
-function maskedKeyIdentity(key: string): string {
-  const trimmed = key.trim();
-  return trimmed.length > 12 ? `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}` : "key";
 }
 
 function formatCost(cost: number): string {
@@ -71,13 +65,8 @@ function quotaWindowSeconds(bucket: QuotaBucket): number {
 
 function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBuckets {
   const all = report.groups.flatMap((group) => group.buckets);
-  const isBalance = (bucket: QuotaBucket): boolean => {
-    const window = normalizeWindowToken(bucket.window);
-    return bucket.displayMode === "value" ||
-      [QUOTA_WINDOW.prepaid, QUOTA_WINDOW.balance, QUOTA_WINDOW.coupon, QUOTA_WINDOW.onDemand].some((value) => value === window);
-  };
-  const balances = all.filter(isBalance);
-  let windows = all.filter((bucket) => !isBalance(bucket));
+  const balances = all.filter((bucket) => isValueBucket(bucket) && (bucket.balanceAmount ?? bucket.balanceUsd) !== 0);
+  let windows = all.filter((bucket) => !isValueBucket(bucket));
 
   if (report.providerId === "google-antigravity") {
     const model = (modelId || "").toLowerCase();
@@ -174,15 +163,10 @@ function renderProgressBar(
   theme: ExtensionContext["ui"]["theme"]
 ): string {
   const usedPct = Math.round(primary.usedFraction * 100);
-  const timeElapsed = computeTimeElapsedFraction(
-    primary.resetTime,
-    primary.windowSeconds,
-    now,
-    primary.bucketId === "cloudflare-neurons" || primary.bucketId === "ollama-cloud-included" ? undefined : primary.usedFraction
-  );
+  const timeElapsed = bucketTimeElapsed(primary, now);
   const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
-  const resetSegment = primary.resetTime && Number.isFinite(Date.parse(primary.resetTime))
-    ? ` (${formatFooterCountdown(primary.resetTime, now)})`
+  const resetSegment = hasValidReset(primary)
+    ? ` (${formatFooterCountdown(primary.resetTime!, now)})`
     : "";
 
   let secondarySegment = "";
@@ -195,9 +179,8 @@ function renderProgressBar(
     const secLabel = bucketWindowLabel(secondary);
     const countdown =
       secondary.usedFraction > 0 &&
-      secondary.resetTime &&
-      Number.isFinite(Date.parse(secondary.resetTime))
-        ? ` (${formatFooterCountdown(secondary.resetTime, now)})`
+      hasValidReset(secondary)
+        ? ` (${formatFooterCountdown(secondary.resetTime!, now)})`
         : "";
     const text = `${secLabel}: ${secPct}%${countdown}`;
     const color = secondary.usedFraction >= 0.95 ? "error" :
@@ -222,10 +205,14 @@ function renderUsageReport(
   const parts: string[] = [];
   if (primary) parts.push(renderProgressBar(primary, secondary, now, theme));
   for (const balance of balances) {
-    const value = balance.description || (balance.balanceUsd !== undefined ? `$${balance.balanceUsd.toFixed(2)}` : "unavailable");
+    const value = balanceDisplayValue(balance) || "unavailable";
     parts.push(`${balance.displayName}: ${value}`);
   }
-  if (!parts.length && report.providerId !== "ollama-cloud") {
+  const hasZeroBalance = report.groups.some((group) => group.buckets.some((bucket) =>
+    isValueBucket(bucket) &&
+    (bucket.balanceAmount ?? bucket.balanceUsd) === 0
+  ));
+  if (!parts.length && report.providerId !== "ollama-cloud" && !hasZeroBalance) {
     const summary = report.capacitySummaryShort || report.capacitySummary;
     if (summary) parts.push(summary);
   }
@@ -256,16 +243,13 @@ function buildUsageBar(ctx: ExtensionContext): string {
     if (model.provider !== "ollama-cloud") return "";
     const auth = getOllamaFallbackAuth();
     if (!auth) return "";
-    const report = QuotaManager.getInstance().getReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`);
-    const identity = auth.label !== "default" ? auth.label : maskedKeyIdentity(auth.token);
+    const key = `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`;
+    const report = QuotaManager.getInstance().getReport(key);
+    const identity = fallbackUsageIdentity(auth.label, auth.token);
     return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme) : `${identity}  ···`;
   }
 
-  const isKeyProvider = account.provider === "ollama-cloud";
-  const accountKey = account.apiKey || account.access;
-  const prefix = isKeyProvider
-    ? (account.email && account.email !== "env-key" ? account.email : undefined) || account.label || (accountKey ? maskedKeyIdentity(accountKey) : account.id)
-    : account.email || account.id;
+  const prefix = usageAccountIdentity(account);
 
   const now = Date.now();
   // Check 429 cooldown
@@ -480,15 +464,16 @@ const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every
 async function refreshCloudflare(): Promise<void> {
   const connection = getCloudflareConnection();
   if (!connection) return;
-  const report = await fetchCloudflareUsage(connection);
-  QuotaManager.getInstance().setReport(cloudflareCacheKey(connection), report);
+  await QuotaManager.getInstance().refreshReport(cloudflareCacheKey(connection), () => fetchCloudflareUsage(connection));
 }
 
 async function refreshOllamaFallback(): Promise<void> {
   const auth = getOllamaFallbackAuth();
   if (!auth) return;
-  const report = await fetchOllamaCloudUsage(auth.token, auth.label, AbortSignal.timeout(5000));
-  QuotaManager.getInstance().setReport(`ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`, report);
+  await QuotaManager.getInstance().refreshReport(
+    `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`,
+    () => fetchOllamaCloudUsage(auth.token, fallbackUsageIdentity(auth.label, auth.token), AbortSignal.timeout(5000)), 60_000,
+  );
 }
 
 /**

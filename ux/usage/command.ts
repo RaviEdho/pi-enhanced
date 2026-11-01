@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -20,11 +21,16 @@ import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
-import { fetchOllamaCloudUsage, getOllamaFallbackAuth } from "./ollama-cloud.js";
+import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
+import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
 import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import { buildOpenAIUsageReport } from "./openai.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
+
+function fallbackCacheKey(provider: string, ...parts: string[]): string {
+  return `usage-fallback:${provider}:${createHash("sha256").update(JSON.stringify(parts)).digest("hex")}`;
+}
 
 interface StoredAuthEntry {
   type?: string;
@@ -125,7 +131,7 @@ export async function collectUsageReports(
       const isSession = isAntigravityActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.id;
+      const label = usageAccountIdentity(acc);
 
       if (acc.disabledCause) {
         antigravityPromises.push(
@@ -149,13 +155,13 @@ export async function collectUsageReports(
         (async (): Promise<ProviderUsageReport> => {
           try {
             const token = await balancer.ensureFreshToken(acc);
-            const report = await fetchAntigravityUsage(
+            const report = { ...await QuotaManager.getInstance().refreshReport(acc.id, () => fetchAntigravityUsage(
               token,
               acc.projectId || "aicode-consumers",
               label,
-              signal,
+              AbortSignal.timeout(15000),
               acc.planType
-            );
+            ), 0) };
             report.isSessionAccount = isSession;
             report.accountId = acc.id;
             report.accountEmail = label;
@@ -171,7 +177,6 @@ export async function collectUsageReports(
               store.upsert(acc);
               report.error = acc.disabledCause;
             }
-            QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
             return {
@@ -197,14 +202,11 @@ export async function collectUsageReports(
     if (antigravity?.access && antigravity.projectId) {
       antigravityPromises.push(
         (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchAntigravityUsage(
-            antigravity.access!,
-            antigravity.projectId!,
-            antigravity.email,
-            signal
+          const report = await QuotaManager.getInstance().refreshReport(
+            fallbackCacheKey("google-antigravity", antigravity.access!, antigravity.projectId!),
+            () => fetchAntigravityUsage(antigravity.access!, antigravity.projectId!, antigravity.email, AbortSignal.timeout(15000)), 0,
           );
-          report.isSessionAccount = isAntigravityActive;
-          return report;
+          return { ...report, isSessionAccount: isAntigravityActive };
         })()
       );
     }
@@ -226,7 +228,7 @@ export async function collectUsageReports(
       const isSession = isCodexActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.accountId || acc.id;
+      const label = usageAccountIdentity(acc);
 
       if (acc.disabledCause) {
         codexPromises.push(
@@ -250,13 +252,13 @@ export async function collectUsageReports(
         (async (): Promise<ProviderUsageReport> => {
           try {
             const token = await balancer.ensureFreshToken(acc);
-            const report = await fetchCodexUsage({
+            const report = { ...await QuotaManager.getInstance().refreshReport(acc.id, () => fetchCodexUsage({
               accessToken: token,
               accountId: acc.accountId,
               email: label,
               refreshToken: acc.refresh,
-              signal,
-            });
+              signal: AbortSignal.timeout(15000),
+            }), 0) };
             report.isSessionAccount = isSession;
             report.accountId = acc.id;
             report.accountEmail = label;
@@ -267,7 +269,6 @@ export async function collectUsageReports(
               store.upsert(acc);
               report.error = acc.disabledCause;
             }
-            QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
             return {
@@ -293,15 +294,11 @@ export async function collectUsageReports(
     if (codex?.access) {
       codexPromises.push(
         (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchCodexUsage({
-            accessToken: codex.access!,
-            accountId: codex.accountId,
-            email: codex.email,
-            refreshToken: codex.refresh,
-            signal,
-          });
-          report.isSessionAccount = isCodexActive;
-          return report;
+          const report = await QuotaManager.getInstance().refreshReport(
+            fallbackCacheKey("openai-codex", codex.access!, codex.accountId || ""),
+            () => fetchCodexUsage({ accessToken: codex.access!, accountId: codex.accountId, email: codex.email, refreshToken: codex.refresh, signal: AbortSignal.timeout(15000) }), 0,
+          );
+          return { ...report, isSessionAccount: isCodexActive };
         })()
       );
     }
@@ -324,7 +321,7 @@ export async function collectUsageReports(
       const isSession = isOpenAIActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.accountId || acc.id;
+      const label = usageAccountIdentity(acc);
 
       if (acc.disabledCause) {
         openaiPromises.push(
@@ -347,20 +344,18 @@ export async function collectUsageReports(
       // Usage display must not probe legacy endpoints or refresh credentials:
       // these tokens only authorize the public OpenAI API, which has no
       // documented subscription-quota endpoint for this login flow.
-      const report = buildOpenAIUsageReport({ ...acc, email: label, accountId: acc.id });
-      report.isSessionAccount = isSession;
-      report.cooldownMinutes = isCooldown ? mins : undefined;
-      QuotaManager.getInstance().setReport(acc.id, report);
-      openaiPromises.push(Promise.resolve(report));
+      openaiPromises.push(QuotaManager.getInstance().refreshReport(acc.id,
+        async () => buildOpenAIUsageReport({ ...acc, email: label, accountId: acc.id }), 0,
+      ).then(report => ({ ...report, isSessionAccount: isSession, cooldownMinutes: isCooldown ? mins : undefined })));
     }
   } else {
     // Fallback to auth.json if openai is configured with OAuth
     const authMap = loadConfiguredAuth();
     const openaiAuth = authMap["openai"];
     if (openaiAuth?.access && openaiAuth.type === "oauth") {
-      const report = buildOpenAIUsageReport(openaiAuth);
-      report.isSessionAccount = isOpenAIActive;
-      openaiPromises.push(Promise.resolve(report));
+      openaiPromises.push(QuotaManager.getInstance().refreshReport(
+        fallbackCacheKey("openai", openaiAuth.access), async () => buildOpenAIUsageReport(openaiAuth), 0,
+      ).then(report => ({ ...report, isSessionAccount: isOpenAIActive })));
     }
   }
 
@@ -380,7 +375,7 @@ export async function collectUsageReports(
       const isSession = isCommandCodeActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.orgName || acc.id;
+      const label = usageAccountIdentity(acc);
 
       if (acc.disabledCause) {
         commandcodePromises.push(
@@ -404,12 +399,12 @@ export async function collectUsageReports(
         (async (): Promise<ProviderUsageReport> => {
           try {
             const token = acc.apiKey || (await balancer.ensureFreshToken(acc));
-            const report = await fetchCommandCodeUsage(
+            const report = { ...await QuotaManager.getInstance().refreshReport(acc.id, () => fetchCommandCodeUsage(
               token,
               label,
-              signal,
+              AbortSignal.timeout(15000),
               acc.planType
-            );
+            ), 0) };
             report.isSessionAccount = isSession;
             report.accountId = acc.id;
             report.accountEmail = label;
@@ -419,7 +414,6 @@ export async function collectUsageReports(
               acc.updatedAt = Date.now();
               store.upsert(acc);
             }
-            QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
             return {
@@ -446,13 +440,11 @@ export async function collectUsageReports(
     if (fallbackToken) {
       commandcodePromises.push(
         (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchCommandCodeUsage(
-            fallbackToken,
-            ccAuth?.email || "default",
-            signal
+          const report = await QuotaManager.getInstance().refreshReport(
+            fallbackCacheKey("commandcode", fallbackToken),
+            () => fetchCommandCodeUsage(fallbackToken, fallbackUsageIdentity(ccAuth?.email || "default", fallbackToken), AbortSignal.timeout(15000)), 0,
           );
-          report.isSessionAccount = isCommandCodeActive;
-          return report;
+          return { ...report, isSessionAccount: isCommandCodeActive };
         })()
       );
     }
@@ -474,7 +466,7 @@ export async function collectUsageReports(
       const isSession = isKenariActive && sessionAccount?.id === acc.id;
       const isCooldown = acc.blockedUntil && acc.blockedUntil > Date.now();
       const mins = isCooldown ? Math.max(1, Math.ceil((acc.blockedUntil! - Date.now()) / 60000)) : 0;
-      const label = acc.email || acc.label || acc.id;
+      const label = usageAccountIdentity(acc);
 
       if (acc.disabledCause) {
         kenariPromises.push(
@@ -498,12 +490,12 @@ export async function collectUsageReports(
         (async (): Promise<ProviderUsageReport> => {
           try {
             const token = acc.apiKey || (await balancer.ensureFreshToken(acc));
-            const report = await fetchKenariUsage(
+            const report = { ...await QuotaManager.getInstance().refreshReport(acc.id, () => fetchKenariUsage(
               token,
               label,
-              signal,
+              AbortSignal.timeout(15000),
               acc.planType
-            );
+            ), 0) };
             report.isSessionAccount = isSession;
             report.accountId = acc.id;
             report.accountEmail = label;
@@ -513,7 +505,6 @@ export async function collectUsageReports(
               acc.updatedAt = Date.now();
               store.upsert(acc);
             }
-            QuotaManager.getInstance().setReport(acc.id, report);
             return report;
           } catch (err) {
             return {
@@ -540,13 +531,11 @@ export async function collectUsageReports(
     if (fallbackToken) {
       kenariPromises.push(
         (async (): Promise<ProviderUsageReport> => {
-          const report = await fetchKenariUsage(
-            fallbackToken,
-            kenariAuth?.email || "default",
-            signal
+          const report = await QuotaManager.getInstance().refreshReport(
+            fallbackCacheKey("kenari", fallbackToken),
+            () => fetchKenariUsage(fallbackToken, fallbackUsageIdentity(kenariAuth?.email || "default", fallbackToken), AbortSignal.timeout(15000)), 0,
           );
-          report.isSessionAccount = isKenariActive;
-          return report;
+          return { ...report, isSessionAccount: isKenariActive };
         })()
       );
     }
@@ -560,7 +549,7 @@ export async function collectUsageReports(
     const sessionAccount = isOllamaActive ? balancer.getSessionAccount("ollama-cloud", options?.sessionId, options?.currentModelId) : undefined;
     for (const acc of ollamaAccounts) {
       if (signal?.aborted) break;
-      const label = acc.email || acc.label || "Ollama Cloud";
+      const label = usageAccountIdentity(acc);
       const isSession = isOllamaActive && sessionAccount?.id === acc.id;
       ollamaPromises.push((async () => {
         const base: ProviderUsageReport = { providerId: "ollama-cloud", providerName: "Ollama Cloud", accountEmail: label, accountId: acc.id, isSessionAccount: isSession, fetchedAt: Date.now(), groups: [] };
@@ -569,8 +558,7 @@ export async function collectUsageReports(
         try {
           const token = acc.apiKey || await balancer.ensureFreshToken(acc);
           const quota = QuotaManager.getInstance();
-          const report = await fetchOllamaCloudUsage(token, label, signal);
-          if (!report.error) quota.setReport(acc.id, report);
+          const report = await quota.refreshReport(acc.id, () => fetchOllamaCloudUsage(token, label, AbortSignal.timeout(15000)), 60_000);
           return { ...report, accountEmail: label, accountId: acc.id, isSessionAccount: isSession, cooldownMinutes: base.cooldownMinutes };
         } catch {
           return { ...base, error: "Unable to access Ollama Cloud credentials" };
@@ -579,14 +567,16 @@ export async function collectUsageReports(
     }
   } else {
     const auth = getOllamaFallbackAuth();
-    if (auth) ollamaPromises.push(fetchOllamaCloudUsage(auth.token, auth.label, signal).then(report => ({ ...report, isSessionAccount: isOllamaActive })));
+    if (auth) ollamaPromises.push(QuotaManager.getInstance().refreshReport(
+      `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`,
+      () => fetchOllamaCloudUsage(auth.token, fallbackUsageIdentity(auth.label, auth.token), AbortSignal.timeout(15000)), 60_000,
+    ).then(report => ({ ...report, isSessionAccount: isOllamaActive })));
   }
 
   const cloudflare = getCloudflareConnection();
-  const cloudflarePromises = cloudflare && !signal?.aborted ? [fetchCloudflareUsage(cloudflare).then(report => {
-    QuotaManager.getInstance().setReport(cloudflareCacheKey(cloudflare), report);
-    return { ...report, isSessionAccount: options?.currentProvider === "cloudflare-workers-ai" };
-  })] : [];
+  const cloudflarePromises = cloudflare && !signal?.aborted ? [QuotaManager.getInstance().refreshReport(
+    cloudflareCacheKey(cloudflare), () => fetchCloudflareUsage(cloudflare), 0,
+  ).then(report => ({ ...report, accountEmail: report.accountEmail || cloudflare.accountId.trim(), isSessionAccount: options?.currentProvider === "cloudflare-workers-ai" }))] : [];
 
   // Await all provider account queries concurrently
   const settled = await Promise.allSettled([
@@ -616,7 +606,7 @@ export async function collectUsageReports(
       sessionId: options.sessionId,
       providerId: options.currentProvider,
       modelId: options.currentModelId,
-      accountEmail: account?.email || account?.accountId || account?.id,
+      accountEmail: reports.find((report) => report.isSessionAccount && report.providerId === options.currentProvider)?.accountEmail || (account ? usageAccountIdentity(account) : undefined),
       accountId: account?.id,
     };
   }

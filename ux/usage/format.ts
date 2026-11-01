@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
-import { quotaWindowSeconds } from "./windows.js";
+import { balanceDisplayValue, bucketDurationForOrdering, bucketTimeElapsed, hasValidReset, isValueBucket } from "./buckets.js";
+export { computeTimeElapsedFraction } from "./timing.js";
 
 /**
  * Pluggable theme interface compatible with Pi's active theme or fallback ANSI formatting.
@@ -66,30 +67,6 @@ export function formatRelativeTime(isoString?: string, now = Date.now()): string
   if (days > 0) return `${days}d${hours}h`;
   if (hours > 0) return `${hours}h${minutes}m`;
   return `${minutes}m`;
-}
-
-/**
- * Computes the fraction of time elapsed in the current rate limit window (0.0 to 1.0).
- * Returns undefined for unused buckets (usedFraction <= 0) since their timer has not
- * started ticking yet — this suppresses the reset-cycle marker (┃) in progress bars.
- */
-export function computeTimeElapsedFraction(
-  resetTimeIso?: string,
-  windowSeconds?: number,
-  now = Date.now(),
-  usedFraction?: number
-): number | undefined {
-  if (!resetTimeIso || !windowSeconds || windowSeconds <= 0) return undefined;
-  if (usedFraction !== undefined && usedFraction <= 0) return undefined;
-
-  const resetMs = new Date(resetTimeIso).getTime();
-  if (Number.isNaN(resetMs)) return undefined;
-  const remainingMs = resetMs - now;
-  const windowMs = windowSeconds * 1000;
-  // Clamp remaining time to [0, windowMs] to protect against slight clock skews
-  const clampedRemainingMs = Math.max(0, Math.min(windowMs, remainingMs));
-  const elapsedMs = windowMs - clampedRemainingMs;
-  return Math.max(0, Math.min(1, elapsedMs / windowMs));
 }
 
 /**
@@ -211,7 +188,7 @@ function formatAccountBadge(
   }
 
   if (report.planType) {
-    badges.push(dim(`· ${report.planType}`));
+    badges.push(dim(`· ${report.planType.toLowerCase()}`));
   }
 
   if (report.resetCredits && report.resetCredits > 0) {
@@ -243,23 +220,17 @@ function formatBucketEntry(
   // Value buckets (balances, credits, coupons) carry no consumed fraction, so a
   // progress bar would always render as an untouched `100% · ready` window.
   // Show the amount as plain text instead.
-  if (bucket.displayMode === "value") {
-    const valueText = bucket.description || "—";
+  if (isValueBucket(bucket)) {
+    const valueText = balanceDisplayValue(bucket) || "—";
     const resetSuffix =
-      bucket.resetTime && Number.isFinite(Date.parse(bucket.resetTime)) && !valueText.includes("expires")
+      hasValidReset(bucket) && !valueText.includes("expires")
         ? ` · ${formatRelativeTime(bucket.resetTime, now)}`
         : "";
     const metric = dim(`${valueText}${resetSuffix}`);
     return { bar: "", metric, full: metric, visibleLen: visibleWidth(metric) };
   }
 
-  const timeElapsed = computeTimeElapsedFraction(
-    bucket.resetTime,
-    bucket.windowSeconds,
-    now,
-    // Fixed-period allocations advance even when no usage has occurred.
-    bucket.bucketId === "cloudflare-neurons" || bucket.bucketId === "ollama-cloud-included" || bucket.bucketId === "zro-free" ? undefined : bucket.usedFraction
-  );
+  const timeElapsed = bucketTimeElapsed(bucket, now);
   const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
 
   const freePct = Math.max(0, 100 - bucket.usedFraction * 100);
@@ -274,7 +245,7 @@ function formatBucketEntry(
   let detailStr = "";
   if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons" && bucket.bucketId !== "ollama-cloud-included" && bucket.bucketId !== "zro-free") {
     detailStr = "ready";
-  } else if (bucket.resetTime && Number.isFinite(Date.parse(bucket.resetTime))) {
+  } else if (hasValidReset(bucket)) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
   } else if (report.capacitySummary) {
     detailStr = report.capacitySummary;
@@ -334,7 +305,12 @@ function buildProviderLines(
           ? report.error
           : `Could not fetch usage: ${report.error}`;
       append(`      ${theme.fg("error", `⚠️  ${message}`)}`);
-    } else {
+      if (report.staleAt && Number.isFinite(Date.parse(report.staleAt))) {
+        const ageMinutes = Math.max(0, Math.floor((now - Date.parse(report.staleAt)) / 60_000));
+        append(`      ${dim(`Last successful data: ${ageMinutes}m ago`)}`);
+      }
+    }
+    if (!report.error || report.groups.length > 0) {
       if (report.quotaUnavailableReason) {
         append(`      ${dim(report.quotaUnavailableReason)}`);
         if (report.usageUrl) append(`      ${dim(`View usage: ${report.usageUrl}`)}`);
@@ -345,8 +321,7 @@ function buildProviderLines(
       } else if (accountBuckets.length > 0) {
         // Stable sorting keeps unknown-duration and value buckets in provider order.
         const sortedBuckets = [...accountBuckets].sort((a, b) => {
-          const duration = (bucket: typeof a) => bucket.displayMode === "value" ? 0 : quotaWindowSeconds(bucket.window, bucket.windowSeconds);
-          return duration(b) - duration(a);
+          return bucketDurationForOrdering(b) - bucketDurationForOrdering(a);
         });
         for (const bucket of sortedBuckets) {
           const label = truncateToWidth(bucket.displayName, labelWidth, "…");
