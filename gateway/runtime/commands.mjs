@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { buildCommitCardPayload, buildConversationSettingPayload } from "./components.mjs";
 import { replyEphemeral } from "./interactions.mjs";
-import { discordOptionLabel, startTyping } from "./messages.mjs";
+import { discordOptionLabel, splitMessage, startTyping } from "./messages.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 import { writePrivateJson } from "./persistence.mjs";
 import { getThreadSessionKey } from "./threads.mjs";
@@ -16,6 +16,9 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
   async function registerSlashCommands(readyClient) {
     try {
       const commands = [
+        new SlashCommandBuilder()
+          .setName("usage")
+          .setDescription("Privately view provider quotas across configured accounts"),
         new SlashCommandBuilder()
           .setName("sethome")
           .setDescription("Set the home channel for gateway notifications to this channel"),
@@ -59,7 +62,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       // Keep these as global commands only; registering both scopes makes Discord
       // display duplicate entries. Remove guild-scoped copies created by older versions,
       // while preserving any unrelated commands registered directly in those guilds.
-      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit", "stop", "steer"]);
+      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit", "stop", "steer", "usage"]);
       for (const guild of readyClient.guilds.cache.values()) {
         try {
           const guildCommands = await guild.commands.fetch();
@@ -136,6 +139,10 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
   }
 
   async function handleChatInputCommand(interaction) {
+    if (interaction.commandName === "usage") {
+      await lifecycle.trackTask(handleUsageCommand(interaction));
+      return;
+    }
     if (interaction.commandName === "steer") {
       await lifecycle.trackTask(handleSteerCommand(interaction));
       return;
@@ -235,6 +242,57 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       await interaction.reply({ content: confirmationText, allowedMentions: { parse: [] } });
     } catch (replyError) {
       log(`Failed to reply to /sethome command: ${safeErrorName(replyError)}`);
+    }
+  }
+
+  async function handleUsageCommand(interaction) {
+    if (lifecycle.isStopping()) {
+      await replyEphemeral(interaction, "The Discord gateway is restarting or stopping. Please try again when it is back online.");
+      return;
+    }
+    if (!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) {
+      await replyEphemeral(interaction, "You are not authorized to use this bot.");
+      return;
+    }
+    let sessionKey = getConversationSessionKey(interaction);
+    let withoutSession = false;
+    if (!sessionKey && interaction.guildId != null && config.allowServerMessages !== false && interaction.channelId) {
+      const channel = interaction.channel;
+      const allowedId = channel?.isThread?.() ? channel.parentId : interaction.channelId;
+      if (allowedId && (allowedChannels.has("*") || allowedChannels.has(allowedId))) {
+        sessionKey = "usage:global";
+        withoutSession = true;
+      }
+    }
+    if (!sessionKey) {
+      await replyEphemeral(interaction, "Use this command in an allowed channel or direct message.");
+      return;
+    }
+    await interaction.reply({ content: "Preparing usage report…", ephemeral: true });
+    try {
+      await sessions.enqueue(sessionKey, async () => {
+        const session = await sessions.get(sessionKey);
+        const available = await session.request("get_commands");
+        if (!available.success || !available.data?.commands?.some((command) => command.name === "discord-usage" && command.source === "extension")) {
+          await interaction.editReply("The usage extension is not loaded in this Pi session. Enable pi-enhanced and restart the gateway.");
+          return;
+        }
+        const privateNotifications = [];
+        await session.promptAndWait(withoutSession ? "/discord-usage no-session" : "/discord-usage", {
+          workflow: "usage", privateNotifications,
+          channelId: interaction.channelId, userId: interaction.user.id,
+        }, [], { extensionCommand: true });
+        const text = privateNotifications.join("\n") || "Could not retrieve the usage report.";
+        const chunks = splitMessage(text);
+        for (const [index, chunk] of chunks.entries()) {
+          const payload = { content: `\`\`\`\n${chunk.replaceAll("\`\`\`", "\`\`\u200b\`")}\n\`\`\``, allowedMentions: { parse: [] } };
+          if (index === 0) await interaction.editReply(payload);
+          else await interaction.followUp({ ...payload, ephemeral: true });
+        }
+      });
+    } catch (error) {
+      log(`Discord /usage failed: ${safeErrorName(error)}`);
+      await interaction.editReply("Could not load the usage report. Please try again.").catch(() => undefined);
     }
   }
 

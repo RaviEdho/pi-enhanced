@@ -216,6 +216,11 @@ export class SessionUi {
       return;
     }
     if (method === "notify") {
+      // Usage reports contain account details and must never reach the channel.
+      if (interaction?.workflow === "usage") {
+        if (request.message) interaction.privateNotifications.push(String(request.message));
+        return;
+      }
       if (interaction?.channel && request.message) {
         const notification = this.notificationPromise.then(async () => {
           const text = String(request.message);

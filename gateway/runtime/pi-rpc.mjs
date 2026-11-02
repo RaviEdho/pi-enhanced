@@ -286,7 +286,7 @@ export class PiRpcSession {
     // running also covers post-settlement cleanup and workspace replacement.
     // Only steer while the existing prompt still owns a settlement waiter;
     // otherwise Pi could leave the instruction queued for an unrelated run.
-    if (!this.running || !this.runWaiter || this.closed || this.stopping || this.replacingChild || this.interaction?.workflow === "commit") {
+    if (!this.running || !this.runWaiter || this.closed || this.stopping || this.replacingChild || ["commit", "usage"].includes(this.interaction?.workflow)) {
       return undefined;
     }
     this.lastUsedAt = Date.now();

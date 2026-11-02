@@ -86,6 +86,7 @@ callbacks where commands and lifecycle depend on each other.
   Treat interrupted prompts and commit workflows as cancellation, not provider
   failures or successful commits. Existing queued requests remain queued;
   completed filesystem/Git operations are not rolled back.
+- `/usage` queues the private `discord-usage` extension command in the conversation's Pi session and captures its UI notifications without posting them to the channel. It also accepts allowlisted server channels and their threads outside gateway conversations, using a separate shared usage session without active-session identity. Respect user and channel allowlists and DM/server access settings. Deliver every report chunk ephemerally to the requesting user; never log report contents or fall back to an agent prompt. The shared report collector supplies session-specific identity and quota semantics.
 - `/commit` sends the literal extension command through RPC after checking
   `get_commands`; never fall back to a natural-language prompt if it is missing.
   Use the conversation queue, a global run slot, and lifecycle task tracking.
