@@ -13,6 +13,16 @@ Preserve ticket references exactly. Write in the user's language.
 Do not use quotes, markdown, or trailing punctuation. Do not answer the request.`;
 const MAX_SOURCE_BYTES = 960;
 const TITLE_TIMEOUT_MS = 40_000;
+const CLOUDFLARE_NO_THINKING_MODELS = new Set([
+  "@cf/google/gemma-4-26b-a4b-it",
+  "@cf/qwen/qwen3-30b-a3b-fp8",
+  "@cf/qwen/qwen3.8-27b",
+  "@cf/zai-org/glm-4.7-flash",
+]);
+const CLOUDFLARE_GPT_OSS_MODELS = new Set([
+  "@cf/openai/gpt-oss-120b",
+  "@cf/openai/gpt-oss-20b",
+]);
 
 function extractUserText(message: { role: string; content?: unknown }): string {
   if (message.role !== "user") return "";
@@ -92,8 +102,10 @@ async function generateTitle(
   sessionId: string,
   prompt: string,
   isCurrentSession: (sessionId: string) => boolean
-): Promise<void> {
+): Promise<boolean> {
   try {
+    const cloudflare = model.provider === "cloudflare-workers-ai";
+    const disableCloudflareThinking = cloudflare && CLOUDFLARE_NO_THINKING_MODELS.has(model.id);
     // Ollama's OpenAI-compatible endpoint can ignore developer instructions for
     // some models, so send the title prompt as a system message instead.
     const titleModel = model.provider === "ollama-cloud"
@@ -116,7 +128,23 @@ async function generateTitle(
         // is not supported by their provider. Leave room for the actual title.
         maxTokens: model.provider === "ollama-cloud" && model.reasoning
           ? Math.min(model.maxTokens, 4096)
-          : 48,
+          : cloudflare && CLOUDFLARE_GPT_OSS_MODELS.has(model.id)
+            ? Math.min(model.maxTokens, 512)
+            : 48,
+        ...(disableCloudflareThinking ? {
+          onPayload: (payload: unknown) => {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+            const request = payload as Record<string, unknown>;
+            const existing = request.chat_template_kwargs;
+            return {
+              ...request,
+              chat_template_kwargs: {
+                ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+                enable_thinking: false,
+              },
+            };
+          },
+        } : {}),
         maxRetries: 0,
         reasoning: "off",
         timeoutMs: TITLE_TIMEOUT_MS,
@@ -126,11 +154,12 @@ async function generateTitle(
     if (
       result.stopReason === "error" ||
       result.stopReason === "aborted" ||
+      result.stopReason === "length" ||
       !EnhancedSettingsStore.getInstance().get("session.autoTitle") ||
       !isCurrentSession(sessionId) ||
       pi.getSessionName()?.trim()
     ) {
-      return;
+      return false;
     }
 
     const title = cleanTitle(
@@ -139,13 +168,16 @@ async function generateTitle(
         .map((part) => part.text)
         .join("\n")
     );
-    if (title) pi.setSessionName(title);
+    if (!title) return false;
+    pi.setSessionName(title);
+    return true;
   } catch {
     // Automatic titles are best-effort and should never interfere with the user's turn.
+    return false;
   }
 }
 
-/** Automatically names each unnamed session once, using its first textual user message. */
+/** Automatically names each unnamed session using its first textual user message. */
 export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
   const attemptedSessions = new Set<string>();
   let activeSessionId: string | undefined;
@@ -181,6 +213,10 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
     if (!prompt || !model) return;
 
     attemptedSessions.add(sessionId);
-    void generateTitle(pi, ctx, model, sessionId, prompt, (id) => activeSessionId === id);
+    void generateTitle(pi, ctx, model, sessionId, prompt, (id) => activeSessionId === id)
+      .then((success) => {
+        // Retry on a later user message after failures, but never overlap requests.
+        if (!success) attemptedSessions.delete(sessionId);
+      });
   });
 }
