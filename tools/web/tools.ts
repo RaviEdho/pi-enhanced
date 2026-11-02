@@ -5,8 +5,11 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { isWebActive } from "./index.js";
+import { FetchPipeline } from "./fetch/pipeline.js";
 import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
+import { formatSearchResponseForLLM } from "./formatter.js";
+import { isWebActive } from "./index.js";
+import { SearchPipeline } from "./pipeline.js";
 import type { SearchProviderId } from "./types.js";
 
 const WebSearchParametersSchema = Type.Object({
@@ -92,15 +95,12 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
         };
       }
 
-      const { SearchPipeline } = await import("./pipeline.js");
-      const { formatSearchResponseForLLM } = await import("./formatter.js");
-      const pipeline = SearchPipeline.getInstance();
-
-      if (params.provider) {
-        trackActiveProvider(toolCallId, params.provider);
-      }
-
       try {
+        const pipeline = SearchPipeline.getInstance();
+        if (params.provider) {
+          trackActiveProvider(toolCallId, params.provider);
+        }
+
         const { response, notes } = await pipeline.execute(
           {
             query: params.query,
@@ -252,14 +252,12 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
         };
       }
 
-      const { FetchPipeline } = await import("./fetch/pipeline.js");
-      const pipeline = FetchPipeline.getInstance();
-
-      if (params.provider) {
-        trackActiveFetchProvider(toolCallId, params.provider);
-      }
-
       try {
+        const pipeline = FetchPipeline.getInstance();
+        if (params.provider) {
+          trackActiveFetchProvider(toolCallId, params.provider);
+        }
+
         const response = await pipeline.execute(
           {
             url: params.url,
