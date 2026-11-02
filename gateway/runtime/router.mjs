@@ -81,6 +81,8 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         return;
       }
     }
+    // The thread starter belongs to the parent channel, so it cannot be a reply target inside the new thread.
+    const replyToMessageId = route.kind === "new-thread" ? undefined : message.id;
     const queuedRun = sessions.enqueue(sessionKey, async () => {
       const typing = startTyping(target);
       try {
@@ -88,7 +90,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           const replyContext = await loadDiscordReplyContext(message);
           const { images, skippedCount } = await loadDiscordImages(imageAttachments);
           if (!content && images.length === 0 && !isReply) {
-            await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.", message.id);
+            await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.", replyToMessageId);
             return undefined;
           }
           const messageContent = content || (isReply
@@ -102,7 +104,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           // Observe background title generation during the run, not just after it.
           threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
-            channel: target, userId: message.author.id, channelId: target.id, replyToMessageId: message.id, typing,
+            channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing,
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images);
           // Retry if the early watch expired before the title became available.
@@ -110,11 +112,11 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           return session.forceStopped ? "The agent run was cancelled." : result;
         });
         if (result === undefined) return;
-        if (result.trim()) await sendText(target, result, message.id);
-        else await sendText(target, "The agent finished without a text response.", message.id);
+        if (result.trim()) await sendText(target, result, replyToMessageId);
+        else await sendText(target, "The agent finished without a text response.", replyToMessageId);
       } catch (error) {
         log(`Pi run failed: ${safeErrorName(error)}`);
-        await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.", message.id);
+        await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.", replyToMessageId);
       } finally {
         typing.stop();
       }
