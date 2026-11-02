@@ -5,6 +5,7 @@ import { registerCommandCodeProvider } from "./commandcode/index.js";
 import { registerKenariProvider } from "./kenari/index.js";
 import { registerOllamaProvider } from "./ollama/index.js";
 import { registerCloudflareProvider } from "./cloudflare/index.js";
+import { refreshProviderCatalogs } from "./refresh.js";
 
 /**
  * Registers all custom inference providers and dynamic plan filters:
@@ -20,6 +21,9 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerOllamaProvider(pi);
   await registerCloudflareProvider(pi);
   await registerCodexFilter(pi);
+  pi.on("session_start", (_event, ctx) => {
+    refreshProviderCatalogs(ctx);
+  });
 }
 
 export { registerAntigravityProvider } from "./antigravity/index.js";

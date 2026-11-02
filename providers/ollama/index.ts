@@ -92,11 +92,6 @@ export async function registerOllamaProvider(pi: ExtensionAPI): Promise<void> {
     streamSimple: streams.streamSimple,
   };
   pi.registerProvider(provider);
-  pi.on("session_start", async (_event, ctx) => {
-    if (process.env.PI_OFFLINE === undefined) {
-      void ctx.modelRegistry.refresh({ allowNetwork: true, providers: [OLLAMA_PROVIDER_ID] }).catch(() => {});
-    }
-  });
 }
 
 export * from "./models.js";

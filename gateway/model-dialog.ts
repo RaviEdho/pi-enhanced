@@ -7,18 +7,20 @@ import { DialogFrame } from "../ux/dialog.js";
 export async function selectDiscordModel(
   ctx: ExtensionCommandContext,
   choices: SelectItem[],
-  currentValue: string
+  currentValue: string,
+  refresh?: Promise<void>
 ): Promise<string | undefined> {
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     try {
       return await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
-        new DiscordModelDialog(tui, theme, keybindings, choices, currentValue, done)
+        new DiscordModelDialog(tui, theme, keybindings, choices, currentValue, done, refresh)
       );
     } catch {
       // RPC clients and hosts without custom rendering use Pi's native selector.
     }
   }
 
+  if (refresh) ctx.ui.notify("Refreshing model catalogs in the background; reopen the picker to see updates.", "info");
   const selected = await ctx.ui.select(
     `Discord Default Model\nCurrent: ${currentValue || "Pi default"}\nUsed when gateway Pi sessions start.`,
     choices.map((choice) => choice.label)
@@ -34,6 +36,7 @@ export class DiscordModelDialog implements Component, Focusable {
   private filtered: SelectItem[] = [];
   private listSize = 1;
   private searching = false;
+  private refreshing: boolean;
 
   constructor(
     private readonly tui: TUI,
@@ -41,8 +44,14 @@ export class DiscordModelDialog implements Component, Focusable {
     private readonly keybindings: KeybindingsManager,
     private readonly choices: SelectItem[],
     private readonly currentValue: string,
-    private readonly onDone: (value: string | undefined) => void
+    private readonly onDone: (value: string | undefined) => void,
+    refresh?: Promise<void>
   ) {
+    this.refreshing = !!refresh;
+    if (refresh) void refresh.then(() => {
+      this.refreshing = false;
+      this.tui.requestRender();
+    });
     this.frame = new DialogFrame(tui, theme);
     this.input = new Input({
       placeholder: "Search models…",
@@ -151,7 +160,7 @@ export class DiscordModelDialog implements Component, Focusable {
     ];
     return this.frame.render(width, {
       title: "Discord Default Model",
-      metadata: `Current: ${this.currentValue || "Pi default"}`,
+      metadata: this.refreshing ? "Refreshing model catalogs…" : `Current: ${this.currentValue || "Pi default"}`,
       content: lines,
       hints,
       actions,

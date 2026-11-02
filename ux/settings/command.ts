@@ -3,6 +3,8 @@ import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
+import { refreshProviderCatalogs } from "../../providers/refresh.js";
+import { getAvailablePickerModels } from "../available-models.js";
 import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
@@ -127,7 +129,7 @@ export async function handleSettingsEnhancedCommand(
         store.set(key, COMMIT_MODEL_SESSION_VALUE as any);
       } else if (
         rawValue &&
-        ctx.modelRegistry.getAvailable().some((model) => `${model.provider}/${model.id}` === rawValue)
+        (await getAvailablePickerModels(ctx)).some((model) => `${model.provider}/${model.id}` === rawValue)
       ) {
         store.set(key, rawValue as any);
       } else {
@@ -205,8 +207,15 @@ export async function handleSettingsEnhancedCommand(
 
   // Default interactive / TUI mode
   if (ctx.hasUI && ctx.mode === "tui") {
+    refreshProviderCatalogs(ctx);
+    let availableModels: Awaited<ReturnType<typeof getAvailablePickerModels>> = [];
+    try {
+      availableModels = await getAvailablePickerModels(ctx);
+    } catch {
+      ctx.ui.notify("Could not load available models; model choices are unavailable.", "warning");
+    }
     await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-      return new EnhancedSettingsComponent(tui, theme, () => done(undefined), ctx);
+      return new EnhancedSettingsComponent(tui, theme, () => done(undefined), ctx, availableModels);
     });
     return;
   }

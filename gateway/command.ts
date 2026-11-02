@@ -13,6 +13,8 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { refreshProviderCatalogs } from "../providers/refresh.js";
+import { getAvailablePickerModels } from "../ux/available-models.js";
 import { DiscordConfirmationDialog, type DiscordConfirmationDialogOptions } from "./confirm-dialog.js";
 import { DiscordInputDialog } from "./input-dialog.js";
 import { selectDiscordModel } from "./model-dialog.js";
@@ -521,8 +523,9 @@ async function configureWorkspace(ctx: ExtensionCommandContext, config: DiscordG
 }
 
 async function configureDefaultModel(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const refresh = refreshProviderCatalogs(ctx);
   const currentValue = config.model ? `${config.model.provider}/${config.model.id}` : "";
-  const models = ctx.modelRegistry.getAvailable()
+  const models = (await getAvailablePickerModels(ctx))
     .map((model) => ({ value: `${model.provider}/${model.id}`, model }))
     .sort((a, b) => a.value.localeCompare(b.value));
   const choices = [
@@ -537,7 +540,7 @@ async function configureDefaultModel(ctx: ExtensionCommandContext, config: Disco
       description: model.name,
     })),
   ];
-  const selected = await selectDiscordModel(ctx, choices, currentValue);
+  const selected = await selectDiscordModel(ctx, choices, currentValue, refresh);
   if (selected === undefined) return;
   if (selected === currentValue) {
     notify(ctx, "Discord default model is unchanged.", "info");

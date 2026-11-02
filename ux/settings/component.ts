@@ -1,3 +1,4 @@
+import type { Model, Api } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -16,6 +17,7 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { refreshProviderCatalogs } from "../../providers/refresh.js";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/index.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
@@ -56,14 +58,15 @@ export class EnhancedSettingsComponent implements Component {
   private frame: DialogFrame;
   private focusSearch = true;
   private hasFocus = false;
-  private modelMenu?: { title: string; searchInput: Input; focusLine: number; details: string[]; detailKey: string };
+  private modelMenu?: { title: string; searchInput: Input; focusLine: number; details: string[]; detailKey: string; refreshing: boolean };
   private bodyIdentity?: string;
 
   constructor(
     tui: TUI,
     theme: any,
     onDone: () => void,
-    ctx?: ExtensionCommandContext
+    ctx?: ExtensionCommandContext,
+    availableModels: readonly Model<Api>[] = []
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -85,7 +88,6 @@ export class EnhancedSettingsComponent implements Component {
       },
     ];
     try {
-      const availableModels = this.ctx?.modelRegistry.getAvailable() ?? [];
       modelChoices.push(...availableModels
         .map((model) => ({
           value: `${model.provider}/${model.id}`,
@@ -160,7 +162,9 @@ export class EnhancedSettingsComponent implements Component {
           let selectList: SelectList;
           let focusSearch = false;
           let listRows = 0;
+          const refresh = this.ctx ? refreshProviderCatalogs(this.ctx) : undefined;
           const menu = {
+            refreshing: !!refresh,
             title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
             searchInput,
             focusLine: 0,
@@ -168,6 +172,10 @@ export class EnhancedSettingsComponent implements Component {
             detailKey: "",
           };
           this.modelMenu = menu;
+          if (refresh) void refresh.then(() => {
+            menu.refreshing = false;
+            if (this.modelMenu === menu) this.tui.requestRender();
+          });
           this.frame.resetScroll();
 
           const finish = (value?: string) => {
@@ -371,7 +379,7 @@ export class EnhancedSettingsComponent implements Component {
     const selectedRow = listLines.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
     return this.frame.render(width, {
       title: this.modelMenu?.title ?? "Enhanced Settings",
-      metadata: this.modelMenu ? "Enhanced Settings" : undefined,
+      metadata: this.modelMenu ? (this.modelMenu.refreshing ? "Refreshing model catalogs…" : "Enhanced Settings") : undefined,
       content: content.map((line) => `  ${line}`),
       actions: listLines.map((line) => `  ${line}`),
       hints: this.modelMenu
