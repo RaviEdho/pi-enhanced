@@ -45,7 +45,6 @@ export interface QuestionnaireResult {
  * - Instant typing on custom choice: simply arrow down to it and start typing immediately (no Enter required to start input).
  * - Preserving and visually marking previously answered choices (✔ selected) when returning to a question.
  * - Clean option labels without synthetic "Option 1:" prefixes.
- * - In-place editing and recap screen before submission.
  */
 export class QuestionnaireComponent implements Component, Focusable {
   public focused = false;
@@ -55,10 +54,8 @@ export class QuestionnaireComponent implements Component, Focusable {
   private theme: any;
   private onDone: (result: QuestionnaireResult | undefined) => void;
   private states: InternalQuestionState[];
-  private currentIndex: number; // 0..states.length - 1 (questions), or states.length (recap screen)
-  private recapChoiceIndex = 0; // 0 = Submit, 1 = Edit
+  private currentIndex: number;
   private allowCustom: boolean;
-  private showRecap: boolean;
 
   constructor(
     tui: TUI,
@@ -67,7 +64,6 @@ export class QuestionnaireComponent implements Component, Focusable {
     onDone: (result: QuestionnaireResult | undefined) => void,
     options?: {
       allowCustom?: boolean;
-      showRecap?: boolean;
     }
   ) {
     this.tui = tui;
@@ -75,13 +71,12 @@ export class QuestionnaireComponent implements Component, Focusable {
     this.frame = new DialogFrame(tui, theme);
     this.onDone = onDone;
     this.allowCustom = options?.allowCustom ?? true;
-    this.showRecap = options?.showRecap ?? true;
     this.currentIndex = 0;
 
     this.states = questions.map((item) => {
       const isChoiceMode = Array.isArray(item.choices) && item.choices.length > 0;
       const opts: string[] = isChoiceMode ? [...item.choices!] : [];
-      if (isChoiceMode && this.allowCustom) {
+      if (isChoiceMode && (item.allow_custom ?? this.allowCustom)) {
         opts.push(CUSTOM_CHOICE_LABEL);
       }
 
@@ -119,7 +114,7 @@ export class QuestionnaireComponent implements Component, Focusable {
   }
 
   private requestRender(): void {
-    // Controls have their own viewport; only question/recap changes reset the body.
+    // Controls have their own viewport; question changes reset the body.
     this.tui.requestRender();
   }
 
@@ -138,61 +133,7 @@ export class QuestionnaireComponent implements Component, Focusable {
     if (this.frame.handleInput(data)) return true;
 
     const total = this.states.length;
-    const isRecapScreen = this.currentIndex === total;
-
-    // 2. Recap Screen Input Handling
-    if (isRecapScreen) {
-      // Navigate back to previous question using Left Arrow or Shift-Tab
-      if (matchesKey(data, "left") || data === "\x1b[D" || data === "\x1b[Z") {
-        this.currentIndex = Math.max(0, total - 1);
-        this.syncHighlightedChoice(this.currentIndex);
-        this.requestRender();
-        return true;
-      }
-
-      // Up / Down to toggle between "Submit answers" and "Edit answers"
-      if (
-        matchesKey(data, "up") ||
-        matchesKey(data, "down") ||
-        data === "k" ||
-        data === "j" ||
-        data === "\t"
-      ) {
-        this.recapChoiceIndex = this.recapChoiceIndex === 0 ? 1 : 0;
-        this.requestRender();
-        return true;
-      }
-
-      // Enter on Recap screen
-      if (matchesKey(data, "enter") || data === "\r" || data === "\n") {
-        if (this.recapChoiceIndex === 0) {
-          // Submit answers!
-          const answers: SingleAnswerDetail[] = this.states.map((st) => ({
-            question: st.item.question,
-            response: st.answered ? (st.selectedText ?? "") : "(skipped / not answered)",
-            isChoice: st.isChoiceMode,
-            isCustom: st.isCustom,
-            cancelled: !st.answered,
-          }));
-
-          this.onDone({
-            answers,
-            cancelled: false,
-          });
-          return true;
-        } else {
-          // Edit answers: jump back to question 0
-          this.currentIndex = 0;
-          this.syncHighlightedChoice(this.currentIndex);
-          this.requestRender();
-          return true;
-        }
-      }
-
-      return true;
-    }
-
-    // 3. Question Form Input Handling
+    // Question Form Input Handling
     const st = this.states[this.currentIndex];
 
     // Branch A: Choice Mode
@@ -244,10 +185,6 @@ export class QuestionnaireComponent implements Component, Focusable {
             this.syncHighlightedChoice(this.currentIndex);
             this.requestRender();
             return true;
-          } else if (this.showRecap && this.currentIndex === total - 1) {
-            this.currentIndex = total;
-            this.requestRender();
-            return true;
           }
           return true;
         }
@@ -275,10 +212,6 @@ export class QuestionnaireComponent implements Component, Focusable {
         if (this.currentIndex < total - 1) {
           this.currentIndex++;
           this.syncHighlightedChoice(this.currentIndex);
-          this.requestRender();
-          return true;
-        } else if (this.showRecap && this.currentIndex === total - 1) {
-          this.currentIndex = total;
           this.requestRender();
           return true;
         }
@@ -359,10 +292,6 @@ export class QuestionnaireComponent implements Component, Focusable {
         this.syncHighlightedChoice(this.currentIndex);
         this.requestRender();
         return true;
-      } else if (this.showRecap && this.currentIndex === total - 1) {
-        this.currentIndex = total;
-        this.requestRender();
-        return true;
       }
       return true;
     }
@@ -379,19 +308,15 @@ export class QuestionnaireComponent implements Component, Focusable {
       this.currentIndex++;
       this.syncHighlightedChoice(this.currentIndex);
     } else {
-      if (this.showRecap) {
-        this.currentIndex = total;
-      } else {
-        const answers: SingleAnswerDetail[] = this.states.map((st) => ({
-          question: st.item.question,
-          response: st.answered ? (st.selectedText ?? "") : "(skipped)",
-          isChoice: st.isChoiceMode,
-          isCustom: st.isCustom,
-          cancelled: !st.answered,
-        }));
-        this.onDone({ answers, cancelled: false });
-        return;
-      }
+      const answers: SingleAnswerDetail[] = this.states.map((st) => ({
+        question: st.item.question,
+        response: st.answered ? (st.selectedText ?? "") : "(skipped)",
+        isChoice: st.isChoiceMode,
+        isCustom: st.isCustom,
+        cancelled: !st.answered,
+      }));
+      this.onDone({ answers, cancelled: false });
+      return;
     }
     this.requestRender();
   }
@@ -416,7 +341,6 @@ export class QuestionnaireComponent implements Component, Focusable {
     const lines: string[] = [];
     const actions: string[] = [];
     const total = this.states.length;
-    const isRecap = this.currentIndex === total;
     if (this.renderedIndex !== this.currentIndex) {
       this.frame.resetScroll();
       this.renderedIndex = this.currentIndex;
@@ -444,37 +368,11 @@ export class QuestionnaireComponent implements Component, Focusable {
           ? this.theme.fg("accent", this.theme.bold(`[ ${label} ]`))
           : this.theme.fg(st.answered ? "success" : "dim", label);
       });
-      if (this.showRecap) {
-        tabs.push(isRecap
-          ? this.theme.fg("accent", this.theme.bold("[ Review ]"))
-          : this.theme.fg("dim", "Review"));
-      }
       append(tabs.join("  "), "  ", (text) => text);
       lines.push("");
     }
 
-    if (isRecap) {
-      append("Review your responses:", "  ", (text) => this.theme.fg("accent", this.theme.bold(text)));
-      lines.push("");
-      for (let i = 0; i < total; i++) {
-        const st = this.states[i];
-        const prefix = `  ${i + 1}. `;
-        append(st.item.question, prefix, color("text"), " ".repeat(visibleWidth(prefix)));
-        const response = st.answered
-          ? `${st.isCustom ? this.theme.fg("warning", "[custom] ") : ""}${this.theme.fg("success", st.selectedText || "")}`
-          : this.theme.fg("dim", "(skipped / not answered)");
-        append(response, "     → ", (text) => text, "       ");
-      }
-      lines.push("");
-      append("Proceed with these responses?", "  ", color("muted"));
-      lines.push("");
-      ["Submit responses", "Edit answers"].forEach((option, index) => {
-        const selected = index === this.recapChoiceIndex;
-        if (selected) actionFocusLine = actions.length;
-        appendAction(option, selected ? this.theme.fg("accent", "  → ") : "    ",
-          selected ? (text) => this.theme.fg("accent", this.theme.bold(text)) : color("dim"), "    ");
-      });
-    } else {
+    {
       const st = this.states[this.currentIndex];
       append(st.item.question, "  ", (text) => this.theme.fg("accent", this.theme.bold(text)));
       lines.push("");
@@ -516,16 +414,16 @@ export class QuestionnaireComponent implements Component, Focusable {
       }
     }
 
-    const active = !isRecap ? this.states[this.currentIndex] : undefined;
+    const active = this.states[this.currentIndex];
     return this.frame.render(width, {
       title: "Ask User",
-      metadata: isRecap ? "Review" : `Question ${this.currentIndex + 1} of ${total}`,
+      metadata: `Question ${this.currentIndex + 1} of ${total}`,
       content: lines,
       actions,
       actionFocusLine,
       hints: [
         ...(total > 1 ? ["←/→ navigate questions"] : []),
-        ...(isRecap ? ["↑/↓ toggle"] : active?.isChoiceMode ? ["↑/↓ choose"] : []),
+        ...(active?.isChoiceMode ? ["↑/↓ choose"] : []),
         "Enter confirm",
         "Esc cancel",
       ],

@@ -25,8 +25,10 @@ export function createInteractionManager() {
         request: uiRequest.request,
         options: uiRequest.options,
         isAskUser: uiRequest.isAskUser,
-        isAskUserReview: uiRequest.isAskUserReview,
         isAskUserQuestion: uiRequest.isAskUserQuestion,
+        allowCustomAnswer: uiRequest.allowCustomAnswer,
+        askUserNavigation: uiRequest.askUserNavigation,
+        awaitingCustomAnswer: false,
         isCommit: uiRequest.isCommit,
         commitProposal: uiRequest.commitProposal,
         workspace: uiRequest.workspace,
@@ -54,7 +56,10 @@ export function createInteractionManager() {
         },
         accept(answer) {
           if (finished || pending.completing) return false;
-          const parsed = parseAnswer(String(answer ?? ""));
+          const text = String(answer ?? "");
+          const parsed = pending.awaitingCustomAnswer && text.trim()
+            ? { done: true, value: text.trim() }
+            : parseAnswer(text);
           if (!parsed.done) {
             void sendText(channel, "That response wasn't recognized. Please use the controls or reply with a valid answer.");
             return false;
@@ -74,14 +79,12 @@ export function createInteractionManager() {
           const deferAskUserCompletion = pending.isAskUser && value !== undefined;
           if (deferAskUserCompletion) session.pendingAskUserCompletion = { pending, value };
           if (value === undefined && session.askUserMessage === pending.promptMessage) session.askUserMessage = undefined;
-          resolve(value);
           if (updatePrompt && pending.promptMessage) {
-            const payload = deferAskUserCompletion
-              ? buildDiscordUiPayload(pending, undefined, undefined, true)
-              : buildDiscordUiPayload(pending, pending.completionStatus);
+            const payload = buildDiscordUiPayload(pending, pending.completionStatus);
             const edit = editPendingMessage(pending, payload);
             void edit.catch(() => undefined);
           }
+          resolve(value);
         },
       };
       const timer = setTimeout(() => pending.finish(undefined, { statusText: "This prompt expired." }), timeoutMs);
@@ -117,9 +120,7 @@ export function createInteractionManager() {
         if (uiRequest.isAskUser && (!finished || pending.result !== undefined)) session.askUserMessage = message;
         if (finished) {
           if (pending.result === undefined && session.askUserMessage === message) session.askUserMessage = undefined;
-          const completedPayload = pending.isAskUser && pending.result !== undefined
-            ? buildDiscordUiPayload(pending, undefined, undefined, true)
-            : buildDiscordUiPayload(pending, pending.completionStatus);
+          const completedPayload = buildDiscordUiPayload(pending, pending.completionStatus);
           const edit = editPendingMessage(pending, completedPayload);
           void edit.catch(() => undefined);
         }
@@ -197,7 +198,7 @@ export function createInteractionManager() {
       await replyEphemeral(interaction, "This is a read-only commit status card.");
       return;
     }
-    if (interaction.isButton?.() && pending.isCommit && pending.method === "select" && /^choose-\d+$/.test(action)) {
+    if (interaction.isButton?.() && (pending.isCommit || pending.isAskUser) && pending.method === "select" && /^choose-\d+$/.test(action)) {
       const selected = pending.options[Number(action.slice(7))];
       if (selected === undefined) {
         await replyEphemeral(interaction, "That action is no longer available.");
@@ -206,12 +207,61 @@ export function createInteractionManager() {
       await completeDiscordUiInteraction(pending, interaction, selected);
       return;
     }
-    if (interaction.isButton?.() && pending.isAskUserReview && ["review-submit", "review-edit"].includes(action)) {
-      await completeDiscordUiInteraction(pending, interaction, action === "review-submit" ? "Submit response" : "Edit answer");
+    if (interaction.isButton?.() && ["question-prev", "question-next"].includes(action)) {
+      const previous = action === "question-prev";
+      const token = previous ? pending.askUserNavigation?.previousToken : pending.askUserNavigation?.nextToken;
+      if (typeof token !== "string") {
+        await replyEphemeral(interaction, "That question is not available.");
+        return;
+      }
+      if (!pending.claim()) {
+        await replyEphemeral(interaction, "This prompt is no longer active.");
+        return;
+      }
+      try {
+        await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending, previous ? "Opening previous question." : "Opening next question."));
+        pending.finish(token, { updatePrompt: false });
+      } catch {
+        pending.finish(token);
+      }
+      return;
+    }
+    if (interaction.isButton?.() && action === "question-submit" && typeof pending.askUserNavigation?.submitToken === "string") {
+      const token = pending.askUserNavigation.submitToken;
+      if (!pending.claim()) {
+        await replyEphemeral(interaction, "This prompt is no longer active.");
+        return;
+      }
+      try {
+        await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending, "Response received.", token));
+        pending.finish(token, { updatePrompt: false });
+      } catch {
+        pending.finish(token);
+      }
+      return;
+    }
+    if (interaction.isButton?.() && action === "custom-saved" && pending.allowCustomAnswer && pending.askUserNavigation?.answer?.isCustom && typeof pending.askUserNavigation.answer.response === "string") {
+      const value = pending.askUserNavigation.answer.response;
+      if (!pending.claim()) {
+        await replyEphemeral(interaction, "This prompt is no longer active.");
+        return;
+      }
+      try {
+        await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending, "Response received.", value));
+        pending.finish(value, { updatePrompt: false });
+      } catch {
+        pending.finish(value);
+      }
+      return;
+    }
+    if (interaction.isButton?.() && action === "custom" && pending.isAskUserQuestion && pending.method === "select" && pending.allowCustomAnswer) {
+      pending.awaitingCustomAnswer = true;
+      await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending), true);
       return;
     }
     if (interaction.isButton?.() && ["prev", "next"].includes(action) && pending.method === "select") {
-      const pageCount = Math.ceil(pending.options.length / 25);
+      const pageSize = pending.isAskUser ? (pending.allowCustomAnswer ? 18 : 20) : 25;
+      const pageCount = Math.ceil(pending.options.length / pageSize);
       pending.page = action === "prev" ? Math.max(0, pending.page - 1) : Math.min(pageCount - 1, pending.page + 1);
       await updatePendingInteraction(pending, interaction, buildDiscordUiPayload(pending), true);
       return;
@@ -317,9 +367,7 @@ async function completeDiscordUiInteraction(pending, interaction, answer) {
   }
   const value = parsed.value ?? parsed.confirmed;
   try {
-    const payload = pending.isAskUser
-      ? buildDiscordUiPayload(pending, undefined, undefined, true)
-      : buildDiscordUiPayload(pending, "Response received.", value);
+    const payload = buildDiscordUiPayload(pending, "Response received.", value);
     await updatePendingInteraction(pending, interaction, payload);
     pending.finish(value, { updatePrompt: false });
   } catch {

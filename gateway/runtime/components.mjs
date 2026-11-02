@@ -14,6 +14,10 @@ import {
 } from "discord.js";
 import { truncateDiscordText, discordOptionLabel } from "./messages.mjs";
 
+export const ASK_USER_CUSTOM_GUIDE = "Select an option below, or reply with your answer";
+export const ASK_USER_CHOICES_GUIDE = "Select an option below, or reply with its number or exact text.";
+export const ASK_USER_INPUT_GUIDE = "Reply with your answer in chat.";
+
 export function buildCommitCardPayload(text, { title = "Git commit", workspace, rows = [], statusText, notifyType = "info" } = {}) {
   const color = notifyType === "error" ? 0xed4245 : notifyType === "warning" ? 0xfee75c : 0x5865f2;
   const container = new ContainerBuilder()
@@ -57,28 +61,19 @@ function buildCommitUiPayload(pending, statusText, responseValue, disableControl
 
 export function buildDiscordUiPayload(pending, statusText, responseValue = pending.result, disableControls = false) {
   if (pending.isCommit) return buildCommitUiPayload(pending, statusText, responseValue, disableControls);
-  const optionGuide = "Select an option below, or reply with its number or exact text.";
+  const optionGuide = [ASK_USER_CUSTOM_GUIDE, ASK_USER_CHOICES_GUIDE, ASK_USER_INPUT_GUIDE]
+    .find((guide) => pending.promptText.endsWith(`\n${guide}`));
   const hasDropdownGuide =
     pending.isAskUser &&
-    pending.method === "select" &&
-    !pending.isAskUserReview &&
-    pending.promptText.endsWith(`\n${optionGuide}`);
-  const reviewInstruction = "\n\nSubmit or choose an answer to edit.";
-  const hasReviewInstruction =
-    pending.isAskUserReview && pending.promptText.endsWith(reviewInstruction);
-  let promptContent = hasDropdownGuide
+    ["select", "input"].includes(pending.method) &&
+    optionGuide !== undefined;
+  const promptContent = hasDropdownGuide
     ? pending.promptText.slice(0, -(optionGuide.length + 1))
-    : statusText && hasReviewInstruction
-      ? pending.promptText.slice(0, -reviewInstruction.length)
-      : pending.promptText;
-  if (statusText === "Response received." && pending.isAskUserReview) {
-    const titleEnd = promptContent.indexOf("\n");
-    const title = titleEnd < 0 ? promptContent : promptContent.slice(0, titleEnd);
-    const body = titleEnd < 0 ? "" : promptContent.slice(titleEnd);
-    promptContent = `${title.replace(/ — (?:Review your responses|Response):$/, "")}${body}`;
-  }
+    : pending.promptText;
+  const summary = statusText === "Response received." && responseValue !== undefined && Array.isArray(pending.askUserNavigation?.summary)
+    ? pending.askUserNavigation.summary : undefined;
   const responseText =
-    statusText === "Response received." && pending.isAskUserQuestion && responseValue !== undefined
+    !summary && statusText === "Response received." && pending.isAskUserQuestion && responseValue !== undefined
       ? `\n\n**Your answer:**\n> ${truncateDiscordText(String(responseValue), 500).replace(/\r?\n/g, "\n> ")}`
       : "";
   const content = statusText ? `${promptContent}${responseText}\n\n${statusText}` : pending.promptText;
@@ -96,17 +91,8 @@ export function buildDiscordUiPayload(pending, statusText, responseValue = pendi
   const requestTitle = typeof pending.request?.title === "string" ? pending.request.title : "";
   const questionBreak = requestTitle.indexOf("\n");
   let cardText;
-  if (pending.isAskUserReview) {
-    const [reviewTitle, ...reviewLines] = cardContent.split("\n");
-    const formattedReviewLines = reviewLines.map((line) => {
-      const questionMatch = /^(\d+)\.\s+(.+)$/.exec(line);
-      if (questionMatch) return `### ${questionMatch[1]}. ${questionMatch[2]}`;
-      const answerMatch = /^\s+Answer:\s*(.*)$/.exec(line);
-      if (answerMatch) return `> **Answer:** ${answerMatch[1]}`;
-      if (line === "Submit or choose an answer to edit.") return `-# ${line}`;
-      return line;
-    });
-    cardText = `## ${reviewTitle}${formattedReviewLines.length ? `\n${formattedReviewLines.join("\n")}` : ""}`;
+  if (summary?.length) {
+    cardText = "## Ask User\n-# Response received.";
   } else if (
     requestTitle.startsWith("Ask User") &&
     questionBreak >= 0 &&
@@ -124,16 +110,32 @@ export function buildDiscordUiPayload(pending, statusText, responseValue = pendi
       ? `### ${firstLine}${remainingText ? `\n${remainingText}` : ""}`
       : cardContent;
   }
+  if (!statusText && pending.method === "input" && typeof pending.askUserNavigation?.answer?.response === "string") {
+    cardText += `\n\n**Previous answer:**\n> ${truncateDiscordText(pending.askUserNavigation.answer.response, 500).replace(/\r?\n/g, "\n> ")}`;
+  }
   const container = new ContainerBuilder()
     .setAccentColor(0x5865f2)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(cardText));
+
+  if (summary?.length) {
+    const lines = summary.slice(0, 6).map((item, index, items) => {
+      const question = truncateDiscordText(String(item?.question ?? "Question").replace(/\s+/g, " "), 150);
+      const answer = index === items.length - 1
+        ? (responseValue === pending.askUserNavigation?.submitToken ? "(skipped)" : responseValue)
+        : item?.response ?? "(skipped)";
+      return `**${index + 1}. ${question}**\n> ${truncateDiscordText(String(answer).replace(/\s+/g, " "), 300)}`;
+    });
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### Answers\n${lines.join("\n\n")}`));
+  }
 
   if (controls.length > 0) {
     container.addSeparatorComponents(
       new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small)
     );
     if (showDropdownGuide) {
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(optionGuide));
+      const guide = pending.awaitingCustomAnswer ? "Reply with your custom answer in chat." : optionGuide;
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${guide}`));
     }
     for (const control of controls) container.addActionRowComponents(control);
   }
@@ -162,19 +164,54 @@ export function buildDiscordUiComponents(pending, disabled = false) {
     buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Cancel").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
     return [new ActionRowBuilder().addComponents(buttons)];
   }
-  if (pending.isAskUserReview) {
-    return [new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`piui:${pending.token}:review-submit`)
-        .setLabel("Submit response")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(disabled),
-      new ButtonBuilder()
-        .setCustomId(`piui:${pending.token}:review-edit`)
-        .setLabel("Edit answer")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(disabled),
-    )];
+  if (pending.isAskUser && pending.method === "select") {
+    const pageSize = pending.allowCustomAnswer ? 18 : 20;
+    const pageCount = Math.ceil(pending.options.length / pageSize);
+    const pageStart = pending.page * pageSize;
+    const visibleOptions = pending.options.slice(pageStart, pageStart + pageSize);
+    const rows = [];
+    for (let start = 0; start < visibleOptions.length; start += 5) {
+      const buttons = visibleOptions.slice(start, start + 5).map((option, index) =>
+        new ButtonBuilder()
+          .setCustomId(`piui:${pending.token}:choose-${pageStart + start + index}`)
+          .setLabel(pending.askUserNavigation?.answer?.response === option && !pending.askUserNavigation.answer.isCustom
+            ? `${truncateDiscordText(discordOptionLabel(option), 69)} [SELECTED]`
+            : truncateDiscordText(discordOptionLabel(option), 80))
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(disabled));
+      rows.push(new ActionRowBuilder().addComponents(buttons));
+    }
+    if (pending.allowCustomAnswer) {
+      const addButton = (button) => {
+        const last = rows[rows.length - 1];
+        if (!last || last.components.length >= 5) rows.push(new ActionRowBuilder().addComponents(button));
+        else last.addComponents(button);
+      };
+      const saved = pending.askUserNavigation?.answer;
+      if (saved?.isCustom && typeof saved.response === "string" && saved.response.length > 0) {
+        addButton(new ButtonBuilder().setCustomId(`piui:${pending.token}:custom-saved`).setLabel(`${truncateDiscordText(discordOptionLabel(saved.response), 69)} [SELECTED]`).setStyle(ButtonStyle.Success).setDisabled(disabled));
+      }
+      addButton(new ButtonBuilder().setCustomId(`piui:${pending.token}:custom`).setLabel(saved?.isCustom ? "Another custom answer" : "Custom answer").setStyle(ButtonStyle.Success).setDisabled(disabled || pending.awaitingCustomAnswer));
+    }
+    const navigation = [];
+    if (typeof pending.askUserNavigation?.previousToken === "string") {
+      navigation.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-prev`).setLabel("« Previous question").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    }
+    if (typeof pending.askUserNavigation?.nextToken === "string") {
+      navigation.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-next`).setLabel("Next question »").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    }
+    if (typeof pending.askUserNavigation?.submitToken === "string") {
+      navigation.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-submit`).setLabel("Submit answers").setStyle(ButtonStyle.Success).setDisabled(disabled));
+    }
+    if (pageCount > 1) {
+      navigation.push(
+        new ButtonBuilder().setCustomId(`piui:${pending.token}:prev`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(disabled || pending.page === 0),
+        new ButtonBuilder().setCustomId(`piui:${pending.token}:next`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(disabled || pending.page >= pageCount - 1),
+      );
+    }
+    navigation.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    rows.push(new ActionRowBuilder().addComponents(navigation));
+    return rows;
   }
 
   if (pending.method === "select") {
@@ -221,6 +258,21 @@ export function buildDiscordUiComponents(pending, disabled = false) {
       new ButtonBuilder().setCustomId(`piui:${pending.token}:no`).setLabel("No").setStyle(ButtonStyle.Danger).setDisabled(disabled),
       new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
     )];
+  }
+
+  if (pending.isAskUser && pending.method === "input") {
+    const buttons = [];
+    if (typeof pending.askUserNavigation?.previousToken === "string") {
+      buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-prev`).setLabel("« Previous question").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    }
+    if (typeof pending.askUserNavigation?.nextToken === "string") {
+      buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-next`).setLabel("Next question »").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    }
+    if (typeof pending.askUserNavigation?.submitToken === "string") {
+      buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:question-submit`).setLabel("Submit answers").setStyle(ButtonStyle.Success).setDisabled(disabled));
+    }
+    buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    return [new ActionRowBuilder().addComponents(buttons)];
   }
 
   const buttonLabel = pending.method === "editor" ? "Open editor" : "Enter response";

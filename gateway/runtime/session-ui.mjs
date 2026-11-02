@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import { buildCommitCardPayload, buildDiscordUiPayload } from "./components.mjs";
+import { ASK_USER_CHOICES_GUIDE, ASK_USER_CUSTOM_GUIDE, ASK_USER_INPUT_GUIDE, buildCommitCardPayload, buildDiscordUiPayload } from "./components.mjs";
 import { log, safeErrorName } from "./logging.mjs";
 import { sendText, truncateDiscordText } from "./messages.mjs";
 
@@ -264,8 +264,18 @@ export class SessionUi {
     await this.flushNotifications();
     const key = `${interaction.channelId}:${interaction.userId}`;
     const isAskUser = typeof request.title === "string" && request.title.startsWith("Ask User");
-    const isAskUserReview = isAskUser && request.title.startsWith("Ask User\n\n");
-    const isAskUserQuestion = isAskUser && !isAskUserReview && request.title.includes("\n");
+    let askUserNavigation;
+    if (isAskUser) {
+      const match = /\n\u2063pi-ask-user:([A-Za-z0-9_-]+)$/.exec(request.title);
+      if (match) {
+        try {
+          const data = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
+          if (data && typeof data === "object") askUserNavigation = data;
+          request = { ...request, title: request.title.slice(0, match.index) };
+        } catch { /* Leave an invalid title unchanged. */ }
+      }
+    }
+    const isAskUserQuestion = isAskUser && request.title.includes("\n");
     if (isAskUser) {
       this.pendingAskUserCompletion = undefined;
     } else {
@@ -279,15 +289,17 @@ export class SessionUi {
     let promptText;
     let parseAnswer;
     let options = [];
+    let allowCustomAnswer = false;
     if (method === "select") {
       options = Array.isArray(request.options) ? request.options.map(String) : [];
+      const customChoiceLabel = "✎ Type custom answer...";
+      allowCustomAnswer = isAskUserQuestion && options.includes(customChoiceLabel);
+      if (allowCustomAnswer) options = options.filter((option) => option !== customChoiceLabel);
       if (options.length === 0) {
         this.sendUiResponse(request.id, { cancelled: true });
         return;
       }
-      promptText = isAskUserReview
-        ? request.title || "Review your responses"
-        : `${request.title || "Choose an option"}\n${isCommit ? "Choose an action below, or reply with its number or exact text." : "Select an option below, or reply with its number or exact text."}`;
+      promptText = `${request.title || "Choose an option"}\n${isAskUser ? (allowCustomAnswer ? ASK_USER_CUSTOM_GUIDE : ASK_USER_CHOICES_GUIDE) : isCommit ? "Choose an action below, or reply with its number or exact text." : "Select an option below, or reply with its number or exact text."}`;
       parseAnswer = (answer) => {
         const normalized = answer.trim();
         const selectedIndex = Number.parseInt(normalized, 10) - 1;
@@ -295,7 +307,8 @@ export class SessionUi {
           return { done: true, value: options[selectedIndex] };
         }
         const exact = options.find((option) => option.toLowerCase() === normalized.toLowerCase());
-        return exact ? { done: true, value: exact } : { done: false };
+        if (exact) return { done: true, value: exact };
+        return allowCustomAnswer && normalized ? { done: true, value: normalized } : { done: false };
       };
     } else if (method === "confirm") {
       promptText = `${request.title || "Confirm"}\n${request.message || "Choose yes or no below."}`;
@@ -309,7 +322,7 @@ export class SessionUi {
       const title = request.title || (method === "editor" ? "Edit text" : "Your response");
       const prefill = method === "editor" && typeof request.prefill === "string" ? request.prefill : "";
       const placeholder = typeof request.placeholder === "string" ? request.placeholder : "";
-      promptText = `${title}${placeholder ? `\n${placeholder}` : ""}\n${method === "editor" ? "Open the editor below to enter your response." : "Open the input below to enter your response."}`;
+      promptText = `${title}${placeholder ? `\n${placeholder}` : ""}\n${isAskUser && method === "input" ? ASK_USER_INPUT_GUIDE : method === "editor" ? "Open the editor below to enter your response." : "Open the input below to enter your response."}`;
       if (prefill) promptText += `\n\nCurrent text:\n${isCommit ? prefill : truncateDiscordText(prefill, 900)}`;
       if (isCommit && prefill.length > 4000) {
         promptText += "\n\nThis plan exceeds Discord's 4000-character editor limit. Editing is disabled to avoid losing commits. Dismiss and rerun /commit with a narrower scope.";
@@ -325,7 +338,7 @@ export class SessionUi {
     let answer;
     try {
       answer = await this.waitForDiscordAnswer(key, interaction.channel, promptText, parseAnswer, timeoutMs, this, {
-        method, request, options, isAskUser, isAskUserReview, isAskUserQuestion,
+        method, request, options, isAskUser, isAskUserQuestion, allowCustomAnswer, askUserNavigation,
         isCommit, commitProposal, workspace: this.session.cwd,
       });
     } finally {

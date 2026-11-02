@@ -19,6 +19,12 @@ export const QuestionItemSchema = Type.Object({
         "Optional placeholder text for the text input box when choices are not provided or when typing a custom response.",
     })
   ),
+  allow_custom: Type.Optional(
+    Type.Boolean({
+      description:
+        "For this question's choices, allow a custom answer. Overrides the top-level allow_custom setting; defaults to that setting or true.",
+    })
+  ),
 });
 
 export type QuestionItem = Static<typeof QuestionItemSchema>;
@@ -54,13 +60,7 @@ export const AskUserParametersSchema = Type.Object({
   allow_custom: Type.Optional(
     Type.Boolean({
       description:
-        "When choices are provided, whether to include a '✎ Type custom answer...' option allowing the user to type their own response if none of the options fit (default: true).",
-    })
-  ),
-  recap: Type.Optional(
-    Type.Boolean({
-      description:
-        "Whether to display a review/recap screen summarizing all answers before final submission (default: true).",
+        "Default for whether choice questions allow custom answers (default: true). A question's allow_custom overrides this setting.",
     })
   ),
   timeout_seconds: Type.Optional(

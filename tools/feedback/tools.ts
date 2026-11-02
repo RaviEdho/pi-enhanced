@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { Text } from "@earendil-works/pi-tui";
 import { QuestionnaireComponent, type QuestionnaireResult } from "./component.js";
 import { isFeedbackToolActive } from "./index.js";
@@ -19,7 +20,6 @@ const CUSTOM_CHOICE_LABEL = "✎ Type custom answer...";
  * 2. Single structured decisions via choice selector (`ctx.ui.select`).
  * 3. Multiple sequential questions with Left/Right arrow navigation (without answering) and Enter to confirm.
  * 4. Preserves and marks original selection (✔ selected) when returning to a question.
- * 5. Pre-submission recap screen summarizing all responses with confirmation/edit options.
  */
 export function createAskUserToolDefinition(): ToolDefinition<
   typeof AskUserParametersSchema,
@@ -29,13 +29,13 @@ export function createAskUserToolDefinition(): ToolDefinition<
     name: "ask_user",
     label: "Ask User",
     description:
-      "Ask the user for feedback, clarification, or decisions. Keep each displayed question short and direct; include only the question, with no reasoning, rationale, or preamble. Pauses execution and prompts through Pi's interactive TUI or a supported RPC dialog client. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Reviews responses before submitting.",
+      "Ask the user for feedback, clarification, or decisions. Keep each displayed question short and direct; include only the question, with no reasoning, rationale, or preamble. Pauses execution and prompts through Pi's interactive TUI or a supported RPC dialog client. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Answers are submitted without a review screen.",
     promptSnippet: "ask_user(question?, choices?, questions?): Prompt user for feedback, 3 choices, or multiple questions",
     promptGuidelines: [
       "Use 'ask_user' when you need information, preferences, clarification, or architectural direction before proceeding.",
       "Keep each question short, direct, and focused on what the user needs to answer. Put only the question in the displayed question text—do not include your reasoning, rationale, analysis, or a preamble. Include only essential context when needed.",
       "To ask a single question, provide 'question'. For trade-offs or design choices, provide 'choices' with 3 distinct options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']). Do NOT prefix with 'Option 1:' or 'Option 2:'.",
-      "To ask multiple questions in one go without back-and-forth turns, provide 'questions' with an array of questions (each with its own question text, optional choices, and placeholder).",
+      "To ask multiple questions in one go without back-and-forth turns, provide 'questions' with an array of questions (each with its own question text, optional choices, placeholder, and allow_custom override).",
       "Do not invent synthetic [Cancel] or [Back] options in choices; the user can dismiss via Esc at any time.",
     ],
     exposure: "model-only",
@@ -102,7 +102,6 @@ export function createAskUserToolDefinition(): ToolDefinition<
       }
 
       const total = normalizedQuestions.length;
-      const shouldRecap = params.recap !== false;
 
       // 3. Primary: Dedicated interactive questionnaire component with Left/Right navigation
       if (ctx.mode === "tui" && typeof (ctx.ui as any)?.custom === "function") {
@@ -116,7 +115,6 @@ export function createAskUserToolDefinition(): ToolDefinition<
 
               return new QuestionnaireComponent(tui, theme, normalizedQuestions, done, {
                 allowCustom: params.allow_custom ?? true,
-                showRecap: shouldRecap,
               });
             }
           );
@@ -196,23 +194,46 @@ export function createAskUserToolDefinition(): ToolDefinition<
 
       // 4. Fallback: Sequential ctx.ui.select / ctx.ui.input flow
       const answers: SingleAnswerDetail[] = [];
+      const discordNavigation = process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD === "1" && total > 1;
+      const previousToken = `pi-ask-user-previous:${randomUUID()}`;
+      const nextToken = `pi-ask-user-next:${randomUUID()}`;
+      const submitToken = `pi-ask-user-submit:${randomUUID()}`;
       const opts: { signal?: AbortSignal; timeout?: number } = {};
       if (signal) opts.signal = signal;
       if (params.timeout_seconds && params.timeout_seconds > 0) {
         opts.timeout = Math.round(params.timeout_seconds * 1000);
       }
 
-      const askQuestion = async (index: number): Promise<SingleAnswerDetail | undefined> => {
+      const askQuestion = async (index: number): Promise<SingleAnswerDetail | "previous" | "next" | "submit" | undefined> => {
         if (signal?.aborted) return undefined;
         const item = normalizedQuestions[index];
         const stepPrefix = total > 1 ? ` [${index + 1}/${total}]` : "";
-        const promptTitle = `Ask User${stepPrefix}\n${item.question}`;
+        const navigation = discordNavigation ? {
+          previousToken: index > 0 ? previousToken : undefined,
+          nextToken: index < total - 1 ? nextToken : undefined,
+          submitToken: index === total - 1 ? submitToken : undefined,
+          answer: answers[index] && !answers[index].cancelled
+            ? { response: answers[index].response, isCustom: answers[index].isCustom }
+            : undefined,
+          summary: index === total - 1
+            ? normalizedQuestions.map((question, i) => ({
+                question: question.question,
+                ...(i < index ? { response: answers[i]?.response ?? "(skipped)" } : {}),
+              }))
+            : undefined,
+        } : undefined;
+        const metadata = navigation ? `\n\u2063pi-ask-user:${Buffer.from(JSON.stringify(navigation)).toString("base64url")}` : "";
+        const promptTitle = `Ask User${stepPrefix}\n${item.question}${metadata}`;
 
         if (Array.isArray(item.choices) && item.choices.length > 0) {
           const options = [...item.choices];
-          if (params.allow_custom ?? true) options.push(CUSTOM_CHOICE_LABEL);
+          const allowCustom = item.allow_custom ?? params.allow_custom ?? true;
+          if (allowCustom) options.push(CUSTOM_CHOICE_LABEL);
           const selected = await ctx.ui.select(promptTitle, options, opts);
           if (selected === undefined) return undefined;
+          if (discordNavigation && selected === previousToken) return "previous";
+          if (discordNavigation && selected === nextToken) return "next";
+          if (discordNavigation && selected === submitToken) return "submit";
 
           if (selected === CUSTOM_CHOICE_LABEL) {
             const custom = await ctx.ui.input(promptTitle, item.placeholder || "Enter your custom choice...", opts);
@@ -226,17 +247,22 @@ export function createAskUserToolDefinition(): ToolDefinition<
             };
           }
 
+          // RPC clients may return a directly entered custom answer from select.
+          const isCustom = allowCustom && !item.choices.includes(selected);
           return {
             question: item.question,
             response: selected,
             isChoice: true,
-            isCustom: false,
+            isCustom,
             cancelled: false,
           };
         }
 
         const answer = await ctx.ui.input(promptTitle, item.placeholder, opts);
         if (answer === undefined) return undefined;
+        if (discordNavigation && answer === previousToken) return "previous";
+        if (discordNavigation && answer === nextToken) return "next";
+        if (discordNavigation && answer === submitToken) return "submit";
         return {
           question: item.question,
           response: answer.trim() || "(Empty response)",
@@ -246,62 +272,37 @@ export function createAskUserToolDefinition(): ToolDefinition<
         };
       };
 
-      for (let i = 0; i < total; i++) {
-        const answer = await askQuestion(i);
-        if (!answer) break;
-        answers.push(answer);
-      }
-
-      if (answers.length === total && shouldRecap) {
-        while (true) {
-          const reviewLines: string[] = [];
-          for (let i = 0; i < answers.length; i++) {
-            const answer = answers[i];
-            reviewLines.push(`${i + 1}. ${answer.question}`);
-            reviewLines.push(`   Answer: ${answer.response || ""}`);
-          }
-          let reviewText = reviewLines.join("\n");
-          if (reviewText.length > 1500) reviewText = `${reviewText.slice(0, 1497)}…`;
-
-          const reviewTitle = "Ask User";
-          const action = await ctx.ui.select(
-            `${reviewTitle}\n\n${reviewText}\n\nSubmit or choose an answer to edit.`,
-            ["Submit response", "Edit answer"],
-            opts
-          );
-          if (action === "Submit response") break;
-          if (action !== "Edit answer") {
-            return {
-              content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
-              details: { answers: [], cancelled: true },
-            };
-          }
-
-          let editIndex = 0;
-          if (total > 1) {
-            const editOptions = answers.map((answer, index) => `${index + 1}. ${answer.question}`);
-            const selectedQuestion = await ctx.ui.select("Ask User — Choose an answer to edit:", editOptions, opts);
-            editIndex = editOptions.indexOf(selectedQuestion || "");
-            if (editIndex < 0) {
-              return {
-                content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
-                details: { answers: [], cancelled: true },
-              };
-            }
-          }
-
-          const revisedAnswer = await askQuestion(editIndex);
-          if (!revisedAnswer) {
-            return {
-              content: [{ type: "text", text: "The user dismissed/cancelled the questions without submitting answers." }],
-              details: { answers: [], cancelled: true },
-            };
-          }
-          answers[editIndex] = revisedAnswer;
+      let index = 0;
+      let latestIndex = 0;
+      let dismissed = false;
+      while (index < total) {
+        const answer = await askQuestion(index);
+        if (!answer) { dismissed = true; break; }
+        if (answer === "previous") {
+          index = Math.max(0, index - 1);
+          continue;
         }
+        if (answer === "next" || answer === "submit") {
+          if (!answers[index]) {
+            answers[index] = {
+              question: normalizedQuestions[index].question,
+              response: "(skipped)",
+              isChoice: Boolean(normalizedQuestions[index].choices?.length),
+              isCustom: false,
+              cancelled: true,
+            };
+          }
+          if (answer === "submit") break;
+          index = Math.min(total - 1, index + 1);
+          latestIndex = Math.max(latestIndex, index);
+          continue;
+        }
+        answers[index] = answer;
+        if (index < latestIndex) index = latestIndex;
+        else index = ++latestIndex;
       }
 
-      if (answers.length === 0) {
+      if (dismissed || answers.length === 0) {
         return {
           content: [
             {
@@ -321,7 +322,7 @@ export function createAskUserToolDefinition(): ToolDefinition<
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { answers, cancelled: answers.length < total },
+        details: { answers, cancelled: false },
       };
     },
     renderCall(args, theme, context) {
