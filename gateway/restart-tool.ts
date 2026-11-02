@@ -17,7 +17,7 @@ export function createDiscordGatewayRestartTool(): ToolDefinition<typeof Restart
     name: "discord_gateway_restart",
     label: "Restart Discord gateway",
     description:
-      "Request a graceful restart of the Discord gateway after code changes. The gateway waits until this Discord reply is sent and accepted messages finish, then restarts from the updated code. Conversation history is preserved on disk and resumes on the next message. Only use after edits and verification are complete; this does not restart a local foreground Pi session.",
+      "After making code changes in a Discord session, request a graceful Discord gateway restart once edits and verification are complete. The gateway waits until this Discord reply is sent and accepted messages finish, then restarts from the updated code. Conversation history is preserved on disk and resumes on the next message. This restarts the shared gateway, not a local foreground Pi session.",
     parameters: RestartParametersSchema,
     async execute(_toolCallId, params) {
       if (process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD !== "1") {
