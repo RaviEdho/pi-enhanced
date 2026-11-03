@@ -4,7 +4,6 @@ import { registerCodexFilter } from "./codex/index.js";
 import { registerCommandCodeProvider } from "./commandcode/index.js";
 import { registerKenariProvider } from "./kenari/index.js";
 import { registerOllamaProvider } from "./ollama/index.js";
-import { registerCloudflareProvider } from "./cloudflare/index.js";
 import { refreshProviderCatalogs } from "./refresh.js";
 
 /**
@@ -19,7 +18,6 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerCommandCodeProvider(pi);
   await registerKenariProvider(pi);
   await registerOllamaProvider(pi);
-  await registerCloudflareProvider(pi);
   await registerCodexFilter(pi);
   pi.on("session_start", (_event, ctx) => {
     refreshProviderCatalogs(ctx);
@@ -31,4 +29,3 @@ export { registerCodexFilter } from "./codex/index.js";
 export { registerCommandCodeProvider } from "./commandcode/index.js";
 export { registerKenariProvider } from "./kenari/index.js";
 export { registerOllamaProvider } from "./ollama/index.js";
-export { registerCloudflareProvider } from "./cloudflare/index.js";

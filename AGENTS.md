@@ -6,7 +6,7 @@ Guidance for AI agents working in `pi-enhanced`, a Pi extension suite. See `READ
 
 - `index.ts`, `package.json`: root extension entry point and Pi package manifest.
 - `accounts/`: credential store, multi-account balancing, failover, quota repository, and health evaluation.
-- `providers/`: inference providers and model discovery, including Antigravity, Codex, Command Code, Kenari, Cloudflare, and Ollama.
+- `providers/`: inference providers and model discovery, including Antigravity, Codex, Command Code, Kenari, and Ollama.
 - `tools/`: autonomous Git workflows, output compression, Scout search, web search/fetch, subagents, and interactive feedback.
 - `ux/`: context viewer, continuation shortcut, plan mode, settings, telemetry, and usage displays.
 - `ux/usage/`: provider report adapters, `/usage`, footer, identity resolution, bucket semantics, timing, and window labels.

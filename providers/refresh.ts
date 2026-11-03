@@ -5,7 +5,6 @@ const PROVIDERS = [
   "commandcode",
   "kenari",
   "openai-codex",
-  "cloudflare-workers-ai",
   "ollama-cloud",
 ];
 

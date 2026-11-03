@@ -23,7 +23,6 @@ import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
-import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
 import type { ProviderUsageReport, SessionUsageInfo } from "./types.js";
 
@@ -517,11 +516,6 @@ export async function collectUsageReports(
     ).then(report => ({ ...report, isSessionAccount: isOllamaActive })));
   }
 
-  const cloudflare = getCloudflareConnection();
-  const cloudflarePromises = cloudflare && !signal?.aborted ? [QuotaManager.getInstance().refreshReport(
-    cloudflareCacheKey(cloudflare), () => fetchCloudflareUsage(cloudflare), 0,
-  ).then(report => ({ ...report, accountEmail: report.accountEmail || cloudflare.accountId.trim(), isSessionAccount: options?.currentProvider === "cloudflare-workers-ai" }))] : [];
-
   // Await all provider account queries concurrently
   const settled = await Promise.allSettled([
     ...antigravityPromises,
@@ -529,7 +523,6 @@ export async function collectUsageReports(
     ...commandcodePromises,
     ...kenariPromises,
     ...ollamaPromises,
-    ...cloudflarePromises,
   ]);
   for (const s of settled) {
     if (s.status === "fulfilled") {

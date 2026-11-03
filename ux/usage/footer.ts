@@ -10,7 +10,6 @@ import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balan
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
-import { cloudflareCacheKey, fetchCloudflareUsage, getCloudflareConnection } from "./cloudflare.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
@@ -228,13 +227,6 @@ function buildUsageBar(ctx: ExtensionContext): string {
   const model = ctx.model;
   if (!model) return "";
 
-  if (model.provider === "cloudflare-workers-ai") {
-    const connection = getCloudflareConnection();
-    if (!connection) return "";
-    const report = QuotaManager.getInstance().getReport(cloudflareCacheKey(connection));
-    const identity = report?.accountEmail || connection.accountId.trim();
-    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme) : `${identity}  ···`;
-  }
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
   const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
@@ -457,12 +449,6 @@ const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is a
 const TOOL_CALL_THROTTLE_MS = 15 * 1000; // Throttle tool call quota checks to once every 15s
 const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every 2 minutes
 
-async function refreshCloudflare(): Promise<void> {
-  const connection = getCloudflareConnection();
-  if (!connection) return;
-  await QuotaManager.getInstance().refreshReport(cloudflareCacheKey(connection), () => fetchCloudflareUsage(connection));
-}
-
 async function refreshOllamaFallback(): Promise<void> {
   const auth = getOllamaFallbackAuth();
   if (!auth) return;
@@ -487,7 +473,6 @@ async function refreshCandidateAccounts(
     return;
   }
   if (!model) return;
-  if (model.provider === "cloudflare-workers-ai") return refreshCloudflare();
 
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
@@ -534,7 +519,6 @@ async function refreshSessionAccountQuota(
     return;
   }
   if (!model) return;
-  if (model.provider === "cloudflare-workers-ai") return refreshCloudflare();
 
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();

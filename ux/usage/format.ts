@@ -243,7 +243,7 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0 && bucket.bucketId !== "cloudflare-neurons" && bucket.bucketId !== "ollama-cloud-included") {
+  if (bucket.usedFraction <= 0 && bucket.bucketId !== "ollama-cloud-included") {
     detailStr = "ready";
   } else if (hasValidReset(bucket)) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
