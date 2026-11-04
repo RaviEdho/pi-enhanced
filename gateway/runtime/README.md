@@ -50,7 +50,10 @@ callbacks where commands and lifecycle depend on each other.
   hashed session directory, history, workspace, model, and thinking level without
   copying or merging files. Registrations without a starter use a thread-only key.
   Other participants' old sessions stay untouched; do not backfill Discord history.
-  DMs keep their existing per-channel/user keys. All participants still require
+  DMs keep their existing per-channel/user keys. `/model` in an allowed non-thread server
+  channel instead saves the gateway-wide default for new conversations; its catalog
+  session is separate, and existing conversation settings must remain unchanged.
+  Recheck saved user/channel authorization when applying the default. All participants still require
   allowlist authorization; prompt/picker/approval ownership stays with the initiator.
 - Label every incoming message with its author username and stable user ID. The
   appended system prompt distinguishes participants, attributes preferences and

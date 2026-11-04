@@ -2,9 +2,13 @@ import { stripVTControlCharacters } from "node:util";
 import { ASK_USER_CHOICES_GUIDE, ASK_USER_CUSTOM_GUIDE, ASK_USER_INPUT_GUIDE, buildCommitCardPayload, buildDiscordUiPayload } from "./components.mjs";
 import { log, safeErrorName } from "./logging.mjs";
 import { sendText, truncateDiscordText } from "./messages.mjs";
+import { listChannels } from "./history.mjs";
+import { safeChannelName, toolActivity, workspaceDetail } from "./tool-activity.mjs";
 
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const COMMIT_PROGRESS_INTERVAL_MS = 2000;
+const TOOL_ACTIVITY_BATCH_MS = 5000;
+const TOOL_ACTIVITY_PAGE_LIMIT = 1900;
 
 export function queueAskUserMessageEdit(session, message, payload) {
   const edit = (session.askUserMessageEditPromise || Promise.resolve())
@@ -26,6 +30,10 @@ export class SessionUi {
     this.pendingAskUserCompletion = undefined;
     this.statusMessages = new Map();
     this.statusUpdatePromise = Promise.resolve();
+    this.toolActivityPromise = Promise.resolve();
+    this.toolActivityQueue = [];
+    this.toolActivityPages = [];
+    this.toolActivityTimer = undefined;
     this.statusEpoch = 0;
     this.closed = false;
     this.resetPrompt();
@@ -195,11 +203,111 @@ export class SessionUi {
 
   async notifyWorkspaceChanged(previousCwd, cwd) {
     if (this.closed || previousCwd === cwd || !this.interaction?.channel) return;
-    await sendText(this.interaction.channel, [
-      "Workspace changed:",
-      `From: ${JSON.stringify(previousCwd)}`,
-      `To: ${JSON.stringify(cwd)}`,
-    ].join("\n"), this.interaction.replyToMessageId);
+    await sendText(this.interaction.channel, `-# Workspace changed: ${workspaceDetail(previousCwd)} → ${workspaceDetail(cwd)}`);
+  }
+
+  queueAssistantNarration(message) {
+    const interaction = this.interaction;
+    if (this.closed || (this.session.config?.toolCallVerbosity ?? "full") !== "full" ||
+        !interaction?.channel || ["commit", "usage"].includes(interaction.workflow) ||
+        message?.role !== "assistant" || ["error", "aborted"].includes(message.stopReason) ||
+        !Array.isArray(message.content) || !message.content.some((block) => block?.type === "toolCall")) return undefined;
+    // Only normal assistant text is public narration; never forward thinking blocks.
+    const text = message.content.filter((block) => block?.type === "text" && typeof block.text === "string")
+      .map((block) => block.text).join("").trim();
+    if (!text) return undefined;
+    // Preserve the ordering of already buffered activity and narration.
+    this.sendToolActivityBatch();
+    const delivery = this.toolActivityPromise.then(async () => {
+      await sendText(interaction.channel, text);
+      return true;
+    }).catch((error) => {
+      log(`Could not send assistant narration: ${safeErrorName(error)}`);
+      return false;
+    });
+    this.toolActivityPromise = delivery.then(() => undefined);
+    return { text, delivery };
+  }
+
+  queueToolActivity(record) {
+    const interaction = this.interaction;
+    if (this.closed || this.session.config?.toolCallVerbosity === "none" || !interaction?.channel || ["commit", "usage"].includes(interaction.workflow)) return;
+    if (record.toolName === "set_working_directory" && record.type !== "tool_execution_end") return;
+    if (record.type === "tool_execution_end" && !record.isError) return;
+    this.toolActivityQueue.push({ record, interaction });
+    if (!this.toolActivityTimer) {
+      this.toolActivityTimer = setTimeout(() => {
+        this.toolActivityTimer = undefined;
+        this.sendToolActivityBatch();
+      }, TOOL_ACTIVITY_BATCH_MS);
+      this.toolActivityTimer.unref?.();
+    }
+  }
+
+  resetToolActivity() {
+    // The previous run has been flushed before its interaction is released.
+    this.toolActivityPages = [];
+  }
+
+  sendToolActivityBatch() {
+    if (this.toolActivityTimer) clearTimeout(this.toolActivityTimer);
+    this.toolActivityTimer = undefined;
+    const batch = this.toolActivityQueue.splice(0);
+    const operation = this.toolActivityPromise.then(async () => {
+      const lines = [];
+      for (const { record, interaction } of batch) {
+        let text;
+        if (record.type === "tool_execution_end") {
+          text = record.toolName === "set_working_directory" ? "Workspace switch failed" : "Tool call failed";
+          const label = toolActivity(record.toolName);
+          if (label) text = `${label} — failed`;
+        } else {
+          let channelName;
+          if (record.toolName === "discord_channel_history" && interaction.historyScope?.kind === "thread") {
+            try {
+              // Reuse discovery's authorization checks rather than revealing names
+              // from the bot's wider channel cache to a shared thread.
+              const channels = await listChannels({ ...this.session.historyOptions, session: this.session });
+              channelName = safeChannelName(channels.channels.find((channel) => channel.id === record.args?.channelId)?.name);
+            } catch { /* Fall back to a generic label. */ }
+          }
+          text = toolActivity(record.toolName, record.args, channelName);
+        }
+        if (text) lines.push(`-# ${text}`);
+      }
+      for (const line of lines) {
+        let page = this.toolActivityPages.at(-1);
+        if (!page || page.text.length + 1 + line.length > TOOL_ACTIVITY_PAGE_LIMIT) {
+          page = { channel: batch[0].interaction.channel, text: "", message: undefined, dirty: false };
+          this.toolActivityPages.push(page);
+        }
+        page.text += `${page.text ? "\n" : ""}${line}`;
+        page.dirty = true;
+      }
+      for (const page of this.toolActivityPages) {
+        if (!page.dirty) continue;
+        const payload = { content: page.text, allowedMentions: { parse: [], repliedUser: false } };
+        if (page.message) {
+          try {
+            page.message = await page.message.edit(payload) || page.message;
+          } catch (error) {
+            // Do not create duplicates on a temporary Discord error.
+            if (Number(error?.code) !== 10008) throw error;
+            page.message = undefined;
+          }
+        }
+        if (!page.message) page.message = await page.channel.send(payload);
+        page.dirty = false;
+      }
+    });
+    this.toolActivityPromise = operation.catch((error) => {
+      log(`Could not send tool activity: ${safeErrorName(error)}`);
+    });
+  }
+
+  async flushToolActivity() {
+    this.sendToolActivityBatch();
+    await this.toolActivityPromise;
   }
 
   async handleRequest(request) {
@@ -250,6 +358,7 @@ export class SessionUi {
     }
 
     const isCommit = interaction.workflow === "commit";
+    await this.flushToolActivity();
     await this.notificationPromise;
     const isCommitReview = isCommit && method === "select" && /^Commit Proposal \(/.test(request.title || "");
     let commitProposal = isCommitReview ? this.commitProposal : undefined;
@@ -403,6 +512,7 @@ export class SessionUi {
     this.cancelSession(this);
     this.pendingAskUserCompletion = undefined;
     await this.flushCommitMessageEdits();
+    await this.flushToolActivity();
     this.commitEpoch += 1;
     await this.clearStatusMessages();
   }

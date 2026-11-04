@@ -33,6 +33,7 @@ export function loadGatewayConfig(env = process.env) {
     (config.allowDirectMessages !== undefined && typeof config.allowDirectMessages !== "boolean") ||
     (config.allowServerMessages !== undefined && typeof config.allowServerMessages !== "boolean") ||
     (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
+    (config.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(config.toolCallVerbosity)) ||
     typeof config.cwd !== "string"
   ) {
     throw new Error("Discord gateway configuration is invalid");

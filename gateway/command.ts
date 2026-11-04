@@ -44,6 +44,7 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
       case "setup":
         await setupGateway(ctx);
         return;
+      case "config":
       case "configure":
         await showConfigureMenu(ctx);
         return;
@@ -71,7 +72,7 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
           [
             "/discord          Open the gateway menu (or setup if unconfigured)",
             "/discord setup    Configure the bot, access allowlists, workspace, and optional home channel",
-            "/discord configure Open bot, access, notification, workspace, and default-model settings",
+            "/discord configure Open gateway settings (also /discord config)",
             "/discord start    Start the independent background gateway",
             "/discord restart  Restart the background gateway",
             "/discord stop     Stop the gateway",
@@ -172,6 +173,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         "Workspace",
         "Default model",
         "Message access",
+        `Tool call verbosity: ${config.toolCallVerbosity ?? "full"}`,
       ],
     });
     switch (selected) {
@@ -195,6 +197,9 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         break;
       case "Message access":
         await configureAccessPaths(ctx, config);
+        break;
+      case `Tool call verbosity: ${config.toolCallVerbosity ?? "full"}`:
+        await configureToolCallVerbosity(ctx, config);
         break;
       default:
         return;
@@ -364,6 +369,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     cwd,
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
+    toolCallVerbosity: existing?.toolCallVerbosity ?? "full",
     configuredAt: new Date().toISOString(),
   };
   const paths = getDiscordGatewayPaths();
@@ -555,6 +561,22 @@ async function configureDefaultModel(ctx: ExtensionCommandContext, config: Disco
     { model: model ? { provider: model.provider, id: model.id } : undefined },
     `Discord default model set to ${selected || "Pi default"}. Used when gateway Pi sessions start.`
   );
+}
+
+async function configureToolCallVerbosity(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = config.toolCallVerbosity ?? "full";
+  const selected = await selectDiscordOption(ctx, {
+    title: "Tool call verbosity",
+    description: "Full includes intermediate assistant text; tool only shows tool activity. Workspace change notices remain visible.",
+    options: ["none", "tool only", "full"].map((label) => `${label}${label.replace(" ", "-") === current ? " (current)" : ""}`),
+  });
+  if (!selected) return;
+  const value = selected.startsWith("none") ? "none" : selected.startsWith("tool only") ? "tool-only" : "full";
+  if (value === current) {
+    notify(ctx, "Tool call verbosity is unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(ctx, config, { toolCallVerbosity: value }, `Tool call verbosity set to ${value}.`);
 }
 
 async function configureAccessPaths(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {

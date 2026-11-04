@@ -13,6 +13,7 @@ export interface DiscordGatewayConfig {
   cwd: string;
   model?: { provider: string; id: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  toolCallVerbosity?: "none" | "tool-only" | "full";
   configuredAt: string;
 }
 
@@ -91,6 +92,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     (value.allowDirectMessages !== undefined && typeof value.allowDirectMessages !== "boolean") ||
     (value.allowServerMessages !== undefined && typeof value.allowServerMessages !== "boolean") ||
     (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
+    (value.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(value.toolCallVerbosity)) ||
     typeof value.cwd !== "string" ||
     !value.cwd.trim() ||
     (value.model !== undefined &&
@@ -115,6 +117,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     cwd: value.cwd,
     ...(value.model ? { model: value.model } : {}),
     ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel as DiscordGatewayConfig["thinkingLevel"] } : {}),
+    toolCallVerbosity: value.toolCallVerbosity ?? "full",
     configuredAt: typeof value.configuredAt === "string" ? value.configuredAt : new Date(0).toISOString(),
   };
 }

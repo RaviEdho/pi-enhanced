@@ -193,6 +193,7 @@ export class PiRpcSession {
       throw new Error("Workspace switch does not match the active Pi session");
     }
     const previous = { cwd: this.cwd, sessionFile: state.sessionFile, model: state.model, thinkingLevel: state.thinkingLevel };
+    await this.ui.flushToolActivity();
     await this.ui.flushNotifications();
     await this.ui.flushPendingAskUserCompletion();
     await this.ui.clearStatusMessages();
@@ -260,6 +261,14 @@ export class PiRpcSession {
       waiter.resolve(record);
       return;
     }
+    if (record?.type === "message_end" && record.message?.role === "assistant") {
+      this.lastAssistantNarration = this.ui.queueAssistantNarration(record.message);
+      return;
+    }
+    if (record?.type === "tool_execution_start" || record?.type === "tool_execution_end") {
+      this.ui.queueToolActivity(record);
+      return;
+    }
     if (record?.type === "extension_ui_request") {
       void this.ui.handleRequest(record).catch(() => {
         this.sendUiResponse(record.id, { cancelled: true });
@@ -299,6 +308,8 @@ export class PiRpcSession {
     this.running = true;
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
+    this.lastAssistantNarration = undefined;
+    this.ui.resetToolActivity();
     this.ui.resetPrompt();
     try {
       if (interaction.workflow === "commit") {
@@ -357,7 +368,11 @@ export class PiRpcSession {
         this.rememberWorkspace();
         const response = await this.request("get_last_assistant_text", {}, 30_000);
         if (!response.success) throw new Error("Could not retrieve the agent response");
-        return typeof response.data?.text === "string" ? response.data.text : "";
+        const text = typeof response.data?.text === "string" ? response.data.text : "";
+        // A terminating tool may leave its narrated assistant message as the
+        // last response. Do not post that same text a second time.
+        if (text && text === this.lastAssistantNarration?.text && await this.lastAssistantNarration.delivery) return undefined;
+        return text;
       }
     } catch (error) {
       if (!this.forceStopped) throw error;
@@ -368,6 +383,7 @@ export class PiRpcSession {
     } finally {
       if (this.runWaiter) this.runWaiter = undefined;
       this.ui.stopCommitProgress();
+      await this.ui.flushToolActivity();
       await this.ui.flushNotifications().catch(() => undefined);
       await this.ui.flushPendingAskUserCompletion();
       await this.ui.flushCommitMessageEdits();
