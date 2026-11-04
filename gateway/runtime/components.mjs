@@ -343,7 +343,7 @@ export function buildConversationSettingPayload(pending) {
   }
   const current = pending.current ? ` Current: ${pending.current}.` : "";
   return {
-    content: `Choose a ${pending.setting === "model" ? "model" : "thinking level"} for this conversation.${current}${pageCount > 1 ? ` Page ${pending.page + 1}/${pageCount}.` : ""}`,
+    content: `Choose a ${pending.setting === "model" ? "model" : "thinking level"} ${pending.defaultModel ? "as the default for new conversations" : "for this conversation"}.${current}${pageCount > 1 ? ` Page ${pending.page + 1}/${pageCount}.` : ""}`,
     components: rows,
     allowedMentions: { parse: [] },
   };

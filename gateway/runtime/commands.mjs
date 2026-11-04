@@ -9,6 +9,7 @@ import { writePrivateJson } from "./persistence.mjs";
 import { getThreadSessionKey } from "./threads.mjs";
 
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_MODEL_SESSION_KEY = "gateway:default-model-catalog";
 
 export function createCommandHandlers({ client, config, configPath, allowedUsers, allowedChannels, threads, sessions, lifecycle }) {
   const pendingDiscordCommands = new Map();
@@ -24,7 +25,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
           .setDescription("Set the home channel for gateway notifications to this channel"),
         new SlashCommandBuilder()
           .setName("model")
-          .setDescription("Choose the model for this Discord conversation")
+          .setDescription("Choose the conversation model or the default for new conversations")
           .addStringOption((option) => option
             .setName("model")
             .setDescription("Search available models, or leave blank to open the picker")
@@ -99,7 +100,8 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       await respond([]);
       return;
     }
-    const sessionKey = getConversationSessionKey(interaction);
+    const defaultModel = setting === "model" && isDefaultModelChannel(interaction);
+    const sessionKey = defaultModel ? DEFAULT_MODEL_SESSION_KEY : getConversationSessionKey(interaction);
     if (!sessionKey) {
       await respond([]);
       return;
@@ -112,7 +114,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
         await respond([]);
         return;
       }
-      const session = sessions.peek(sessionKey);
+      const session = defaultModel ? await sessions.get(sessionKey) : sessions.peek(sessionKey);
       if (!session || session.closed) {
         await respond([]);
         return;
@@ -450,9 +452,10 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       return;
     }
 
-    const sessionKey = getConversationSessionKey(interaction);
+    const defaultModel = setting === "model" && isDefaultModelChannel(interaction);
+    const sessionKey = defaultModel ? DEFAULT_MODEL_SESSION_KEY : getConversationSessionKey(interaction);
     if (!sessionKey) {
-      await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread.");
+      await replyEphemeral(interaction, "Use this command in a direct message or an active gateway conversation thread; /model also works in allowed server channels to set the default.");
       return;
     }
 
@@ -505,6 +508,11 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
         const label = setting === "model"
           ? `${selected.provider}/${selected.id}`
           : String(selected);
+        if (defaultModel) {
+          saveDefaultModel(interaction, selected);
+          await interaction.editReply({ content: `New conversations will use default model **${label}**. Existing conversations are unchanged.`, allowedMentions: { parse: [] } });
+          return;
+        }
         void lifecycle.trackTask(sessions.enqueue(sessionKey, async () => {
           if (lifecycle.isStopping()) throw new Error("The gateway is restarting or stopping");
           if (session.closed || sessions.peek(sessionKey) !== session) {
@@ -531,14 +539,15 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       const pending = {
         token,
         setting,
+        defaultModel,
         session,
         sessionKey,
         userId: interaction.user.id,
         channelId: interaction.channelId,
         options,
-        current: setting === "model"
-          ? `${state?.model?.provider}/${state?.model?.id}`
-          : state?.thinkingLevel,
+        current: defaultModel
+          ? (config.model ? `${config.model.provider}/${config.model.id}` : "")
+          : setting === "model" ? `${state?.model?.provider}/${state?.model?.id}` : state?.thinkingLevel,
         page: 0,
       };
       pending.timer = setTimeout(() => pendingDiscordCommands.delete(token), UI_DEFAULT_TIMEOUT_MS);
@@ -549,6 +558,29 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       log(`Discord /${setting} failed: ${safeErrorName(error)}`);
       await interaction.editReply(`Could not load ${setting} settings from this Pi session.`).catch(() => undefined);
     }
+  }
+
+  function isDefaultModelChannel(interaction) {
+    return !!interaction.guildId && config.allowServerMessages !== false &&
+      !!interaction.channelId && !!interaction.channel && !interaction.channel.isThread?.() &&
+      !!interaction.channel.isTextBased?.() &&
+      (allowedChannels.has("*") || allowedChannels.has(interaction.channelId));
+  }
+
+  function saveDefaultModel(interaction, selected) {
+    if (lifecycle.isStopping() || !isDefaultModelChannel(interaction)) throw new Error("Channel is no longer authorized");
+    const latest = JSON.parse(readFileSync(configPath, "utf8"));
+    if (latest.allowServerMessages === false ||
+        !Array.isArray(latest.allowedUserIds) || !latest.allowedUserIds.some((id) => id === "*" || id === interaction.user?.id) ||
+        !Array.isArray(latest.allowedChannelIds) || !latest.allowedChannelIds.some((id) => id === "*" || id === interaction.channelId)) {
+      throw new Error("Channel or user is no longer authorized");
+    }
+    latest.model = { provider: selected.provider, id: selected.id };
+    latest.configuredAt = new Date().toISOString();
+    writePrivateJson(configPath, latest);
+    const saved = JSON.parse(readFileSync(configPath, "utf8"));
+    if (saved.model?.provider !== selected.provider || saved.model?.id !== selected.id) throw new Error("Could not save default model");
+    config.model = latest.model;
   }
 
   function getConversationSessionKey(interaction) {
@@ -592,6 +624,16 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     clearTimeout(pending.timer);
     pendingDiscordCommands.delete(token);
     await interaction.deferUpdate();
+    if (pending.defaultModel) {
+      try {
+        saveDefaultModel(interaction, selected);
+        await interaction.editReply({ content: `New conversations will use default model **${selected.provider}/${selected.id}**. Existing conversations are unchanged.`, components: [], allowedMentions: { parse: [] } });
+      } catch (error) {
+        log(`Discord default model selection failed: ${safeErrorName(error)}`);
+        await interaction.editReply({ content: "Could not save the default model. Run /model again in an allowed channel.", components: [] });
+      }
+      return;
+    }
     void lifecycle.trackTask(sessions.enqueue(pending.sessionKey, async () => {
       if (lifecycle.isStopping()) throw new Error("The gateway is restarting or stopping");
       if (pending.session.closed || sessions.peek(pending.sessionKey) !== pending.session) {
