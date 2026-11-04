@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { runSubagent } from "./runner.js";
+import { runSubagent } from "./run.js";
 import {
   type BackgroundJob,
   MAX_SUBAGENT_OUTPUT_CHARS,

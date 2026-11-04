@@ -82,12 +82,18 @@ export function registerWebSearch(pi: ExtensionAPI): void {
   });
 
   // Dynamic setting toggles
-  store.onChange((settings, changedKey) => {
+  const unsubscribeSettings = store.onChange((settings, changedKey) => {
     if (!changedKey || changedKey === "web.enabled") {
       const newEnabled = settings["web.enabled"];
       activeSessionEnabled = newEnabled;
       syncWebTools(newEnabled);
     }
+  });
+
+  pi.on("session_shutdown", () => {
+    unsubscribeSettings();
+    activeSessionEnabled = undefined;
+    savedPi = undefined;
   });
 
   // Inject or prune web tools from system prompt

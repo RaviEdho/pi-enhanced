@@ -396,7 +396,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
     clearWorkingMessage(ctx);
   };
 
-  EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
+  const unsubscribeSettings = EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
     if (changedKey === "timer.showWorkingTelemetry" && activeCtx) {
       if (isWorkingTelemetryEnabled()) {
         if (run?.waitingSinceMs !== undefined) {
@@ -600,6 +600,7 @@ export function registerWorkingTimer(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    unsubscribeSettings();
     endRun(ctx);
   });
 }

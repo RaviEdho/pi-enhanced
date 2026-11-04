@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
-import { isScoutActive } from "../../tools/scout/index.js";
+import { isScoutActive } from "../../tools/scout/register.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { refreshProviderCatalogs } from "../../providers/refresh.js";

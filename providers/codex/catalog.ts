@@ -24,12 +24,11 @@ function getCacheFilePath(): string {
 
 /**
  * Loads the cached Codex catalog from memory or disk.
- * Returns null when no fresh (within CACHE_TTL_MS) catalog is available so
- * callers can fall back or trigger a live refresh instead of filtering
- * against arbitrarily stale data.
+ * Eligibility checks require a fresh catalog by default. Startup can opt into
+ * the last snapshot to keep discovered models selectable while refreshing.
  */
-export function loadCachedCatalog(): CodexModelSummary[] | null {
-  if (memoryCache && Date.now() - memoryCache.updatedAt < CACHE_TTL_MS) {
+export function loadCachedCatalog(options: { allowStale?: boolean } = {}): CodexModelSummary[] | null {
+  if (memoryCache && (options.allowStale || Date.now() - memoryCache.updatedAt < CACHE_TTL_MS)) {
     return memoryCache.models;
   }
 
@@ -46,7 +45,7 @@ export function loadCachedCatalog(): CodexModelSummary[] | null {
       ) {
         // Enforce the TTL on disk-cached entries as well; expired catalogs must
         // not be treated as authoritative (they would hide newly added models).
-        if (Date.now() - parsed.updatedAt >= CACHE_TTL_MS) {
+        if (!options.allowStale && Date.now() - parsed.updatedAt >= CACHE_TTL_MS) {
           return null;
         }
         memoryCache = parsed;
@@ -57,7 +56,7 @@ export function loadCachedCatalog(): CodexModelSummary[] | null {
     }
   }
 
-  return memoryCache && Date.now() - memoryCache.updatedAt < CACHE_TTL_MS
+  return memoryCache && (options.allowStale || Date.now() - memoryCache.updatedAt < CACHE_TTL_MS)
     ? memoryCache.models
     : null;
 }

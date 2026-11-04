@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { refreshProviderCatalogs } from "../../providers/refresh.js";
 import { isFeedbackToolActive } from "../../tools/feedback/index.js";
-import { isScoutActive } from "../../tools/scout/index.js";
+import { isScoutActive } from "../../tools/scout/register.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { DialogFrame } from "../dialog.js";

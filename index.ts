@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { installLogoutHook } from "./accounts/index.js";
+import { installLogoutHook } from "./accounts/logout.js";
 import { removeRetiredHyperData } from "./accounts/retired.js";
 import { registerProviders } from "./providers/index.js";
-import { registerTools } from "./tools/index.js";
-import { registerUX } from "./ux/index.js";
-import { registerDiscordGateway } from "./gateway/index.js";
+import { registerTools } from "./tools/register.js";
+import { registerUX } from "./ux/register.js";
+import { registerDiscordGateway } from "./gateway/register.js";
 
 export default async function (pi: ExtensionAPI) {
   // Purge retired provider credentials before any account store is initialized.
@@ -18,7 +18,7 @@ export default async function (pi: ExtensionAPI) {
 
   // Register agent capabilities & tools (scout search, web search/fetch, commit sub-agent, output compressor)
   registerTools(pi);
-  registerDiscordGateway(pi);
+  await registerDiscordGateway(pi);
 
   // Hook into Pi's ModelRuntime.logout to present native account selector on multi-account logout
   pi.on("session_start", async (_event, ctx) => {

@@ -76,12 +76,18 @@ export function registerFeedbackTools(pi: ExtensionAPI): void {
   });
 
   // Dynamic setting toggles
-  store.onChange((settings, changedKey) => {
+  const unsubscribeSettings = store.onChange((settings, changedKey) => {
     if (!changedKey || changedKey === "feedback.askUser") {
       const newEnabled = settings["feedback.askUser"];
       activeSessionEnabled = newEnabled;
       syncFeedbackTools(newEnabled);
     }
+  });
+
+  pi.on("session_shutdown", () => {
+    unsubscribeSettings();
+    activeSessionEnabled = undefined;
+    savedPi = undefined;
   });
 
   // Inject or prune system prompt guidelines and selected tools

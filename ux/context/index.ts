@@ -1,5 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
+export { registerContextCommand } from "./register.js";
 export { analyzeContext } from "./analyzer.js";
 export { handleContextCommand } from "./command.js";
 export { ContextViewerComponent } from "./component.js";
@@ -28,16 +27,3 @@ export type {
   GridCategory,
   CellSpec,
 } from "./types.js";
-
-/**
- * Registers the /context command with Pi using lazy loading.
- */
-export function registerContextCommand(pi: ExtensionAPI): void {
-  pi.registerCommand("context", {
-    description: "Display active context window usage, category breakdown, and top consumers",
-    handler: async (_args, ctx) => {
-      const { handleContextCommand } = await import("./command.js");
-      await handleContextCommand(ctx);
-    },
-  });
-}

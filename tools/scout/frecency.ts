@@ -35,6 +35,10 @@ export class FrecencyTracker {
     return FrecencyTracker.instance;
   }
 
+  public static saveIfInitialized(): void {
+    FrecencyTracker.instance?.saveSync();
+  }
+
   private load(): void {
     try {
       if (fs.existsSync(this.storePath)) {
@@ -54,6 +58,10 @@ export class FrecencyTracker {
   }
 
   public saveSync(): void {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
     if (!this.dirty) return;
     try {
       // Keep the store bounded: retain only the most recently accessed entries.
@@ -84,6 +92,7 @@ export class FrecencyTracker {
       this.saveTimeout = null;
       this.saveSync();
     }, 5000);
+    this.saveTimeout.unref?.();
   }
 
   /**

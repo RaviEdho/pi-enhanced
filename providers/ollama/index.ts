@@ -1,7 +1,7 @@
 import type { ApiKeyAuth, ApiKeyCredential, Model, Provider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getOllamaFallbackAuth } from "../../ux/usage/ollama-cloud.js";
+import { isProviderNetworkEnabled } from "../network.js";
 import { fetchOllamaEntitlement, OLLAMA_FREE_RESTRICTED_MODELS, type OllamaEntitlement } from "./entitlements.js";
 import { fetchOllamaModels, loadOllamaCatalog, saveOllamaCatalog, OLLAMA_BASE_URL, OLLAMA_PROVIDER_ID } from "./models.js";
 
@@ -38,19 +38,9 @@ export async function registerOllamaProvider(pi: ExtensionAPI): Promise<void> {
     },
   };
   const streams = openAICompletionsApi();
-  // Pi's initial registry refresh can be offline-only. Seed the first catalog so
-  // the provider is selectable on a fresh install without a separate update.
-  const cached = loadOllamaCatalog();
-  const startupKey = getOllamaFallbackAuth()?.token.trim();
-  const online = process.env.PI_OFFLINE === undefined;
-  const [initial, initialEntitlement] = await Promise.all([
-    !cached?.fresh && online ? fetchOllamaModels(startupKey, AbortSignal.timeout(8000)) : Promise.resolve(null),
-    startupKey && online ? fetchOllamaEntitlement(startupKey, AbortSignal.timeout(5000)) : Promise.resolve(undefined),
-  ]);
-  if (startupKey && initialEntitlement) account = { key: startupKey, entitlement: initialEntitlement };
-  if (initial) saveOllamaCatalog(initial);
-  let models: Model<"openai-completions">[] = initial ?? cached?.models ?? [];
-  let initialCatalogPending = !!initial;
+  // Registration is disk-only, even with an expired cache. The bundled snapshot
+  // covers fresh installs; Pi's background refresh publishes live discovery.
+  let models: Model<"openai-completions">[] = loadOllamaCatalog()?.models ?? [];
   const provider: Provider<"openai-completions"> = {
     id: OLLAMA_PROVIDER_ID, name: "Ollama Cloud", baseUrl: OLLAMA_BASE_URL,
     auth: { apiKey },
@@ -61,12 +51,7 @@ export async function registerOllamaProvider(pi: ExtensionAPI): Promise<void> {
         model.provider === OLLAMA_PROVIDER_ID && model.api === "openai-completions" && (!model.type || model.type === "chat"))
         .map((model) => ({ ...model, name: model.id }));
       if (restored?.length && !models.length) await context.publish({ update: () => { models = restored; } });
-      if (initialCatalogPending) {
-        initialCatalogPending = false;
-        const initial = models;
-        await context.publish({ persist: { models: initial, checkedAt: Date.now() }, update: () => { models = initial; } });
-      }
-      if (!context.allowNetwork || context.signal.aborted) return;
+      if (!context.allowNetwork || !isProviderNetworkEnabled() || context.signal.aborted) return;
       const key = (context.credential?.type === "api_key" ? context.credential.key?.trim() : undefined) || resolvedEnvKey || process.env.OLLAMA_API_KEY?.trim();
       // Publish account changes independently of slower catalog discovery.
       await Promise.all([

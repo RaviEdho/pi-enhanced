@@ -23,6 +23,7 @@ import { PlanModeManager } from "./manager.js";
 export class PlanModeEditor extends CustomEditor {
   private _nativeBorderColor?: (s: string) => string;
   private ctx?: ExtensionContext;
+  private unsubscribeMode: () => void;
 
   constructor(
     tui: TUI,
@@ -54,9 +55,13 @@ export class PlanModeEditor extends CustomEditor {
     });
 
     // Immediately re-render when switching between Plan and Implement mode
-    PlanModeManager.getInstance().onModeChange(() => {
+    this.unsubscribeMode = PlanModeManager.getInstance().onModeChange(() => {
       tui.requestRender();
     });
+  }
+
+  dispose(): void {
+    this.unsubscribeMode();
   }
 
   protected renderTopBorder(width: number, hiddenLineCount: number): string {

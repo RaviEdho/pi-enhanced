@@ -7,7 +7,6 @@ import {
   type EnhancedSettingKey,
   type EnhancedSettings,
 } from "./types.js";
-import { isScoutActive } from "../../tools/scout/index.js";
 
 type SettingsChangeListener = (settings: EnhancedSettings, changedKey?: EnhancedSettingKey) => void;
 

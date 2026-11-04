@@ -9,6 +9,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balancer.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
+import { isProviderNetworkEnabled } from "../../providers/network.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
@@ -238,7 +239,8 @@ function buildUsageBar(ctx: ExtensionContext): string {
     const key = `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`;
     const report = QuotaManager.getInstance().getReport(key);
     const identity = fallbackUsageIdentity(auth.label, auth.token);
-    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme) : `${identity}  ···`;
+    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme)
+      : `${identity}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
   }
 
   const prefix = usageAccountIdentity(account);
@@ -255,7 +257,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
 
   const report = QuotaManager.getInstance().getReport(account.id);
   if (!report) {
-    return `${prefix}  ···`;
+    return `${prefix}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
   }
 
   return renderUsageReport(report, prefix, model.id, now, ctx.ui.theme);
@@ -450,6 +452,7 @@ const TOOL_CALL_THROTTLE_MS = 15 * 1000; // Throttle tool call quota checks to o
 const IDLE_POLL_INTERVAL_MS = 2 * 60 * 1000; // Background idle quota poll every 2 minutes
 
 async function refreshOllamaFallback(): Promise<void> {
+  if (!isProviderNetworkEnabled()) return;
   const auth = getOllamaFallbackAuth();
   if (!auth) return;
   await QuotaManager.getInstance().refreshReport(
@@ -466,6 +469,7 @@ async function refreshCandidateAccounts(
   ctx: ExtensionContext,
   force: boolean = false
 ): Promise<void> {
+  if (!isProviderNetworkEnabled()) return;
   let model;
   try {
     model = ctx.model;
@@ -512,6 +516,7 @@ async function refreshSessionAccountQuota(
   ctx: ExtensionContext,
   maxAgeMs: number = 0
 ): Promise<void> {
+  if (!isProviderNetworkEnabled()) return;
   let model;
   try {
     model = ctx.model;
@@ -556,20 +561,20 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   let lastToolCheckAt = 0;
 
   // Re-render UI immediately whenever QuotaManager stores fresh quota reports or settings change
-  QuotaManager.getInstance().onQuotaUpdate(() => {
+  const unsubscribeQuota = QuotaManager.getInstance().onQuotaUpdate(() => {
     if (EnhancedSettingsStore.getInstance().get("usage.showFooter")) {
       activeTui?.requestRender();
     }
   });
 
-  EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
+  const unsubscribeSettings = EnhancedSettingsStore.getInstance().onChange((_settings, changedKey) => {
     if (!changedKey || changedKey === "usage.showFooter" || changedKey === "usage.contextFormat") {
       activeTui?.requestRender();
     }
   });
 
   // Re-render UI immediately whenever Plan Mode / Implement Mode changes
-  PlanModeManager.getInstance().onModeChange(() => {
+  const unsubscribeMode = PlanModeManager.getInstance().onModeChange(() => {
     activeTui?.requestRender();
   });
 
@@ -664,6 +669,9 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    unsubscribeQuota();
+    unsubscribeSettings();
+    unsubscribeMode();
     if (idleTimer) {
       clearInterval(idleTimer);
       idleTimer = undefined;

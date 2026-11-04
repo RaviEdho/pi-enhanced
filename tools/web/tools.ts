@@ -5,11 +5,9 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { FetchPipeline } from "./fetch/pipeline.js";
 import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
 import { formatSearchResponseForLLM } from "./formatter.js";
 import { isWebActive } from "./index.js";
-import { SearchPipeline } from "./pipeline.js";
 import type { SearchProviderId } from "./types.js";
 
 const WebSearchParametersSchema = Type.Object({
@@ -96,6 +94,7 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       }
 
       try {
+        const { SearchPipeline } = await import("./pipeline.js");
         const pipeline = SearchPipeline.getInstance();
         if (params.provider) {
           trackActiveProvider(toolCallId, params.provider);
@@ -253,6 +252,7 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
       }
 
       try {
+        const { FetchPipeline } = await import("./fetch/pipeline.js");
         const pipeline = FetchPipeline.getInstance();
         if (params.provider) {
           trackActiveFetchProvider(toolCallId, params.provider);

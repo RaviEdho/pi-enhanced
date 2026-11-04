@@ -13,7 +13,7 @@ import {
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AccountStore } from "../../accounts/store.js";
-import { executeWithMultiAccountFailover } from "../../accounts/wrapper.js";
+import { lazyStream } from "../lazy-stream.js";
 import {
   DEFAULT_FALLBACK_FREE_MODELS,
   fetchLiveCodexCatalog,
@@ -22,6 +22,7 @@ import {
 } from "./catalog.js";
 import { isVisibleCodexModel, mergeCodexModels } from "./models.js";
 import { getCodexAccountId, getCodexPlanType } from "./plan.js";
+import { isProviderNetworkEnabled } from "../network.js";
 
 /**
  * Reads stored openai-codex credentials directly from ~/.pi/agent/auth.json or AccountStore.
@@ -63,23 +64,9 @@ export async function registerCodexFilter(pi: ExtensionAPI): Promise<void> {
     return;
   }
 
-  // Startup model selection and --list-models only run offline refreshes. Bootstrap
-  // missing/legacy caches before registration, then use Pi's native refresh lifecycle.
-  let catalog = loadCachedCatalog();
-  if (!catalog || catalog.some((model) => !model.inputModalities)) {
-    const stored = getStoredCodexCredential();
-    if (stored?.access && stored.accountId) {
-      try {
-        const live = await fetchLiveCodexCatalog(stored.access, stored.accountId, AbortSignal.timeout(5000));
-        if (live.length > 0) {
-          catalog = live;
-          saveCachedCatalog(live);
-        }
-      } catch {
-        // Offline startup keeps the cache and built-in catalog.
-      }
-    }
-  }
+  // Keep startup disk-only and retain discovered IDs when a cache expires.
+  // Pi's background refresh replaces the snapshot without delaying the UI.
+  let catalog = loadCachedCatalog({ allowStale: true });
   const getModels = () => mergeCodexModels(baseCodex.getModels(), catalog, baseCodex.baseUrl);
 
   // Keep the built-in authentication and wire implementation; add discovered models and failover.
@@ -144,7 +131,7 @@ export async function registerCodexFilter(pi: ExtensionAPI): Promise<void> {
       if (baseCodex.refreshModels) {
         await baseCodex.refreshModels(context);
       }
-      if (!context.allowNetwork || context.signal.aborted) return;
+      if (!context.allowNetwork || !isProviderNetworkEnabled() || context.signal.aborted) return;
 
       const credential = context.credential?.type === "oauth" ? context.credential : undefined;
       const stored = credential?.access ? undefined : getStoredCodexCredential();
@@ -168,18 +155,13 @@ export async function registerCodexFilter(pi: ExtensionAPI): Promise<void> {
     },
 
     streamSimple(model: Model<Api>, transcript: TranscriptContext, options?: SimpleStreamOptions) {
-      return executeWithMultiAccountFailover(
-        "openai-codex",
-        model,
-        transcript,
-        options,
-        (m, ctx, opts, resolvedAuth) => {
-          return baseCodex.streamSimple(m, ctx, {
-            ...opts,
-            apiKey: resolvedAuth.token,
-          });
-        }
-      );
+      return lazyStream(model, options, async () => {
+        const { executeWithMultiAccountFailover } = await import("../../accounts/wrapper.js");
+        return () => executeWithMultiAccountFailover(
+          "openai-codex", model, transcript, options,
+          (m, ctx, opts, resolvedAuth) => baseCodex.streamSimple(m, ctx, { ...opts, apiKey: resolvedAuth.token }),
+        );
+      });
     },
   };
 

@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { Text } from "@earendil-works/pi-tui";
-import { QuestionnaireComponent, type QuestionnaireResult } from "./component.js";
+import type { QuestionnaireResult } from "./component.js";
 import { isFeedbackToolActive } from "./index.js";
 import {
   AskUserParametersSchema,
@@ -106,6 +106,7 @@ export function createAskUserToolDefinition(): ToolDefinition<
       // 3. Primary: Dedicated interactive questionnaire component with Left/Right navigation
       if (ctx.mode === "tui" && typeof (ctx.ui as any)?.custom === "function") {
         try {
+          const { QuestionnaireComponent } = await import("./component.js");
           const result = await (ctx.ui as any).custom(
             (tui: any, theme: any, _kb: any, done: (res: QuestionnaireResult | undefined) => void) => {
               if (signal?.aborted) {

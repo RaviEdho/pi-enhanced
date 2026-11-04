@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isProviderNetworkEnabled } from "./network.js";
 
 const PROVIDERS = [
   "google-antigravity",
@@ -13,7 +14,7 @@ const pending = new WeakMap<ExtensionContext["modelRegistry"], Promise<void>>();
 
 /** Refresh in the background; callers continue using the current filtered catalog. */
 export function refreshProviderCatalogs(ctx: ExtensionContext): Promise<void> | undefined {
-  if (process.env.PI_OFFLINE !== undefined || process.argv.includes("--offline")) return undefined;
+  if (!isProviderNetworkEnabled()) return undefined;
   const registry = ctx.modelRegistry;
   const active = pending.get(registry);
   if (active) return active;

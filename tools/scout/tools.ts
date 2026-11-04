@@ -3,12 +3,7 @@ import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { CursorStore } from "./cursor.js";
-import { externalFind, externalGrep, externalMultiGrep } from "./external.js";
-import { formatFindOutput, formatGrepOutput } from "./formatter.js";
-import { FrecencyTracker } from "./frecency.js";
-import { FileIndexer } from "./indexer.js";
-import { isScoutActive } from "./index.js";
+import { isScoutActive } from "./register.js";
 
 const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
@@ -52,6 +47,9 @@ export async function executeFind(
   },
   cwd: string
 ): Promise<{ output: string; details: any }> {
+  const [{ CursorStore }, { externalFind }, { formatFindOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
+    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), import("./indexer.js"),
+  ]);
   const cursorStore = CursorStore.getInstance();
   let offset = 0;
   let limit = params.limit ?? PAGE_SIZE_FIND;
@@ -146,6 +144,9 @@ export async function executeGrep(
   },
   cwd: string
 ): Promise<{ output: string; details: any }> {
+  const [{ CursorStore }, { externalGrep, externalMultiGrep }, { formatGrepOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
+    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), import("./indexer.js"),
+  ]);
   const cursorStore = CursorStore.getInstance();
 
   let pattern = params.pattern;

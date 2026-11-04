@@ -1,10 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerAntigravityProvider } from "./antigravity/index.js";
+import { registerAntigravityProvider } from "./antigravity/register.js";
 import { registerCodexFilter } from "./codex/index.js";
-import { registerCommandCodeProvider } from "./commandcode/index.js";
-import { registerKenariProvider } from "./kenari/index.js";
+import { registerCommandCodeProvider } from "./commandcode/register.js";
+import { registerKenariProvider } from "./kenari/register.js";
 import { registerOllamaProvider } from "./ollama/index.js";
-import { refreshProviderCatalogs } from "./refresh.js";
 
 /**
  * Registers all custom inference providers and dynamic plan filters:
@@ -19,13 +18,14 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerKenariProvider(pi);
   await registerOllamaProvider(pi);
   await registerCodexFilter(pi);
-  pi.on("session_start", (_event, ctx) => {
-    refreshProviderCatalogs(ctx);
-  });
+  // Pi refreshes providers in the background after initializing its TUI/RPC
+  // interface. A second session_start refresh would supersede/duplicate it.
 }
 
-export { registerAntigravityProvider } from "./antigravity/index.js";
-export { registerCodexFilter } from "./codex/index.js";
-export { registerCommandCodeProvider } from "./commandcode/index.js";
-export { registerKenariProvider } from "./kenari/index.js";
-export { registerOllamaProvider } from "./ollama/index.js";
+export {
+  registerAntigravityProvider,
+  registerCodexFilter,
+  registerCommandCodeProvider,
+  registerKenariProvider,
+  registerOllamaProvider,
+};

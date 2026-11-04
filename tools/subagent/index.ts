@@ -2,8 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager, renderSubagentReportMessage } from "./jobs.js";
-import { SubagentBorderedLoader } from "./loader.js";
-import { runSubagent } from "./runner.js";
+import { runSubagent } from "./run.js";
 import {
   createSubagentCancelToolDefinition,
   createSubagentListToolDefinition,
@@ -122,6 +121,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   let runError: any = null;
 
   if (ctx.hasUI && typeof ctx.ui.custom === "function") {
+    const { SubagentBorderedLoader } = await import("./loader.js");
     const shortDesc = task.length > 40 ? `${task.slice(0, 37)}…` : task;
     result = await ctx.ui.custom<SubagentResult | null>((tui, theme, _kb, done) => {
       const loader = new SubagentBorderedLoader(
@@ -331,7 +331,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   });
 
   // Dynamic setting toggles
-  store.onChange((settings, changedKey) => {
+  const unsubscribeSettings = store.onChange((settings, changedKey) => {
     if (!changedKey || changedKey === "subagent.enabled") {
       const newEnabled = settings["subagent.enabled"];
       activeSessionEnabled = newEnabled;
@@ -366,6 +366,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    unsubscribeSettings();
+    activeSessionEnabled = undefined;
+    savedPi = undefined;
     jobManager.cancelAllJobs();
     jobManager.dispose();
   });
@@ -391,7 +394,6 @@ export {
   createSubagentListToolDefinition,
   createSubagentStatusToolDefinition,
   createSubagentToolDefinition,
-} from "./tools.js";
-export { runSubagent } from "./runner.js";
-export { jobManager, renderSubagentReportMessage } from "./jobs.js";
+};
+export { runSubagent, jobManager, renderSubagentReportMessage };
 export type * from "./types.js";

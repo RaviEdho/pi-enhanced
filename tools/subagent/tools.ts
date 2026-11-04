@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { isSubagentActive } from "./index.js";
 import { jobManager } from "./jobs.js";
-import { runSubagent } from "./runner.js";
+import { runSubagent } from "./run.js";
 import {
   type BackgroundJob,
   MAX_SUBAGENT_OUTPUT_CHARS,

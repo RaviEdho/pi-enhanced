@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
-import { isScoutActive } from "./index.js";
+import { isScoutActive } from "./register.js";
 import { executeFind, executeGrep } from "./tools.js";
 
 export type ParsedSearchCommand =

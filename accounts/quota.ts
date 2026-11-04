@@ -1,12 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fetchAntigravityUsage } from "../ux/usage/antigravity.js";
-import { fetchCodexUsage } from "../ux/usage/codex.js";
-import { computeTimeElapsedFraction } from "../ux/usage/format.js";
-import { fetchCommandCodeUsage } from "../ux/usage/commandcode.js";
-import { fetchKenariUsage } from "../ux/usage/kenari.js";
-import { fetchOllamaCloudUsage } from "../ux/usage/ollama-cloud.js";
+import { computeTimeElapsedFraction } from "../ux/usage/timing.js";
 import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { usageAccountIdentity } from "../ux/usage/identity.js";
 import { AccountStore } from "./store.js";
@@ -204,8 +199,10 @@ export class QuotaManager {
       const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
         let report: ProviderUsageReport;
         if (account.provider === "ollama-cloud") {
+          const { fetchOllamaCloudUsage } = await import("../ux/usage/ollama-cloud.js");
           report = await fetchOllamaCloudUsage(token, usageAccountIdentity(account), signal);
         } else if (account.provider === "google-antigravity") {
+          const { fetchAntigravityUsage } = await import("../ux/usage/antigravity.js");
           report = await fetchAntigravityUsage(
             token,
             account.projectId || "aicode-consumers",
@@ -214,6 +211,7 @@ export class QuotaManager {
             account.planType
           );
         } else if (account.provider === "openai-codex") {
+          const { fetchCodexUsage } = await import("../ux/usage/codex.js");
           report = await fetchCodexUsage({
             accessToken: token,
             accountId: account.accountId,
@@ -222,6 +220,7 @@ export class QuotaManager {
             signal,
           });
         } else if (account.provider === "commandcode") {
+          const { fetchCommandCodeUsage } = await import("../ux/usage/commandcode.js");
           report = await fetchCommandCodeUsage(
             token,
             usageAccountIdentity(account),
@@ -229,6 +228,7 @@ export class QuotaManager {
             account.planType
           );
         } else if (account.provider === "kenari") {
+          const { fetchKenariUsage } = await import("../ux/usage/kenari.js");
           report = await fetchKenariUsage(
             token,
             usageAccountIdentity(account),

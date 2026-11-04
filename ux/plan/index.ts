@@ -17,13 +17,7 @@ import {
 } from "./gate.js";
 import { PlanModeManager } from "./manager.js";
 
-export { PlanModeEditor } from "./editor.js";
-export { PlanModeManager } from "./manager.js";
-export {
-  extractLastAssistantText,
-  handlePlanApprovalGate,
-  hasPlanArtifact,
-} from "./gate.js";
+export { PlanModeEditor, PlanModeManager, extractLastAssistantText, handlePlanApprovalGate, hasPlanArtifact };
 export { PLAN_MODE_DIRECTIVE, IMPLEMENT_MODE_DIRECTIVE } from "./prompt.js";
 export { isSafeBashCommand } from "./safe-bash.js";
 export type { PlanModeState } from "./types.js";
@@ -39,6 +33,11 @@ export type { PlanModeState } from "./types.js";
 export function registerPlanMode(pi: ExtensionAPI): void {
   const manager = PlanModeManager.getInstance();
   manager.init(pi);
+  let editor: PlanModeEditor | undefined;
+  pi.on("session_shutdown", () => {
+    editor?.dispose();
+    editor = undefined;
+  });
 
   // Register --plan CLI flag
   pi.registerFlag("plan", {
@@ -119,7 +118,11 @@ export function registerPlanMode(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     if (ctx.hasUI && typeof ctx.ui.setEditorComponent === "function") {
       ctx.ui.setEditorComponent(
-        (tui, theme, keybindings) => new PlanModeEditor(tui, theme, keybindings, ctx)
+        (tui, theme, keybindings) => {
+          editor?.dispose();
+          editor = new PlanModeEditor(tui, theme, keybindings, ctx);
+          return editor;
+        }
       );
     }
 
