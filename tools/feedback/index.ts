@@ -127,4 +127,4 @@ export function registerFeedbackTools(pi: ExtensionAPI): void {
 }
 
 export * from "./types.js";
-export * from "./tools.js";
+export { createAskUserToolDefinition };
