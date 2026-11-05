@@ -6,7 +6,6 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { FetchProviderId, FetchResponse } from "./fetch/types.js";
-import { formatSearchResponseForLLM } from "./formatter.js";
 import { isWebActive } from "./index.js";
 import type { SearchProviderId } from "./types.js";
 
@@ -63,6 +62,11 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const activeSearchProviders = new Map<string, string>();
+// Coalesce first-use imports when Pi executes sibling searches concurrently.
+let searchModulesPromise: Promise<[
+  typeof import("./pipeline.js"),
+  typeof import("./formatter.js"),
+]> | undefined;
 
 function trackActiveProvider(toolCallId: string, provider: string): void {
   if (activeSearchProviders.size > 200) {
@@ -94,7 +98,12 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof WebSearch
       }
 
       try {
-        const { SearchPipeline } = await import("./pipeline.js");
+        const [{ SearchPipeline }, { formatSearchResponseForLLM }] = await (searchModulesPromise ??= Promise.all([
+          import("./pipeline.js"), import("./formatter.js"),
+        ]).catch((error) => {
+          searchModulesPromise = undefined;
+          throw error;
+        }));
         const pipeline = SearchPipeline.getInstance();
         if (params.provider) {
           trackActiveProvider(toolCallId, params.provider);

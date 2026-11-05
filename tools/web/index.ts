@@ -123,9 +123,9 @@ export function registerWebSearch(pi: ExtensionAPI): void {
   });
 }
 
-export * from "./types.js";
-export * from "./fetch/types.js";
+export type * from "./types.js";
+export type * from "./fetch/types.js";
 export {
   createWebFetchToolDefinition,
   createWebSearchToolDefinition,
-} from "./tools.js";
+};
