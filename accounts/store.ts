@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 
 const STORE_VERSION = 2;
+const FILE_CHECK_INTERVAL_MS = 250;
 export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari"]);
 
 /**
@@ -23,7 +24,7 @@ export class AccountStore {
     accounts: 0,
     auth: 0,
   };
-  private lastCheckTime = 0;
+  private lastCheckTime = performance.now();
 
   private constructor(filePath?: string) {
     this.filePath = filePath || join(homedir(), ".pi/agent/accounts.json");
@@ -37,7 +38,7 @@ export class AccountStore {
     this.load();
     this.autoImportFromSources();
     this.updateLastMtimes();
-    this.lastCheckTime = Date.now();
+    this.lastCheckTime = performance.now();
   }
 
   public static getInstance(): AccountStore {
@@ -61,9 +62,7 @@ export class AccountStore {
    */
   private getFileMtime(path: string): number {
     try {
-      if (existsSync(path)) {
-        return statSync(path).mtimeMs;
-      }
+      return statSync(path).mtimeMs;
     } catch {
       // Ignore stat errors
     }
@@ -142,29 +141,34 @@ export class AccountStore {
    * Forces a full synchronization from accounts.json and auth.json.
    */
   public sync(): void {
+    // Set before importing: imports can call getters recursively.
+    this.lastCheckTime = performance.now();
     this.load();
     this.autoImportFromSources();
     this.updateLastMtimes();
-    this.lastCheckTime = Date.now();
   }
 
   /**
    * Checks file modification timestamps on disk and automatically reloads/imports
-   * if accounts.json or auth.json has been modified externally.
+   * if accounts.json or auth.json has been modified externally. Reads coalesce
+   * for 250ms; maxAgeMs=0 checks immediately, while force also reloads unchanged files.
    */
-  public reloadIfModified(force = false): boolean {
+  public reloadIfModified(force = false, maxAgeMs = FILE_CHECK_INTERVAL_MS): boolean {
+    const now = performance.now();
+    if (!force && now - this.lastCheckTime < maxAgeMs) return false;
+    this.lastCheckTime = now;
     const accountsMtime = this.getFileMtime(this.filePath);
     const authMtime = this.getFileMtime(this.piAuthPath);
 
     let needsLoad = false;
     let needsImport = false;
 
-    if (force || accountsMtime > this.lastMtimes.accounts) {
+    if (force || accountsMtime !== this.lastMtimes.accounts) {
       needsLoad = true;
       this.lastMtimes.accounts = accountsMtime;
     }
 
-    if (force || authMtime > this.lastMtimes.auth) {
+    if (force || authMtime !== this.lastMtimes.auth) {
       needsImport = true;
       this.lastMtimes.auth = authMtime;
     }
@@ -653,6 +657,7 @@ export class AccountStore {
    * Sets the active account for a provider and syncs it to Pi's auth.json.
    */
   public setActive(provider: string, accountId: string): boolean {
+    this.reloadIfModified(false, 0);
     const account = this.get(accountId);
     if (!account || account.provider !== provider) {
       return false;

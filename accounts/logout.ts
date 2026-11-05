@@ -20,7 +20,16 @@ export function installLogoutHook(ctx: ExtensionContext): void {
     return;
   }
 
-  const originalLogout = runtime.logout.bind(runtime);
+  const nativeLogout = runtime.logout.bind(runtime);
+  const originalLogout = async (providerId: string, options: any) => {
+    const result = await nativeLogout(providerId, options);
+    if (providerId === "ollama-cloud") {
+      const { invalidateOllamaFallbackAuth } = await import("../ux/usage/ollama-cloud.js");
+      invalidateOllamaFallbackAuth();
+    }
+    AccountStore.getInstance().sync();
+    return result;
+  };
 
   const hookedLogout = async (providerId: string, options: any = {}) => {
     // In non-TUI modes or if UI is unavailable, fall back to native logout

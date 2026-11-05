@@ -55,6 +55,12 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Interactive User Feedback Tool (`tools/feedback/`)**: Direct, native user feedback tool exposing `ask_user`. Supports open-ended and choice questions, custom typed responses, multi-question flows with review/edit, and cancellation/timeouts. Uses Pi's interactive questionnaire in TUI and Discord select menus, buttons, and text-entry modals through the gateway.
 - **Pi Auth Sync**: Automatically imports credentials from `~/.pi/agent/auth.json` into the accounts pool and syncs the active healthy account back to `auth.json`.
 
+## Startup and UI performance
+
+Credential helpers do not load browser OAuth implementations. Login, token refresh, and raw Antigravity token discovery load those implementations only when needed. The footer caches raw active-branch usage and context statistics until the session, branch, model, or relevant session events change; theme formatting, quota updates, and reset countdowns remain live.
+
+Repeated display reads of settings and credentials share a 250ms file-check window. Local updates are immediate; explicit settings/usage commands, inference credential checks, and native logout synchronization bypass the polling window. External file edits are picked up on the next read after that window expires.
+
 ## Retired providers
 
 Charm Hyper has been removed because its usage, quota, and reset data cannot be fetched reliably enough to meet this package's provider requirements. On the next extension load, saved Hyper credentials, pooled accounts, session bindings, and model/quota caches are automatically deleted; other providers and conversation history are preserved. `HYPER_API_KEY` is no longer used—remove it from your shell configuration if set. Select another provider if your default model used Hyper.

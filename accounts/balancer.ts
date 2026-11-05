@@ -1,5 +1,4 @@
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { discoverProject, refreshAntigravityToken } from "../providers/antigravity/oauth.js";
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
@@ -274,6 +273,7 @@ export class AccountBalancer {
     if (account.provider === "google-antigravity") {
       if (!account.projectId && account.access) {
         try {
+          const { discoverProject } = await import("../providers/antigravity/oauth.js");
           account.projectId = await discoverProject(account.access);
           account.updatedAt = Date.now();
           this.store.upsert(account);
@@ -287,6 +287,7 @@ export class AccountBalancer {
       }
 
       try {
+        const { refreshAntigravityToken } = await import("../providers/antigravity/oauth.js");
         const refreshed = await refreshAntigravityToken({
           refresh: account.refresh,
           access: account.access || "",
@@ -361,6 +362,7 @@ export class AccountBalancer {
     excludedAccountIds: string[] = [],
     modelId?: string
   ): Promise<ResolvedAccountAuth | null> {
+    this.store.reloadIfModified(false, 0);
     const allAccounts = this.store.list(provider);
     if (allAccounts.length === 0) {
       return null;

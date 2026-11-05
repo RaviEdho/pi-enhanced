@@ -13,7 +13,7 @@ import {
   fetchAndCollapseAntigravityModels,
   loadCachedAntigravityModels,
 } from "./models.js";
-import { getAntigravityApiKey } from "./oauth.js";
+import { getAntigravityApiKey } from "./credentials.js";
 
 /** Register cached discovery immediately; load auth flows and inference only when needed. */
 export async function registerAntigravityProvider(pi: ExtensionAPI): Promise<void> {

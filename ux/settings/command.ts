@@ -22,6 +22,7 @@ export async function handleSettingsEnhancedCommand(
   ctx: ExtensionCommandContext
 ): Promise<void> {
   const store = EnhancedSettingsStore.getInstance();
+  store.refresh();
   const trimmed = args.trim();
   const parts = trimmed.split(/\s+/).filter(Boolean);
   const action = parts[0]?.toLowerCase();

@@ -77,6 +77,8 @@ export function executeWithMultiAccountFailover(
   }
 
   (async () => {
+    // Authentication must observe external login/logout immediately, not the UI poll cache.
+    store.reloadIfModified(false, 0);
     const totalAccounts = store.list(providerId);
     const hasConfiguredAccounts = totalAccounts.length > 0;
     const suppliedApiKey = options?.apiKey?.trim();

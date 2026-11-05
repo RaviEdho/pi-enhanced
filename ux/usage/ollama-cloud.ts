@@ -20,10 +20,35 @@ export function getOllamaCredentialId(apiKey: string): string {
   return createHash("sha256").update(apiKey.trim()).digest("hex");
 }
 
-/** Shared by /usage and the footer; hashes are never written to disk. */
-export function getOllamaFallbackAuth(): { token: string; label: string } | undefined {
+type OllamaFallbackAuth = { token: string; label: string };
+let fallbackAuthCache: {
+  path: string;
+  envKey: string | undefined;
+  checkedAt: number;
+  value: OllamaFallbackAuth | undefined;
+} | undefined;
+
+export function invalidateOllamaFallbackAuth(): void {
+  fallbackAuthCache = undefined;
+}
+
+/** Fresh by default for commands/polls. Only the footer opts into short-lived reads. */
+export function getOllamaFallbackAuth(maxAgeMs = 0): OllamaFallbackAuth | undefined {
+  const path = join(homedir(), ".pi/agent/auth.json");
+  const envKey = process.env.OLLAMA_API_KEY;
+  const now = performance.now();
+  const cached = fallbackAuthCache;
+  if (maxAgeMs > 0 && cached?.path === path && cached.envKey === envKey && now - cached.checkedAt < maxAgeMs) {
+    return cached.value ? { ...cached.value } : undefined;
+  }
+  const value = readOllamaFallbackAuth(path);
+  fallbackAuthCache = { path, envKey, checkedAt: now, value };
+  return value ? { ...value } : undefined;
+}
+
+function readOllamaFallbackAuth(path: string): OllamaFallbackAuth | undefined {
   try {
-    const auth = JSON.parse(readFileSync(join(homedir(), ".pi/agent/auth.json"), "utf8"))["ollama-cloud"];
+    const auth = JSON.parse(readFileSync(path, "utf8"))["ollama-cloud"];
     const token = auth?.key || auth?.access || auth?.apiKey || process.env.OLLAMA_API_KEY;
     if (typeof token === "string" && token.trim()) return { token, label: typeof auth?.email === "string" ? auth.email : "default" };
   } catch {

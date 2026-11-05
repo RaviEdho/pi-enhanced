@@ -22,7 +22,6 @@ import {
   REDIRECT_URI,
 } from "./constants.js";
 import type {
-  AntigravityApiKeyPayload,
   AntigravityOAuthCredentials,
   LoadCodeAssistResponse,
   OnboardOperation,
@@ -405,46 +404,4 @@ export async function refreshAntigravityToken(
   };
 }
 
-/**
- * Serializes credentials into the API key string passed to streamSimple.
- */
-export function getAntigravityApiKey(credentials: OAuthCredentials): string {
-  const creds = credentials as AntigravityOAuthCredentials;
-  const payload: AntigravityApiKeyPayload = {
-    accessToken: creds.access,
-    projectId: creds.projectId,
-    email: creds.email,
-  };
-  return JSON.stringify(payload);
-}
-
-/**
- * Parses options.apiKey passed to streamSimple.
- */
-export async function parseAntigravityApiKey(rawKey: string): Promise<AntigravityApiKeyPayload> {
-  const trimmed = rawKey.trim();
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        "accessToken" in parsed &&
-        "projectId" in parsed &&
-        typeof parsed.accessToken === "string" &&
-        typeof parsed.projectId === "string"
-      ) {
-        return parsed as AntigravityApiKeyPayload;
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
-  // Treat as raw access token and discover project
-  const projectId = await discoverProject(trimmed);
-  return {
-    accessToken: trimmed,
-    projectId,
-  };
-}
+export { getAntigravityApiKey, parseAntigravityApiKey } from "./credentials.js";

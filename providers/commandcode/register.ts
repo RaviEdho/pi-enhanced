@@ -22,7 +22,7 @@ import {
   PROVIDER_NAME as COMMANDCODE_PROVIDER_NAME,
 } from "./constants.js";
 import { DEFAULT_COMMANDCODE_MODELS, fetchCommandCodeModels, loadCachedModels } from "./models.js";
-import { getCommandCodeApiKey, resolveCommandCodeApiKey } from "./oauth.js";
+import { getCommandCodeApiKey, resolveCommandCodeApiKey } from "./credentials.js";
 import { fetchBillingInfo, isModelAllowedForBilling } from "./plan.js";
 
 /** Register Command Code without startup requests or inference-only imports. */

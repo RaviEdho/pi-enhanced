@@ -1,9 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { hostname } from "node:os";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { AccountStore } from "../../accounts/store.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "../oauth-page.js";
@@ -87,43 +85,7 @@ export async function validateKenariApiKey(
   return { planName, balanceIdr };
 }
 
-/**
- * Resolves the active Kenari API key from env, AccountStore, or auth.json.
- */
-export function resolveKenariApiKey(): string | undefined {
-  if (process.env.KENARI_API_KEY) {
-    return process.env.KENARI_API_KEY.trim();
-  }
-
-  const store = AccountStore.getInstance();
-  const active = store.getActive(PROVIDER_ID);
-  if (active?.apiKey || active?.access) {
-    return active.apiKey || active.access;
-  }
-
-  const authPath = join(homedir(), ".pi/agent/auth.json");
-  if (existsSync(authPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(authPath, "utf-8"));
-      const cred = parsed?.[PROVIDER_ID];
-      if (typeof cred === "string") return cred;
-      if (cred && typeof cred.apiKey === "string") return cred.apiKey;
-      if (cred && typeof cred.key === "string") return cred.key;
-      if (cred && typeof cred.access === "string") return cred.access;
-    } catch {
-      // Ignore
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Returns API key from credentials for Pi runtime.
- */
-export function getKenariApiKey(credentials: OAuthCredentials): string {
-  return (credentials as any).key || credentials.access || "";
-}
+export { getKenariApiKey, resolveKenariApiKey } from "./credentials.js";
 
 /**
  * Refreshes credentials. Since Kenari uses persistent API keys, this is a pass-through.

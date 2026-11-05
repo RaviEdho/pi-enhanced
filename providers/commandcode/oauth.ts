@@ -1,8 +1,5 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { AccountStore } from "../../accounts/store.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "../oauth-page.js";
@@ -39,41 +36,7 @@ export async function validateCommandCodeApiKey(apiKey: string): Promise<Command
   return (await res.json()) as CommandCodeWhoamiResponse;
 }
 
-/**
- * Resolves the currently active Command Code API key from env, AccountStore, or auth.json.
- */
-export function resolveCommandCodeApiKey(): string | undefined {
-  if (process.env.COMMANDCODE_API_KEY) {
-    return process.env.COMMANDCODE_API_KEY.trim();
-  }
-
-  const store = AccountStore.getInstance();
-  const active = store.getActive(PROVIDER_ID);
-  if (active?.apiKey || active?.access) {
-    return active.apiKey || active.access;
-  }
-
-  const authPath = join(homedir(), ".pi/agent/auth.json");
-  if (existsSync(authPath)) {
-    try {
-      const parsed = JSON.parse(readFileSync(authPath, "utf-8"));
-      const cred = parsed?.[PROVIDER_ID];
-      if (typeof cred === "string") return cred;
-      if (cred && typeof cred.apiKey === "string") return cred.apiKey;
-      if (cred && typeof cred.key === "string") return cred.key;
-      if (cred && typeof cred.access === "string") return cred.access;
-    } catch {}
-  }
-
-  return undefined;
-}
-
-/**
- * Returns the API key string from OAuthCredentials for Pi runtime calls.
- */
-export function getCommandCodeApiKey(credentials: OAuthCredentials): string {
-  return (credentials as any).key || credentials.access || "";
-}
+export { getCommandCodeApiKey, resolveCommandCodeApiKey } from "./credentials.js";
 
 /**
  * Refreshes or validates Command Code credentials. Since Command Code issues persistent

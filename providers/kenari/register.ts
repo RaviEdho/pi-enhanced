@@ -5,7 +5,7 @@ import { lazyStream } from "../lazy-stream.js";
 import { isProviderNetworkEnabled } from "../network.js";
 import { KENARI_API_BASE_URL, PROVIDER_ID, PROVIDER_NAME } from "./constants.js";
 import { DEFAULT_KENARI_MODELS, fetchKenariModels, loadCachedModels } from "./models.js";
-import { getKenariApiKey, resolveKenariApiKey } from "./oauth.js";
+import { getKenariApiKey, resolveKenariApiKey } from "./credentials.js";
 import { fetchKenariBillingInfo, fetchKenariPlans, filterKenariModelsForBilling, getCachedKenariBilling, loadCachedPlans } from "./plan.js";
 
 /** Register cached Kenari discovery; defer live requests and streaming code. */

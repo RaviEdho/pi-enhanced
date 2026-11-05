@@ -23,7 +23,7 @@ import {
   ANTIGRAVITY_WIRE_PROFILES,
   getAntigravityUserAgent,
 } from "./constants.js";
-import { parseAntigravityApiKey } from "./oauth.js";
+import { parseAntigravityApiKey } from "./credentials.js";
 import type { CloudCodeAssistResponseChunk } from "./types.js";
 
 const INT63_MASK = (1n << 63n) - 1n;

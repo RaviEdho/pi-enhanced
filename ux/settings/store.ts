@@ -8,6 +8,8 @@ import {
   type EnhancedSettings,
 } from "./types.js";
 
+const FILE_CHECK_INTERVAL_MS = 250;
+
 type SettingsChangeListener = (settings: EnhancedSettings, changedKey?: EnhancedSettingKey) => void;
 
 /**
@@ -19,6 +21,7 @@ export class EnhancedSettingsStore {
   private filePath: string;
   private settings: EnhancedSettings;
   private lastMtime = 0;
+  private lastCheckTime = -Infinity;
   private listeners: Set<SettingsChangeListener> = new Set();
 
   private constructor(customPath?: string) {
@@ -32,6 +35,7 @@ export class EnhancedSettingsStore {
 
     this.settings = { ...DEFAULT_ENHANCED_SETTINGS };
     this.load();
+    this.lastCheckTime = performance.now();
   }
 
   public static getInstance(): EnhancedSettingsStore {
@@ -60,7 +64,7 @@ export class EnhancedSettingsStore {
    * Updates a single setting and persists to disk.
    */
   public set<K extends EnhancedSettingKey>(key: K, value: EnhancedSettings[K]): void {
-    this.checkExternalChanges();
+    this.checkExternalChanges(true);
     if (this.settings[key] === value) return;
 
     this.settings[key] = value;
@@ -74,6 +78,11 @@ export class EnhancedSettingsStore {
   public getAll(): EnhancedSettings {
     this.checkExternalChanges();
     return { ...this.settings };
+  }
+
+  /** Explicit commands bypass the render-path polling interval. */
+  public refresh(): void {
+    this.checkExternalChanges(true);
   }
 
   /**
@@ -167,11 +176,14 @@ export class EnhancedSettingsStore {
     }
   }
 
-  private checkExternalChanges(): void {
+  private checkExternalChanges(force = false): void {
+    const now = performance.now();
+    if (!force && now - this.lastCheckTime < FILE_CHECK_INTERVAL_MS) return;
+    // Stamp before notifying so listeners' getters cannot recursively poll.
+    this.lastCheckTime = now;
     try {
-      if (!existsSync(this.filePath)) return;
       const stat = statSync(this.filePath);
-      if (stat.mtimeMs > this.lastMtime) {
+      if (stat.mtimeMs !== this.lastMtime) {
         this.load();
         this.notify();
       }

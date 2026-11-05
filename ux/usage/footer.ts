@@ -1,5 +1,4 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -14,6 +13,7 @@ import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } f
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
+import { FooterStatsCache, type FooterStats } from "./stats.js";
 import { balanceDisplayValue, bucketTimeElapsed, hasValidReset, isValueBucket } from "./buckets.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
@@ -234,7 +234,7 @@ function buildUsageBar(ctx: ExtensionContext): string {
 
   if (!account) {
     if (model.provider !== "ollama-cloud") return "";
-    const auth = getOllamaFallbackAuth();
+    const auth = getOllamaFallbackAuth(250);
     if (!auth) return "";
     const key = `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`;
     const report = QuotaManager.getInstance().getReport(key);
@@ -268,34 +268,10 @@ function buildUsageBar(ctx: ExtensionContext): string {
  * respecting the configured usage.contextFormat ("pi", "pi-enhanced", or "off").
  */
 function buildStatsLeft(
-  ctx: ExtensionContext,
+  stats: FooterStats,
   theme: ExtensionContext["ui"]["theme"]
 ): string {
-  // Compute session token usage, cache hit rate, and cost
-  let input = 0;
-  let output = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let cost = 0;
-  let latestCacheHitRate: number | undefined;
-
-  const entries = ctx.sessionManager?.getBranch?.() || [];
-  for (const e of entries) {
-    if (e.type === "message" && e.message.role === "assistant") {
-      const m = e.message as AssistantMessage;
-      if (m.usage) {
-        input += m.usage.input || 0;
-        output += m.usage.output || 0;
-        cacheRead += m.usage.cacheRead || 0;
-        cacheWrite += m.usage.cacheWrite || 0;
-        cost += m.usage.cost?.total || 0;
-
-        const latestPromptTokens = (m.usage.input || 0) + (m.usage.cacheRead || 0) + (m.usage.cacheWrite || 0);
-        latestCacheHitRate =
-          latestPromptTokens > 0 ? ((m.usage.cacheRead || 0) / latestPromptTokens) * 100 : undefined;
-      }
-    }
-  }
+  const { input, output, cacheRead, cacheWrite, cost, latestCacheHitRate, contextUsage } = stats;
 
   const statParts: string[] = [];
   if (input > 0) statParts.push(`↑${formatTokens(input)}`);
@@ -311,7 +287,6 @@ function buildStatsLeft(
 
   const contextFormat = EnhancedSettingsStore.getInstance().get("usage.contextFormat");
   if (contextFormat !== "off") {
-    const contextUsage = ctx.getContextUsage?.();
     if (contextUsage && contextUsage.contextWindow > 0) {
       const contextPercentValue = contextUsage.percent ?? 0;
       let displayStr: string;
@@ -371,9 +346,10 @@ function renderStandardFooterLine(
   ctx: ExtensionContext,
   footerData: ReadonlyFooterDataProvider | undefined,
   theme: ExtensionContext["ui"]["theme"],
-  width: number
+  width: number,
+  stats: FooterStats
 ): string {
-  const statsLeft = buildStatsLeft(ctx, theme);
+  const statsLeft = buildStatsLeft(stats, theme);
   const statsLeftWidth = visibleWidth(statsLeft);
 
   const model = ctx.model;
@@ -420,9 +396,10 @@ function renderStandardFooterLine(
 function renderFooterLine2(
   ctx: ExtensionContext,
   theme: ExtensionContext["ui"]["theme"],
-  width: number
+  width: number,
+  stats: FooterStats
 ): string {
-  const leftText = buildStatsLeft(ctx, theme);
+  const leftText = buildStatsLeft(stats, theme);
   const rightText = buildUsageBar(ctx);
 
   const leftW = visibleWidth(leftText);
@@ -559,6 +536,12 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   let idleTimer: NodeJS.Timeout | undefined;
   let currentCtx: ExtensionContext | undefined;
   let lastToolCheckAt = 0;
+  const statsCache = new FooterStatsCache();
+  pi.on("message_end", () => { statsCache.invalidate(); });
+  // A virtual model can route to a different context limit without model_select.
+  pi.on("before_provider_request", () => { statsCache.invalidate(); });
+  pi.on("session_compact", () => { statsCache.invalidate(); });
+  pi.on("session_tree", () => { statsCache.invalidate(); });
 
   // Re-render UI immediately whenever QuotaManager stores fresh quota reports or settings change
   const unsubscribeQuota = QuotaManager.getInstance().onQuotaUpdate(() => {
@@ -587,6 +570,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
 
       return {
         dispose() {
+          statsCache.invalidate();
           unsub?.();
           if (activeTui === tui) {
             activeTui = undefined;
@@ -596,17 +580,19 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
           tui.requestRender();
         },
         render(width: number): string[] {
-          const showQuotaFooter = EnhancedSettingsStore.getInstance().get("usage.showFooter");
+          const settings = EnhancedSettingsStore.getInstance();
+          const showQuotaFooter = settings.get("usage.showFooter");
+          const stats = statsCache.read(ctx, settings.get("usage.contextFormat") !== "off");
           const branch = footerData?.getGitBranch?.() ?? null;
           const lines: string[] = [];
 
           if (showQuotaFooter) {
             const line1 = renderFooterLine1(ctx, branch, theme, width);
-            const line2 = renderFooterLine2(ctx, theme, width);
+            const line2 = renderFooterLine2(ctx, theme, width, stats);
             lines.push(line1, line2);
           } else {
             const line1 = renderStandardPwdLine(ctx, branch, theme, width);
-            const line2 = renderStandardFooterLine(ctx, footerData, theme, width);
+            const line2 = renderStandardFooterLine(ctx, footerData, theme, width, stats);
             lines.push(line1, line2);
           }
 
@@ -626,6 +612,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    statsCache.invalidate();
     currentCtx = ctx;
     applyFooter(ctx);
 
@@ -643,6 +630,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
+    statsCache.invalidate();
     currentCtx = ctx;
   });
 
@@ -657,18 +645,21 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    statsCache.invalidate();
     currentCtx = ctx;
     // Turn completed: always trigger fresh quota fetch to capture latest token consumption
     void refreshSessionAccountQuota(ctx, 0);
   });
 
   pi.on("model_select", (_event, ctx) => {
+    statsCache.invalidate();
     currentCtx = ctx;
     // Non-blocking fresh parallel check for new model's candidate accounts
     void refreshCandidateAccounts(ctx, true);
   });
 
   pi.on("session_shutdown", () => {
+    statsCache.invalidate();
     unsubscribeQuota();
     unsubscribeSettings();
     unsubscribeMode();
