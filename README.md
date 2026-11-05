@@ -59,7 +59,9 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 
 Credential helpers do not load browser OAuth implementations. Login, token refresh, and raw Antigravity token discovery load those implementations only when needed. The footer caches raw active-branch usage and context statistics until the session, branch, model, or relevant session events change; theme formatting, quota updates, and reset countdowns remain live.
 
-Repeated display reads of settings and credentials share a 250ms file-check window. Local updates are immediate; explicit settings/usage commands, inference credential checks, and native logout synchronization bypass the polling window. External file edits are picked up on the next read after that window expires.
+Repeated display reads of settings and credentials share a 250ms file-check window. Local updates are immediate; explicit settings/usage commands, inference credential checks, and native logout synchronization bypass the polling window. External file edits are picked up on the next read after that window expires. Expired, missing, and corrupt Codex catalogs also coalesce metadata checks instead of repeatedly reading/parsing JSON; a successful discovery save updates the in-memory catalog immediately.
+
+Scout checks directory metadata on demand without filesystem watchers, reusing unchanged directory listings and refreshing file metadata only where needed. File contents use a memory-only LRU with a conservative 32MiB accounting budget and at most 4,096 entries; each reuse validates size, timestamps, and file identity. Directory listings and cached text are also revalidated on the next search after ten seconds, covering coarse filesystem timestamps. Files over 2MiB and known binary extensions remain excluded from content search. Explicit Git filters refresh Git status, `/scout-rescan` forces a full scan and clears cached text, and session shutdown/workspace replacement releases the active index. No cached file contents are written to disk.
 
 ## Retired providers
 

@@ -7,6 +7,21 @@ import { isScoutActive } from "./register.js";
 
 const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
+let loadedIndexer: typeof import("./indexer.js") | undefined;
+let indexerGeneration = 0;
+
+export async function loadFileIndexer(): Promise<typeof import("./indexer.js")> {
+  const generation = indexerGeneration;
+  const loaded = await import("./indexer.js");
+  if (generation !== indexerGeneration) throw new Error("Scout session ended while loading its index");
+  loadedIndexer = loaded;
+  return loaded;
+}
+
+export function disposeScoutIndex(): void {
+  indexerGeneration++;
+  loadedIndexer?.FileIndexer.disposeIfInitialized();
+}
 
 export function shouldDelegateToExternal(targetPath: string | undefined, cwd: string): boolean {
   if (!targetPath || targetPath === "." || targetPath === "./") return false;
@@ -48,7 +63,7 @@ export async function executeFind(
   cwd: string
 ): Promise<{ output: string; details: any }> {
   const [{ CursorStore }, { externalFind }, { formatFindOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
-    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), import("./indexer.js"),
+    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), loadFileIndexer(),
   ]);
   const cursorStore = CursorStore.getInstance();
   let offset = 0;
@@ -145,7 +160,7 @@ export async function executeGrep(
   cwd: string
 ): Promise<{ output: string; details: any }> {
   const [{ CursorStore }, { externalGrep, externalMultiGrep }, { formatGrepOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
-    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), import("./indexer.js"),
+    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), loadFileIndexer(),
   ]);
   const cursorStore = CursorStore.getInstance();
 

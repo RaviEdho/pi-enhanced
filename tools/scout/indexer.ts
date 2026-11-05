@@ -3,11 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { classifyLine } from "./classifier.js";
+import { FileContentCache, type FileContent } from "./content-cache.js";
 import { FrecencyTracker } from "./frecency.js";
 import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
 import type { GitFileStatus, IndexedFile, SearchMatch, SearchQueryConstraints } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const GIT_REFRESH_INTERVAL_MS = 10_000;
+const DIRECTORY_VERIFY_INTERVAL_MS = 10_000;
+const READ_CONCURRENCY = 8;
+
+interface DirectorySnapshot {
+  checkedAt: number;
+  signature: string;
+  entries: fs.Dirent[];
+}
 
 const DEFAULT_IGNORED_DIRS = new Set([
   ".git",
@@ -94,9 +104,10 @@ export class FileIndexer {
   private gitStatuses: Map<string, GitFileStatus> = new Map();
   private deletedPaths: Set<string> = new Set();
   private frecency = FrecencyTracker.getInstance();
-  private isScanning = false;
-  private lastScanTime = 0;
-  private scanWaiters: Array<() => void> = [];
+  private directories = new Map<string, DirectorySnapshot>();
+  private contentCache = new FileContentCache();
+  private scanPromise?: Promise<void>;
+  private lastGitRefreshTime = -Infinity;
 
   private constructor(cwd?: string) {
     this.cwd = cwd || process.cwd();
@@ -105,9 +116,18 @@ export class FileIndexer {
   public static getInstance(cwd?: string): FileIndexer {
     const resolvedCwd = cwd || process.cwd();
     if (!FileIndexer.instance || FileIndexer.instance.cwd !== resolvedCwd) {
+      FileIndexer.disposeIfInitialized();
       FileIndexer.instance = new FileIndexer(resolvedCwd);
     }
     return FileIndexer.instance;
+  }
+
+  public static disposeIfInitialized(): void {
+    const current = FileIndexer.instance;
+    FileIndexer.instance = null;
+    current?.contentCache.clear();
+    current?.directories.clear();
+    current?.files.clear();
   }
 
   public getCwd(): string {
@@ -130,6 +150,7 @@ export class FileIndexer {
    * Refresh git status asynchronously
    */
   public async refreshGitStatus(): Promise<void> {
+    this.lastGitRefreshTime = performance.now();
     try {
       const { stdout } = await execFileAsync("git", ["status", "--porcelain", "-uall"], {
         cwd: this.cwd,
@@ -185,93 +206,132 @@ export class FileIndexer {
     }
   }
 
-  /**
-   * Rescan working directory
-   */
+  /** Check directory membership on demand; only changed listings are reread. */
   public async scan(force = false): Promise<void> {
-    const now = Date.now();
-    if (!force && this.files.size > 0 && now - this.lastScanTime < 10000) {
+    if (this.scanPromise) {
+      await this.scanPromise;
+      // An explicit rescan must not be satisfied by an in-flight incremental scan.
+      if (force) await this.scan(true);
       return;
     }
-
-    if (this.isScanning) {
-      return new Promise<void>((resolve) => {
-        this.scanWaiters.push(resolve);
-      });
-    }
-
-    this.isScanning = true;
+    const pending = this.updateIndex(force);
+    this.scanPromise = pending;
     try {
-      await this.refreshGitStatus();
-
-      const newFiles = new Map<string, IndexedFile>();
-      await this.walkDir(this.cwd, "", newFiles);
-
-      this.files = newFiles;
-      this.lastScanTime = Date.now();
+      await pending;
     } finally {
-      this.isScanning = false;
-      const waiters = this.scanWaiters;
-      this.scanWaiters = [];
-      for (const waiter of waiters) {
-        waiter();
+      if (this.scanPromise === pending) this.scanPromise = undefined;
+    }
+  }
+
+  private async updateIndex(force: boolean): Promise<void> {
+    if (force) {
+      this.directories.clear();
+      this.contentCache.clear();
+    }
+    if (force || performance.now() - this.lastGitRefreshTime >= GIT_REFRESH_INTERVAL_MS) {
+      await this.refreshGitStatus();
+    }
+    const directoryStats = new Map<string, fs.Stats | undefined>();
+    if (!force) {
+      const known = [...this.directories.keys()];
+      for (let i = 0; i < known.length; i += READ_CONCURRENCY) {
+        await Promise.all(known.slice(i, i + READ_CONCURRENCY).map(async (dir) => {
+          try {
+            directoryStats.set(dir, dir === "" ? await fs.promises.stat(this.cwd)
+              : await fs.promises.lstat(path.join(this.cwd, dir)));
+          } catch {
+            directoryStats.set(dir, undefined);
+          }
+        }));
       }
     }
+    const newFiles = new Map<string, IndexedFile>();
+    const visited = new Set<string>();
+    await this.walkDir(this.cwd, "", newFiles, visited, directoryStats, force);
+    this.files = newFiles;
+    for (const dir of this.directories.keys()) {
+      if (!visited.has(dir)) this.directories.delete(dir);
+    }
+    this.contentCache.retain(new Set([...newFiles.values()].map((file) => file.absolutePath)));
   }
 
   private async walkDir(
     currentDir: string,
     relDir: string,
     collector: Map<string, IndexedFile>,
+    visited: Set<string>,
+    directoryStats: ReadonlyMap<string, fs.Stats | undefined>,
+    force: boolean,
     depth = 0
   ): Promise<void> {
-    if (depth > 15) return; // Prevent infinite recursion
-
-    let entries: fs.Dirent[];
+    if (depth > 15) return;
+    let snapshot = this.directories.get(relDir);
     try {
-      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+      // Permit an explicitly selected symlink workspace, but never follow child links.
+      const stat = directoryStats.has(relDir) ? directoryStats.get(relDir)
+        : depth === 0 ? await fs.promises.stat(currentDir) : await fs.promises.lstat(currentDir);
+      if (!stat?.isDirectory()) return;
+      visited.add(relDir);
+      const signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+      if (force || snapshot?.signature !== signature ||
+        performance.now() - snapshot.checkedAt >= DIRECTORY_VERIFY_INTERVAL_MS) {
+        const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+        // Keep the pre-read fingerprint: a concurrent membership change forces
+        // another listing on the next search rather than caching a missed entry.
+        // Periodic listing audits cover coarse/stale filesystem timestamps,
+        // without restatting every unchanged file as the old full scan did.
+        snapshot = { signature, entries, checkedAt: performance.now() };
+        this.directories.set(relDir, snapshot);
+      }
     } catch {
       return;
     }
-
-    for (const entry of entries) {
+    if (!snapshot) return;
+    for (const entry of snapshot.entries) {
       const name = entry.name;
-      if (DEFAULT_IGNORED_DIRS.has(name)) {
-        continue;
-      }
-      if (entry.isDirectory() && name.startsWith(".") && name !== ".github") {
-        continue;
-      }
-      if (entry.isFile() && name === ".DS_Store") {
-        continue;
-      }
-
+      if (DEFAULT_IGNORED_DIRS.has(name)) continue;
+      if (entry.isDirectory() && name.startsWith(".") && name !== ".github") continue;
+      if (entry.isFile() && name === ".DS_Store") continue;
       const relPath = relDir ? `${relDir}/${name}` : name;
       const fullPath = path.join(currentDir, name);
-
       if (entry.isDirectory()) {
-        await this.walkDir(fullPath, relPath, collector, depth + 1);
+        await this.walkDir(fullPath, relPath, collector, visited, directoryStats, force, depth + 1);
       } else if (entry.isFile()) {
-        const ext = path.extname(name).toLowerCase();
-        const isBinary = BINARY_EXTENSIONS.has(ext);
-
-        try {
-          const stats = await fs.promises.stat(fullPath);
-          const gitStatus = this.gitStatuses.get(relPath);
-          const frecencyScore = this.frecency.calculateScore(relPath, gitStatus);
-
-          collector.set(relPath, {
-            relativePath: relPath,
-            absolutePath: fullPath,
-            size: stats.size,
-            mtime: stats.mtimeMs,
-            gitStatus,
-            frecencyScore,
-            isBinary,
-          });
-        } catch {
-          // Stat failed, skip
+        let file = !force ? this.files.get(relPath) : undefined;
+        if (!file) {
+          try {
+            const stat = await fs.promises.lstat(fullPath);
+            if (!stat.isFile()) continue;
+            file = {
+              relativePath: relPath, absolutePath: fullPath, size: stat.size, mtime: stat.mtimeMs,
+              frecencyScore: 0, isBinary: BINARY_EXTENSIONS.has(path.extname(name).toLowerCase()),
+            };
+          } catch {
+            continue;
+          }
         }
+        file.gitStatus = this.gitStatuses.get(relPath);
+        file.frecencyScore = this.frecency.calculateScore(relPath, file.gitStatus);
+        collector.set(relPath, file);
+      }
+    }
+  }
+
+  private async *readCandidates(files: readonly IndexedFile[]): AsyncGenerator<{ file: IndexedFile; content: FileContent }> {
+    // Bounded I/O, but consume in the original rank order so limits/pagination
+    // and definition-first matching remain deterministic.
+    for (let offset = 0; offset < files.length; offset += READ_CONCURRENCY) {
+      const batch = files.slice(offset, offset + READ_CONCURRENCY);
+      const contents = await Promise.all(batch.map((file) => this.contentCache.read(file.absolutePath)));
+      for (let i = 0; i < batch.length; i++) {
+        const file = batch[i];
+        const content = contents[i];
+        if (content.metadata) {
+          file.size = content.metadata.size;
+          file.mtime = content.metadata.mtimeMs;
+          file.isBinary = content.binary;
+        }
+        yield { file, content };
       }
     }
   }
@@ -310,9 +370,10 @@ export class FileIndexer {
     query: string,
     options?: { limit?: number; offset?: number; path?: string }
   ): Promise<{ files: IndexedFile[]; totalMatched: number }> {
-    await this.scan();
-
     const constraints = parseQueryConstraints(query);
+    await this.scan();
+    // Explicit Git filters should reflect staging/deletion changes immediately.
+    if (constraints.gitFilter) await this.refreshGitStatus();
     if (options?.path && options.path !== "." && options.path !== "./") {
       let p = options.path.trim().replace(/\\/g, "/");
       if (path.isAbsolute(p)) {
@@ -378,7 +439,21 @@ export class FileIndexer {
 
     const totalMatched = scored.length;
     const paginated = scored.slice(offset, offset + limit).map((s) => s.file);
-
+    // Only returned paths need fresh metadata; do not stat every indexed file.
+    for (let i = 0; i < paginated.length; i += READ_CONCURRENCY) {
+      await Promise.all(paginated.slice(i, i + READ_CONCURRENCY).map(async (file) => {
+        if (!this.files.has(file.relativePath)) return; // Synthetic git:deleted entry.
+        try {
+          const stat = await fs.promises.lstat(file.absolutePath);
+          if (!stat.isFile()) return;
+          if (file.size !== stat.size || file.mtime !== stat.mtimeMs) {
+            file.isBinary = BINARY_EXTENSIONS.has(path.extname(file.relativePath).toLowerCase());
+          }
+          file.size = stat.size;
+          file.mtime = stat.mtimeMs;
+        } catch { /* The path may disappear after the membership snapshot. */ }
+      }));
+    }
     return { files: paginated, totalMatched };
   }
 
@@ -408,6 +483,7 @@ export class FileIndexer {
     // Smart case: if pattern is all lower case, default to case-insensitive
     const isAllLower = pattern.toLowerCase() === pattern;
     const caseSensitive = options?.ignoreCase === false ? true : options?.ignoreCase ? false : !isAllLower;
+    const literalNeedle = caseSensitive ? pattern : pattern.toLowerCase();
 
     let regex: RegExp | null = null;
     if (!options?.literal) {
@@ -421,11 +497,11 @@ export class FileIndexer {
     const matches: SearchMatch[] = [];
     let filesSearched = 0;
 
-    // Filter candidate files (skip binary files and files > 2MB)
+    // Known binary extensions never enter content search. Other binary/size
+    // decisions are revalidated on use so an edited file can become searchable.
     const candidateFiles: IndexedFile[] = [];
     for (const file of this.files.values()) {
-      if (file.isBinary) continue;
-      if (file.size > 2 * 1024 * 1024) continue;
+      if (BINARY_EXTENSIONS.has(path.extname(file.relativePath).toLowerCase())) continue;
       if (matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
         candidateFiles.push(file);
       }
@@ -434,21 +510,10 @@ export class FileIndexer {
     // Sort candidates so frecent and git-modified files are searched first
     candidateFiles.sort((a, b) => b.frecencyScore - a.frecencyScore);
 
-    for (const file of candidateFiles) {
-      filesSearched++;
-      let content: string;
-      try {
-        content = await fs.promises.readFile(file.absolutePath, "utf-8");
-      } catch {
-        continue;
-      }
-
-      if (content.includes("\0")) {
-        file.isBinary = true;
-        continue;
-      }
-
-      const lines = content.split(/\r?\n/);
+    for await (const { file, content } of this.readCandidates(candidateFiles)) {
+      if (content.searched) filesSearched++;
+      const lines = content.lines;
+      if (!lines) continue;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         let isMatch = false;
@@ -465,8 +530,7 @@ export class FileIndexer {
           }
         } else {
           const haystack = caseSensitive ? line : line.toLowerCase();
-          const needle = caseSensitive ? pattern : pattern.toLowerCase();
-          const idx = haystack.indexOf(needle);
+          const idx = haystack.indexOf(literalNeedle);
           if (idx !== -1) {
             isMatch = true;
             matchStart = idx;
@@ -509,20 +573,9 @@ export class FileIndexer {
 
     // Fuzzy fallback: if exact/regex search produced zero hits, try fuzzy match on lines
     if (matches.length === 0 && options?.enableFuzzyFallback !== false && pattern.length >= 3) {
-      for (const file of candidateFiles.slice(0, 50)) {
-        let content: string;
-        try {
-          content = await fs.promises.readFile(file.absolutePath, "utf-8");
-        } catch {
-          continue;
-        }
-
-        if (content.includes("\0")) {
-          file.isBinary = true;
-          continue;
-        }
-
-        const lines = content.split(/\r?\n/);
+      for await (const { file, content } of this.readCandidates(candidateFiles.slice(0, 50))) {
+        const lines = content.lines;
+        if (!lines) continue;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           const fuzzyRes = fuzzyMatch(pattern, line);
@@ -579,11 +632,14 @@ export class FileIndexer {
     const offset = options?.offset ?? 0;
     const contextLines = options?.context ?? 0;
     const constraints = this.buildPathAndGlobConstraints(options?.path, options?.glob);
+    const needles = patterns.map((pattern) => {
+      const ignoreCase = options?.ignoreCase ?? (pattern.toLowerCase() === pattern);
+      return { pattern, ignoreCase, needle: ignoreCase ? pattern.toLowerCase() : pattern };
+    });
 
     const candidateFiles: IndexedFile[] = [];
     for (const file of this.files.values()) {
-      if (file.isBinary) continue;
-      if (file.size > 2 * 1024 * 1024) continue;
+      if (BINARY_EXTENSIONS.has(path.extname(file.relativePath).toLowerCase())) continue;
       if (matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
         candidateFiles.push(file);
       }
@@ -593,35 +649,15 @@ export class FileIndexer {
     const matches: SearchMatch[] = [];
     let filesSearched = 0;
 
-    for (const file of candidateFiles) {
-      filesSearched++;
-      let content: string;
-      try {
-        content = await fs.promises.readFile(file.absolutePath, "utf-8");
-      } catch {
-        continue;
-      }
-
-      if (content.includes("\0")) {
-        file.isBinary = true;
-        continue;
-      }
-
-      const lines = content.split(/\r?\n/);
+    for await (const { file, content } of this.readCandidates(candidateFiles)) {
+      if (content.searched) filesSearched++;
+      const lines = content.lines;
+      if (!lines) continue;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-
-        for (const pattern of patterns) {
-          // Smart case (aligned with grep()): lowercase patterns match
-          // case-insensitively unless ignoreCase is explicitly set.
-          const ignoreCase =
-            options?.ignoreCase === true
-              ? true
-              : options?.ignoreCase === false
-                ? false
-                : pattern.toLowerCase() === pattern;
-          const haystack = ignoreCase ? line.toLowerCase() : line;
-          const needle = ignoreCase ? pattern.toLowerCase() : pattern;
+        let folded: string | undefined;
+        for (const { pattern, ignoreCase, needle } of needles) {
+          const haystack = ignoreCase ? (folded ??= line.toLowerCase()) : line;
           const idx = haystack.indexOf(needle);
           if (idx !== -1) {
             const { isDefinition, isImport } = classifyLine(line);

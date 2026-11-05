@@ -3,7 +3,7 @@ import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { registerSearchInterceptor } from "./interceptor.js";
 import { FrecencyTracker } from "./frecency.js";
-import { createFindToolDefinition, createGrepToolDefinition } from "./tools.js";
+import { createFindToolDefinition, createGrepToolDefinition, disposeScoutIndex, loadFileIndexer } from "./tools.js";
 
 const SEARCH_TOOL_NAMES = ["find", "grep"];
 export const SCOUT_TOOL_SESSION_ENTRY = "scout-tool-session-state";
@@ -78,6 +78,7 @@ export function registerScout(pi: ExtensionAPI): void {
   registerSearchInterceptor(pi);
   pi.on("session_shutdown", () => {
     unsubscribe();
+    disposeScoutIndex();
     // Flush only an existing tracker; never initialize the search engine on exit.
     FrecencyTracker.saveIfInitialized();
     activeSessionEnabled = undefined;
@@ -86,7 +87,7 @@ export function registerScout(pi: ExtensionAPI): void {
   pi.registerCommand("scout-rescan", {
     description: "Force rescan the repository index and refresh git status",
     handler: async (_args, ctx) => {
-      const { FileIndexer } = await import("./indexer.js");
+      const { FileIndexer } = await loadFileIndexer();
       const indexer = FileIndexer.getInstance(ctx.cwd);
       await indexer.scan(true);
       const message = `Rescanned ${indexer.getIndexedFileCount()} files (${indexer.getGitModifiedCount()} git modified/staged/untracked).`;
@@ -97,7 +98,7 @@ export function registerScout(pi: ExtensionAPI): void {
   pi.registerCommand("scout-health", {
     description: "Display health, file count, and memory metrics for Scout index",
     handler: async (_args, ctx) => {
-      const { FileIndexer } = await import("./indexer.js");
+      const { FileIndexer } = await loadFileIndexer();
       const indexer = FileIndexer.getInstance(ctx.cwd);
       const message = [
         `Scout Search Engine Health (${isScoutActive() ? "Active" : "Disabled"}):`,

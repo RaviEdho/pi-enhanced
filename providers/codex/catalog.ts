@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -16,7 +16,10 @@ export const DEFAULT_FALLBACK_FREE_MODELS = [
   "gpt-reserve",
 ];
 
+const DISK_CHECK_INTERVAL_MS = 250;
 let memoryCache: CodexCatalogCache | null = null;
+let memoryCachePath: string | undefined;
+let diskCheck: { checkedAt: number; signature: string | null | undefined } | undefined;
 
 function getCacheFilePath(): string {
   return join(homedir(), ".pi/agent/codex-catalog-cache.json");
@@ -28,43 +31,58 @@ function getCacheFilePath(): string {
  * the last snapshot to keep discovered models selectable while refreshing.
  */
 export function loadCachedCatalog(options: { allowStale?: boolean } = {}): CodexModelSummary[] | null {
-  if (memoryCache && (options.allowStale || Date.now() - memoryCache.updatedAt < CACHE_TTL_MS)) {
-    return memoryCache.models;
-  }
-
   const cachePath = getCacheFilePath();
-  if (existsSync(cachePath)) {
-    try {
-      const raw = readFileSync(cachePath, "utf-8");
-      const parsed = JSON.parse(raw) as CodexCatalogCache;
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        Array.isArray(parsed.models) &&
-        typeof parsed.updatedAt === "number"
-      ) {
-        // Enforce the TTL on disk-cached entries as well; expired catalogs must
-        // not be treated as authoritative (they would hide newly added models).
-        if (!options.allowStale && Date.now() - parsed.updatedAt >= CACHE_TTL_MS) {
-          return null;
-        }
-        memoryCache = parsed;
-        return parsed.models;
-      }
-    } catch {
-      // Fall through on corrupt cache
-    }
+  if (memoryCachePath !== cachePath) {
+    memoryCachePath = cachePath;
+    memoryCache = null;
+    diskCheck = undefined;
   }
+  const usable = () => memoryCache && (options.allowStale || Date.now() - memoryCache.updatedAt < CACHE_TTL_MS)
+    ? memoryCache.models : null;
+  const current = usable();
+  if (current) return current;
 
-  return memoryCache && (options.allowStale || Date.now() - memoryCache.updatedAt < CACHE_TTL_MS)
-    ? memoryCache.models
-    : null;
+  // Expired, missing and corrupt snapshots are negative-cache hits too. Poll
+  // metadata, not JSON, so one footer redraw cannot parse the file per account.
+  const now = performance.now();
+  if (diskCheck && now - diskCheck.checkedAt < DISK_CHECK_INTERVAL_MS) return usable();
+  let signature: string | null = null;
+  try {
+    const stat = statSync(cachePath);
+    signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  } catch {
+    // Missing/unreadable metadata is retried after the polling interval.
+  }
+  const previous = diskCheck;
+  diskCheck = { checkedAt: now, signature };
+  if (signature === null || previous?.signature === signature) return usable();
+
+  let raw: string;
+  try {
+    raw = readFileSync(cachePath, "utf-8");
+  } catch {
+    // Retry transient read errors even if the next metadata fingerprint matches.
+    diskCheck.signature = undefined;
+    return usable();
+  }
+  try {
+    const parsed = JSON.parse(raw) as CodexCatalogCache;
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.models) &&
+      typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)) {
+      memoryCache = parsed;
+    }
+  } catch {
+    // Retain the last successful snapshot; do not repeatedly parse corrupt JSON.
+  }
+  return usable();
 }
 
 /**
  * Persists the discovered catalog to disk and memory.
  */
 export function saveCachedCatalog(models: CodexModelSummary[]): void {
+  memoryCachePath = getCacheFilePath();
+  diskCheck = undefined;
   memoryCache = {
     updatedAt: Date.now(),
     models,
