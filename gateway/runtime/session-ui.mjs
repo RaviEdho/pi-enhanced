@@ -275,6 +275,23 @@ export class SessionUi {
         }
         if (text) lines.push(`-# ${text}`);
       }
+      // Only extend the last activity message while it is still the newest
+      // channel message. Narration, interactive cards, and other participants
+      // can all insert messages between batches. If history is unavailable,
+      // conservatively start a new page rather than edit an older message.
+      const lastPage = this.toolActivityPages.at(-1);
+      if (lines.length && lastPage?.message) {
+        let isLatest = false;
+        try {
+          const messages = await lastPage.channel.messages.fetch({ limit: 1, cache: false });
+          isLatest = messages.first()?.id === lastPage.message.id;
+        } catch { /* Cannot establish ordering; start a new page. */ }
+        if (!isLatest) {
+          // Preserve any failed pending update, but send it as a new message.
+          if (lastPage.dirty) lastPage.message = undefined;
+          this.toolActivityPages.push({ channel: batch[0].interaction.channel, text: "", message: undefined, dirty: false });
+        }
+      }
       for (const line of lines) {
         let page = this.toolActivityPages.at(-1);
         if (!page || page.text.length + 1 + line.length > TOOL_ACTIVITY_PAGE_LIMIT) {
