@@ -270,7 +270,7 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       await replyEphemeral(interaction, "Use this command in an allowed channel or direct message.");
       return;
     }
-    await interaction.reply({ content: "Preparing usage report…", ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
     try {
       await sessions.enqueue(sessionKey, async () => {
         const session = await sessions.get(sessionKey);
@@ -399,7 +399,6 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
 
     const args = interaction.options?.getString("args")?.trim() || "";
     await interaction.deferReply({ ephemeral: true });
-    await interaction.editReply(buildCommitCardPayload("Commit request queued. Staging prompts and commit review will appear in this conversation."));
     try {
       await sessions.enqueue(sessionKey, () => sessions.withRunSlot(async () => {
         // Resolve after dequeuing: earlier work may have switched this conversation's
