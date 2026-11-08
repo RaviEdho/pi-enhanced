@@ -8,11 +8,32 @@ import { isScoutActive } from "./register.js";
 const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
 let loadedIndexer: typeof import("./indexer.js") | undefined;
+let indexerPromise: Promise<typeof import("./indexer.js")> | undefined;
 let indexerGeneration = 0;
+// Jiti can expose incomplete exports to overlapping imports. Share every
+// first-use module load between find/grep, not just the indexer import.
+let scoutModulesPromise: Promise<[
+  typeof import("./cursor.js"),
+  typeof import("./external.js"),
+  typeof import("./formatter.js"),
+  typeof import("./frecency.js"),
+]> | undefined;
+
+function loadScoutModules() {
+  return scoutModulesPromise ??= Promise.all([
+    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"),
+  ]).catch((error) => {
+    scoutModulesPromise = undefined;
+    throw error;
+  });
+}
 
 export async function loadFileIndexer(): Promise<typeof import("./indexer.js")> {
   const generation = indexerGeneration;
-  const loaded = await import("./indexer.js");
+  const loaded = await (indexerPromise ??= import("./indexer.js").catch((error) => {
+    indexerPromise = undefined;
+    throw error;
+  }));
   if (generation !== indexerGeneration) throw new Error("Scout session ended while loading its index");
   loadedIndexer = loaded;
   return loaded;
@@ -20,6 +41,8 @@ export async function loadFileIndexer(): Promise<typeof import("./indexer.js")> 
 
 export function disposeScoutIndex(): void {
   indexerGeneration++;
+  // Keep module promises: restarting an in-flight import would recreate the
+  // race. Each loadFileIndexer caller checks its own session generation.
   loadedIndexer?.FileIndexer.disposeIfInitialized();
 }
 
@@ -62,9 +85,8 @@ export async function executeFind(
   },
   cwd: string
 ): Promise<{ output: string; details: any }> {
-  const [{ CursorStore }, { externalFind }, { formatFindOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
-    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), loadFileIndexer(),
-  ]);
+  const [modules, { FileIndexer }] = await Promise.all([loadScoutModules(), loadFileIndexer()]);
+  const [{ CursorStore }, { externalFind }, { formatFindOutput }, { FrecencyTracker }] = modules;
   const cursorStore = CursorStore.getInstance();
   let offset = 0;
   let limit = params.limit ?? PAGE_SIZE_FIND;
@@ -159,9 +181,8 @@ export async function executeGrep(
   },
   cwd: string
 ): Promise<{ output: string; details: any }> {
-  const [{ CursorStore }, { externalGrep, externalMultiGrep }, { formatGrepOutput }, { FrecencyTracker }, { FileIndexer }] = await Promise.all([
-    import("./cursor.js"), import("./external.js"), import("./formatter.js"), import("./frecency.js"), loadFileIndexer(),
-  ]);
+  const [modules, { FileIndexer }] = await Promise.all([loadScoutModules(), loadFileIndexer()]);
+  const [{ CursorStore }, { externalGrep, externalMultiGrep }, { formatGrepOutput }, { FrecencyTracker }] = modules;
   const cursorStore = CursorStore.getInstance();
 
   let pattern = params.pattern;

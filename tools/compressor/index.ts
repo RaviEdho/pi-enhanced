@@ -1,6 +1,23 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 
+// Share first-use imports across parallel result hooks and /recall or /gain.
+// Jiti can otherwise expose classes before their modules finish initializing.
+let compressorModulesPromise: Promise<[
+  typeof import("./pipeline.js"),
+  typeof import("./recall.js"),
+  typeof import("./tracker.js"),
+]> | undefined;
+
+function loadCompressorModules() {
+  return compressorModulesPromise ??= Promise.all([
+    import("./pipeline.js"), import("./recall.js"), import("./tracker.js"),
+  ]).catch((error) => {
+    compressorModulesPromise = undefined;
+    throw error;
+  });
+}
+
 export function registerOutputCompressor(pi: ExtensionAPI): void {
   // Intercept tool results from bash/powershell to filter noisy output before LLM context
   pi.on("tool_result", async (event: ToolResultEvent) => {
@@ -31,9 +48,7 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
       }
 
       const rawText = textBlocks.map((c) => c.text).join("\n");
-      const { runFilterPipeline } = await import("./pipeline.js");
-      const { RecallStore } = await import("./recall.js");
-      const { GainTracker } = await import("./tracker.js");
+      const [{ runFilterPipeline }, { RecallStore }, { GainTracker }] = await loadCompressorModules();
       const tracker = GainTracker.getInstance();
       const recallStore = RecallStore.getInstance();
       const result = runFilterPipeline(command, rawText, event.isError);
@@ -73,7 +88,7 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
   pi.registerCommand("recall", {
     description: "Inspect the raw unfiltered output of a recent command: /recall [id]",
     handler: async (args, ctx) => {
-      const { RecallStore } = await import("./recall.js");
+      const [, { RecallStore }] = await loadCompressorModules();
       const recallStore = RecallStore.getInstance();
       const id = args?.trim();
 
@@ -135,7 +150,7 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
   pi.registerCommand("gain", {
     description: "Display token savings achieved by native output filtering",
     handler: async (_args, ctx) => {
-      const { GainTracker } = await import("./tracker.js");
+      const [, , { GainTracker }] = await loadCompressorModules();
       const tracker = GainTracker.getInstance();
       const summaryText = tracker.formatSummary();
       if (ctx.hasUI && ctx.mode === "tui") {

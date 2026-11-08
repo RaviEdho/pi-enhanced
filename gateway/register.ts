@@ -1,6 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 
+// Keep commands lazy while preventing overlapping first-use imports under Jiti.
+let commandModulePromise: Promise<typeof import("./command.js")> | undefined;
+
 export async function registerDiscordGateway(pi: ExtensionAPI): Promise<void> {
   if (process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD === "1") {
     const [{ createDiscordGatewayRestartTool }, { createWorkingDirectoryTool }, { createDiscordHistoryTool, createDiscordListChannelsTool }] = await Promise.all([
@@ -32,7 +35,10 @@ export async function registerDiscordGateway(pi: ExtensionAPI): Promise<void> {
   pi.registerCommand("discord", {
     description: "Configure and manage the background Discord agent gateway",
     handler: async (args, ctx) => {
-      const { handleDiscordCommand } = await import("./command.js");
+      const { handleDiscordCommand } = await (commandModulePromise ??= import("./command.js").catch((error) => {
+        commandModulePromise = undefined;
+        throw error;
+      }));
       await handleDiscordCommand(args, ctx);
     },
   });

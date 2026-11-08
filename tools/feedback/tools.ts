@@ -12,6 +12,8 @@ import {
 } from "./types.js";
 
 const CUSTOM_CHOICE_LABEL = "✎ Type custom answer...";
+// Avoid partially initialized component exports during sibling ask_user calls.
+let questionnaireModulePromise: Promise<typeof import("./component.js")> | undefined;
 
 /**
  * Creates the unified `ask_user` tool definition.
@@ -106,7 +108,10 @@ export function createAskUserToolDefinition(): ToolDefinition<
       // 3. Primary: Dedicated interactive questionnaire component with Left/Right navigation
       if (ctx.mode === "tui" && typeof (ctx.ui as any)?.custom === "function") {
         try {
-          const { QuestionnaireComponent } = await import("./component.js");
+          const { QuestionnaireComponent } = await (questionnaireModulePromise ??= import("./component.js").catch((error) => {
+            questionnaireModulePromise = undefined;
+            throw error;
+          }));
           const result = await (ctx.ui as any).custom(
             (tui: any, theme: any, _kb: any, done: (res: QuestionnaireResult | undefined) => void) => {
               if (signal?.aborted) {

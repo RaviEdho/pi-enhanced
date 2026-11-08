@@ -216,6 +216,8 @@ const FETCH_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const activeFetchProviders = new Map<string, string>();
+// Match web_search: sibling fetches must await the same complete module load.
+let fetchModulePromise: Promise<typeof import("./fetch/pipeline.js")> | undefined;
 
 function trackActiveFetchProvider(toolCallId: string, provider: string): void {
   if (activeFetchProviders.size > 200) {
@@ -261,7 +263,10 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof WebFetchPa
       }
 
       try {
-        const { FetchPipeline } = await import("./fetch/pipeline.js");
+        const { FetchPipeline } = await (fetchModulePromise ??= import("./fetch/pipeline.js").catch((error) => {
+          fetchModulePromise = undefined;
+          throw error;
+        }));
         const pipeline = FetchPipeline.getInstance();
         if (params.provider) {
           trackActiveFetchProvider(toolCallId, params.provider);

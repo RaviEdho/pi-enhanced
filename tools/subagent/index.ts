@@ -28,6 +28,8 @@ export interface SubagentSessionState {
 
 let activeSessionEnabled: boolean | undefined = undefined;
 let savedPi: ExtensionAPI | undefined = undefined;
+// Share the foreground UI import if command invocations overlap on first use.
+let loaderModulePromise: Promise<typeof import("./loader.js")> | undefined;
 
 /**
  * Returns whether subagent tools are active for the current session.
@@ -121,7 +123,10 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   let runError: any = null;
 
   if (ctx.hasUI && typeof ctx.ui.custom === "function") {
-    const { SubagentBorderedLoader } = await import("./loader.js");
+    const { SubagentBorderedLoader } = await (loaderModulePromise ??= import("./loader.js").catch((error) => {
+      loaderModulePromise = undefined;
+      throw error;
+    }));
     const shortDesc = task.length > 40 ? `${task.slice(0, 37)}…` : task;
     result = await ctx.ui.custom<SubagentResult | null>((tui, theme, _kb, done) => {
       const loader = new SubagentBorderedLoader(
