@@ -14,6 +14,7 @@ import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
 import { FooterStatsCache, type FooterStats } from "./stats.js";
+import { formatGitStatus, GitStatusMonitor } from "./git-status.js";
 import { balanceDisplayValue, bucketTimeElapsed, hasValidReset, isValueBucket } from "./buckets.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
@@ -76,31 +77,46 @@ function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBu
   } else if (report.providerId === "openai-codex") {
     // Shared chat limits only, excluding feature-specific quotas.
     windows = windows.filter((bucket) => bucket.bucketId === "codex-primary" || bucket.bucketId === "codex-secondary");
+  } else if (report.providerId === "tokenharbor") {
+    // Account Pass usage is not evidence that a paid model is Pass-covered.
+    // Keep free and Pass allowances distinct; never show a free budget for paid calls.
+    const bucketId = modelId?.endsWith(":free") ? "tokenharbor-free" : "tokenharbor-pass";
+    windows = windows.filter((bucket) => bucket.bucketId === bucketId);
   }
 
   windows.sort((a, b) => quotaWindowSeconds(b) - quotaWindowSeconds(a));
   return { primary: windows[0], secondary: windows.slice(1), balances };
 }
 
-/**
- * Builds Line 1:
- * - Left: PWD (gitBranch)
- * - Far Right: Model ID • thinking: level
- */
-function renderFooterLine1(
+/** Keep the Git summary visible by shortening the directory first. */
+function renderDirectoryDetails(
   ctx: ExtensionContext,
-  branch: string | null,
+  gitDetails: string,
   theme: ExtensionContext["ui"]["theme"],
-  width: number
+  width: number,
 ): string {
   const modeIndicator = PlanModeManager.getInstance().getModeIndicator(theme, ctx.thinkingLevel);
   const cwd = formatCwd(
     ctx.sessionManager?.getCwd?.() || process.cwd(),
-    process.env.HOME || process.env.USERPROFILE
+    process.env.HOME || process.env.USERPROFILE,
   );
-  const branchStr = branch ? ` (${branch})` : "";
-  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}`);
-  const leftText = `${modeIndicator}${leftDetails}`;
+  const pathWidth = Math.max(0, width - visibleWidth(modeIndicator) - 3 - visibleWidth(gitDetails));
+  const directory = theme.fg("dim", ` • ${truncateToWidth(cwd, pathWidth, "…")}`);
+  return truncateToWidth(`${modeIndicator}${directory}${gitDetails}`, width);
+}
+
+/**
+ * Builds Line 1:
+ * - Left: PWD (gitBranch +staged ~unstaged ?untracked)
+ * - Far Right: Model ID • thinking: level
+ */
+function renderFooterLine1(
+  ctx: ExtensionContext,
+  gitDetails: string,
+  theme: ExtensionContext["ui"]["theme"],
+  width: number
+): string {
+  const leftText = renderDirectoryDetails(ctx, gitDetails, theme, width);
 
   // Right-side: Model and thinking effort
   const model = ctx.model;
@@ -150,7 +166,9 @@ function formatFooterCountdown(resetTime: string, now: number): string {
 function bucketWindowLabel(bucket: QuotaBucket): string {
   const window = normalizeWindowToken(bucket.window);
   if (window === QUOTA_WINDOW.default && !quotaWindowSeconds(bucket)) return bucket.displayName;
-  return quotaWindowShortLabel(window, bucket.windowSeconds) || bucket.displayName;
+  const label = quotaWindowShortLabel(window, bucket.windowSeconds) || bucket.displayName;
+  return bucket.bucketId === "tokenharbor-pass" ? `Pass ${label}`
+    : bucket.bucketId === "tokenharbor-free" ? `Free ${label}` : label;
 }
 
 /**
@@ -203,7 +221,12 @@ function renderUsageReport(
   if (report.error && report.groups.length === 0) return `${prefix}  Quota unavailable`;
   const { primary, secondary, balances } = extractKeyBuckets(report, modelId);
   const parts: string[] = [];
-  if (primary) parts.push(renderProgressBar(primary, secondary, now, theme));
+  if (primary) {
+    parts.push(renderProgressBar(primary, secondary, now, theme));
+    if (primary.enabled === false) parts.push("disabled");
+    else if (primary.exhausted === true) parts.push("exhausted");
+    else if (primary.exhausted === false && primary.usedFraction >= 1) parts.push("not exhausted");
+  }
   for (const balance of balances) {
     const value = balanceDisplayValue(balance) || "unavailable";
     parts.push(`${balance.displayName}: ${value}`);
@@ -323,19 +346,11 @@ function buildStatsLeft(
  */
 function renderStandardPwdLine(
   ctx: ExtensionContext,
-  branch: string | null,
+  gitDetails: string,
   theme: ExtensionContext["ui"]["theme"],
   width: number
 ): string {
-  const modeIndicator = PlanModeManager.getInstance().getModeIndicator(theme, ctx.thinkingLevel);
-  const cwd = formatCwd(
-    ctx.sessionManager?.getCwd?.() || process.cwd(),
-    process.env.HOME || process.env.USERPROFILE
-  );
-  const branchStr = branch ? ` (${branch})` : "";
-  const leftDetails = theme.fg("dim", ` • ${cwd}${branchStr}`);
-  const pwd = `${modeIndicator}${leftDetails}`;
-  return truncateToWidth(pwd, width, theme.fg("dim", "..."));
+  return renderDirectoryDetails(ctx, gitDetails, theme, width);
 }
 
 /**
@@ -399,8 +414,10 @@ function renderFooterLine2(
   width: number,
   stats: FooterStats
 ): string {
-  const leftText = buildStatsLeft(stats, theme);
-  const rightText = buildUsageBar(ctx);
+  // Style each side separately: a context warning's foreground reset must not
+  // cancel the quota's dim color on the right.
+  const leftText = theme.fg("dim", buildStatsLeft(stats, theme));
+  const rightText = theme.fg("dim", buildUsageBar(ctx));
 
   const leftW = visibleWidth(leftText);
   const rightW = visibleWidth(rightText);
@@ -421,7 +438,7 @@ function renderFooterLine2(
     }
   }
 
-  return theme.fg("dim", line);
+  return line;
 }
 
 const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is active
@@ -533,6 +550,7 @@ async function refreshSessionAccountQuota(
  */
 export function registerUsageFooter(pi: ExtensionAPI): void {
   let activeTui: { requestRender: () => void } | undefined;
+  let gitMonitor: GitStatusMonitor | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
   let currentCtx: ExtensionContext | undefined;
   let lastToolCheckAt = 0;
@@ -562,16 +580,25 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   });
 
   function applyFooter(ctx: ExtensionContext): void {
-    if (!ctx.hasUI) return;
+    if (ctx.mode !== "tui") return;
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       activeTui = tui;
-      const unsub = footerData?.onBranchChange?.(() => tui.requestRender());
+      gitMonitor?.dispose();
+      const monitor = new GitStatusMonitor(ctx.sessionManager.getCwd(), () => tui.requestRender());
+      gitMonitor = monitor;
+      monitor.start();
+      const unsub = footerData?.onBranchChange?.(() => {
+        monitor.scheduleRefresh();
+        tui.requestRender();
+      });
 
       return {
         dispose() {
           statsCache.invalidate();
           unsub?.();
+          monitor.dispose();
+          if (gitMonitor === monitor) gitMonitor = undefined;
           if (activeTui === tui) {
             activeTui = undefined;
           }
@@ -583,15 +610,15 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
           const settings = EnhancedSettingsStore.getInstance();
           const showQuotaFooter = settings.get("usage.showFooter");
           const stats = statsCache.read(ctx, settings.get("usage.contextFormat") !== "off");
-          const branch = footerData?.getGitBranch?.() ?? null;
+          const gitDetails = formatGitStatus(monitor.status, footerData?.getGitBranch?.() ?? null, theme);
           const lines: string[] = [];
 
           if (showQuotaFooter) {
-            const line1 = renderFooterLine1(ctx, branch, theme, width);
+            const line1 = renderFooterLine1(ctx, gitDetails, theme, width);
             const line2 = renderFooterLine2(ctx, theme, width, stats);
             lines.push(line1, line2);
           } else {
-            const line1 = renderStandardPwdLine(ctx, branch, theme, width);
+            const line1 = renderStandardPwdLine(ctx, gitDetails, theme, width);
             const line2 = renderStandardFooterLine(ctx, footerData, theme, width, stats);
             lines.push(line1, line2);
           }
@@ -644,7 +671,10 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     return undefined;
   });
 
+  pi.on("tool_execution_end", () => { gitMonitor?.scheduleRefresh(); });
+
   pi.on("agent_settled", (_event, ctx) => {
+    gitMonitor?.scheduleRefresh();
     statsCache.invalidate();
     currentCtx = ctx;
     // Turn completed: always trigger fresh quota fetch to capture latest token consumption
@@ -659,6 +689,8 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    gitMonitor?.dispose();
+    gitMonitor = undefined;
     statsCache.invalidate();
     unsubscribeQuota();
     unsubscribeSettings();
