@@ -1,0 +1,11 @@
+export const PROVIDER_ID = "tokenharbor";
+export const PROVIDER_NAME = "Token Harbor";
+export const TOKENHARBOR_ORIGIN = "https://tokenharbor.ai";
+export const TOKENHARBOR_BASE_URL = `${TOKENHARBOR_ORIGIN}/v1`;
+export const MODELS_URL = `${TOKENHARBOR_BASE_URL}/models`;
+export const ALLOWANCE_URL = `${TOKENHARBOR_ORIGIN}/api/cli/free-tier`;
+export const ALLOWANCE_TTL_MS = 60_000;
+export const USAGE_URL = `${TOKENHARBOR_ORIGIN}/dashboard/usage`;
+export const REQUEST_TIMEOUT_MS = 15_000;
+export const CATALOG_TTL_MS = 30 * 60_000;
+export const METADATA_TTL_MS = 24 * 60 * 60_000;

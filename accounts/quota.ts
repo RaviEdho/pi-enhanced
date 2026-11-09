@@ -56,6 +56,9 @@ export class QuotaManager {
             // Old OpenAI entries came from an unauthorized legacy Codex probe.
             // Never let those cached auth errors disable an otherwise valid login.
             if (cached.report?.providerId === "openai") continue;
+            // Pre-allowance Token Harbor records only said API-key quota was
+            // unavailable; they are not successful allowance snapshots.
+            if (cached.report?.providerId === "tokenharbor" && cached.report.quotaUnavailableReason) continue;
             this.cache.set(id, cached);
           }
         }
@@ -194,7 +197,8 @@ export class QuotaManager {
     maxAgeMs: number = DEFAULT_CACHE_TTL_MS
   ): Promise<ProviderUsageReport | null> {
     const entry = this.cache.get(account.id);
-    const age = account.provider === "ollama-cloud" ? Math.max(maxAgeMs, 60_000) : maxAgeMs;
+    const age = account.provider === "ollama-cloud" || account.provider === "tokenharbor"
+      ? Math.max(maxAgeMs, 60_000) : maxAgeMs;
     try {
       const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
         let report: ProviderUsageReport;
@@ -227,6 +231,9 @@ export class QuotaManager {
             signal,
             account.planType
           );
+        } else if (account.provider === "tokenharbor") {
+          const { fetchTokenHarborUsage } = await import("../ux/usage/tokenharbor.js");
+          report = await fetchTokenHarborUsage(token, usageAccountIdentity(account), signal, account.planType);
         } else if (account.provider === "kenari") {
           const { fetchKenariUsage } = await import("../ux/usage/kenari.js");
           report = await fetchKenariUsage(
@@ -240,7 +247,7 @@ export class QuotaManager {
         }
         return report;
       }, age);
-      if (!report.error && report.planType && report.planType !== account.planType) {
+      if (!report.error && (report.planType || account.provider === "tokenharbor") && report.planType !== account.planType) {
         account.planType = report.planType;
         account.updatedAt = Date.now();
         AccountStore.getInstance().upsert(account);
@@ -300,7 +307,9 @@ export class QuotaManager {
       // report existed (healthy until a fresh fetch proves otherwise).
     }
 
-    if (!report || report.groups.length === 0) {
+    if (!report || report.groups.length === 0 || account.provider === "tokenharbor") {
+      // Token Harbor allowances are reporting-only: paid-model coverage and
+      // wallet continuation are unknown. Keep its existing neutral balancing.
       // No cached report yet: assume unstarted healthy candidate
       return {
         isExhausted: false,

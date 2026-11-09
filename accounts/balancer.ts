@@ -2,6 +2,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
+import { isTokenHarborModelVisible } from "../providers/tokenharbor/models.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { getHighestTierAccounts } from "./priority.js";
@@ -51,6 +52,11 @@ export function isAccountEligibleForModel(account: AccountCredential, modelId?: 
     }
 
     return true;
+  }
+
+  if (account.provider === "tokenharbor") {
+    const key = account.apiKey || account.access;
+    return !key || isTokenHarborModelVisible(key, unwrappedModelId);
   }
 
   if (account.provider === "commandcode") {

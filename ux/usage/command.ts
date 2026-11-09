@@ -21,6 +21,8 @@ import { fetchAntigravityUsage } from "./antigravity.js";
 import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
+import { fetchTokenHarborUsage } from "./tokenharbor.js";
+import { ALLOWANCE_TTL_MS } from "../../providers/tokenharbor/constants.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
 import { buildUsageLines, formatUsageText } from "./format.js";
@@ -112,6 +114,7 @@ export async function collectUsageReports(
   const codexAccounts = store.list("openai-codex");
   const commandcodeAccounts = store.list("commandcode");
   const kenariAccounts = store.list("kenari");
+  const tokenHarborAccounts = store.list("tokenharbor");
 
   // 1. Google Antigravity multi-account fetch in parallel
   const isAntigravityActive = options?.currentProvider === "google-antigravity";
@@ -484,6 +487,34 @@ export async function collectUsageReports(
     }
   }
 
+  // Read-only API-key allowances; share the one-minute cache with the footer.
+  const tokenHarborSession = options?.currentProvider === "tokenharbor"
+    ? balancer.getSessionAccount("tokenharbor", options.sessionId, options.currentModelId) : undefined;
+  const tokenHarborPromises: Promise<ProviderUsageReport>[] = [];
+  for (const account of tokenHarborAccounts) {
+    if (signal?.aborted) break;
+    tokenHarborPromises.push((async (): Promise<ProviderUsageReport> => {
+      const base = {
+        providerId: "tokenharbor", providerName: "Token Harbor", accountId: account.id,
+        accountEmail: usageAccountIdentity(account), planType: account.planType,
+        isSessionAccount: account.id === tokenHarborSession?.id,
+        isActiveAccount: account.id === store.getActive("tokenharbor")?.id,
+        cooldownMinutes: account.blockedUntil && account.blockedUntil > Date.now()
+          ? Math.max(1, Math.ceil((account.blockedUntil - Date.now()) / 60_000)) : undefined,
+      };
+      if (account.disabledCause) return { ...base, fetchedAt: Date.now(), groups: [], error: account.disabledCause };
+      const token = account.apiKey || account.access || "";
+      const report = await QuotaManager.getInstance().refreshReport(account.id,
+        () => fetchTokenHarborUsage(token, base.accountEmail, signal, account.planType), ALLOWANCE_TTL_MS);
+      if (!report.error && report.planType !== account.planType) {
+        account.planType = report.planType;
+        account.updatedAt = Date.now();
+        store.upsert(account);
+      }
+      return { ...report, ...base, planType: report.planType };
+    })());
+  }
+
   // Ollama's balance endpoint recommends polling no more often than once a minute.
   const ollamaAccounts = store.list("ollama-cloud");
   const isOllamaActive = options?.currentProvider === "ollama-cloud";
@@ -522,6 +553,7 @@ export async function collectUsageReports(
     ...codexPromises,
     ...commandcodePromises,
     ...kenariPromises,
+    ...tokenHarborPromises,
     ...ollamaPromises,
   ]);
   for (const s of settled) {

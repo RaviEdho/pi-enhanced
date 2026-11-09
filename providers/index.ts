@@ -3,6 +3,7 @@ import { registerAntigravityProvider } from "./antigravity/register.js";
 import { registerCodexFilter } from "./codex/index.js";
 import { registerCommandCodeProvider } from "./commandcode/register.js";
 import { registerKenariProvider } from "./kenari/register.js";
+import { registerTokenHarborProvider } from "./tokenharbor/register.js";
 import { registerOllamaProvider } from "./ollama/index.js";
 
 /**
@@ -10,12 +11,14 @@ import { registerOllamaProvider } from "./ollama/index.js";
  * - Google Antigravity (Gemini Code Assist)
  * - Command Code (api.commandcode.ai)
  * - Kenari (kenari.id)
+ * - Token Harbor (tokenharbor.ai)
  * - OpenAI Codex dynamic plan filter
  */
 export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerAntigravityProvider(pi);
   await registerCommandCodeProvider(pi);
   await registerKenariProvider(pi);
+  registerTokenHarborProvider(pi);
   await registerOllamaProvider(pi);
   await registerCodexFilter(pi);
   // Pi refreshes providers in the background after initializing its TUI/RPC
@@ -27,5 +30,6 @@ export {
   registerCodexFilter,
   registerCommandCodeProvider,
   registerKenariProvider,
+  registerTokenHarborProvider,
   registerOllamaProvider,
 };

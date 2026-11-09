@@ -2,10 +2,11 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
+import { tokenHarborAccountId } from "../providers/tokenharbor/credentials.js";
 
 const STORE_VERSION = 2;
 const FILE_CHECK_INTERVAL_MS = 250;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari", "tokenharbor"]);
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
@@ -253,6 +254,8 @@ export class AccountStore {
         ? process.env.COMMANDCODE_API_KEY?.trim()
         : provider === "kenari"
         ? process.env.KENARI_API_KEY?.trim()
+        : provider === "tokenharbor"
+        ? process.env.TOKENHARBOR_API_KEY?.trim()
         : undefined;
     if (!existingAuth && !envVal) {
       return;
@@ -410,7 +413,9 @@ export class AccountStore {
               key ?? (PERSISTENT_KEY_PROVIDERS.has(provider) && access ? access : undefined);
             const tokenSuffix = refresh ? `token-${refresh.slice(-8)}` : access ? `tok-${access.slice(-8)}` : undefined;
             const identity = email || accountId || (projectId && projectId !== "aicode-consumers" ? projectId : undefined) || (persistentKey ? `key-${persistentKey.slice(-6)}` : undefined) || tokenSuffix || "default";
-            const id = AccountStore.generateAccountId(provider, identity);
+            const id = provider === "tokenharbor" && persistentKey
+              ? tokenHarborAccountId(persistentKey)
+              : AccountStore.generateAccountId(provider, identity);
 
             const planType =
               (typeof cred.planType === "string" ? cred.planType : undefined) ||
@@ -429,6 +434,8 @@ export class AccountStore {
                   ? process.env.COMMANDCODE_API_KEY?.trim()
                   : provider === "kenari"
                   ? process.env.KENARI_API_KEY?.trim()
+                  : provider === "tokenharbor"
+                  ? process.env.TOKENHARBOR_API_KEY?.trim()
                   : undefined;
               // Only the account that Pi mirrored into auth.json can go stale here: auth.json
               // holds a single credential per provider, so other stored accounts are deliberate
@@ -452,7 +459,9 @@ export class AccountStore {
 
             // Resolve the surviving account only after pruning so a removed duplicate is
             // never treated as the merge target.
-            const existing = findExisting(provider, email, accountId, id, refresh, persistentKey);
+            const existing = provider === "tokenharbor"
+              ? findExisting(provider, undefined, undefined, id, undefined, persistentKey)
+              : findExisting(provider, email, accountId, id, refresh, persistentKey);
 
             if (!existing) {
               const account: AccountCredential = {
@@ -578,6 +587,21 @@ export class AccountStore {
           existing.updatedAt = Date.now();
           modified = true;
         }
+      }
+    }
+
+    // Token Harbor has no verified account identity API. Match exact credentials,
+    // never abbreviated keys, and do not infer a plan or wallet balance.
+    const tokenHarborKey = process.env.TOKENHARBOR_API_KEY?.trim();
+    if (tokenHarborKey) {
+      authProviders.add("tokenharbor");
+      const existing = findExisting("tokenharbor", undefined, undefined, undefined, undefined, tokenHarborKey);
+      if (!existing) {
+        const id = tokenHarborAccountId(tokenHarborKey);
+        this.data.accounts.push({ id, provider: "tokenharbor", type: "api_key", apiKey: tokenHarborKey,
+          createdAt: Date.now(), updatedAt: Date.now() });
+        if (!this.data.activeAccounts.tokenharbor) this.data.activeAccounts.tokenharbor = id;
+        modified = true;
       }
     }
 

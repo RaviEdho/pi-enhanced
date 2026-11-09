@@ -35,11 +35,16 @@ export function executeWithMultiAccountFailover(
   model: Model<Api>,
   context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
-  executor: StreamSimpleExecutor
+  executor: StreamSimpleExecutor,
+  accountFailoverPolicy?: (error: unknown) => boolean,
+  preferredAccountId?: string,
 ): AssistantMessageEventStream {
   const outerStream = createAssistantMessageEventStream();
   const balancer = AccountBalancer.getInstance();
   const store = AccountStore.getInstance();
+  const canFailover = (error: unknown) =>
+    EnhancedSettingsStore.getInstance().get("balancer.failoverOn429") &&
+    isRateLimitError(error) && (accountFailoverPolicy?.(error) ?? true);
 
   const pushAborted = () => {
     const errorMsg: AssistantMessage = {
@@ -122,7 +127,14 @@ export function executeWithMultiAccountFailover(
       let resolvedAuth: ResolvedAccountAuth | null = null;
       if (hasConfiguredAccounts) {
         try {
-          resolvedAuth = await balancer.selectAccount(providerId, options?.sessionId, excludedIds, model.id);
+          const preferred = attempts === 1 && preferredAccountId ? store.get(preferredAccountId) : undefined;
+          if (preferred && preferred.provider === providerId && !preferred.disabledCause &&
+              isAccountEligibleForModel(preferred, model.id) && !QuotaManager.getInstance().evaluateAccountHealth(preferred, model.id).isExhausted) {
+            resolvedAuth = { account: preferred, token: await balancer.ensureFreshToken(preferred) };
+            if (options?.sessionId) balancer.recordSessionBinding(options.sessionId, providerId, preferred.id);
+          } else {
+            resolvedAuth = await balancer.selectAccount(providerId, options?.sessionId, excludedIds, model.id);
+          }
         } catch (authErr) {
           console.error(`[MultiAccount] Error selecting account for ${providerId}:`, authErr);
         }
@@ -152,8 +164,7 @@ export function executeWithMultiAccountFailover(
       try {
         innerStream = executor(model, context, options, resolvedAuth);
       } catch (initErr) {
-        const failoverAllowed = EnhancedSettingsStore.getInstance().get("balancer.failoverOn429");
-        if (failoverAllowed && hasConfiguredAccounts && isRateLimitError(initErr)) {
+        if (hasConfiguredAccounts && canFailover(initErr)) {
           const cooldown = extractCooldownMs(initErr);
           balancer.markRateLimited(account.id, cooldown, String(initErr));
           continue; // Try next account
@@ -200,13 +211,14 @@ export function executeWithMultiAccountFailover(
             return;
           }
 
-          if (event.type === "text_delta" || event.type === "thinking_delta") {
+          // Once any content block is visible, replay could duplicate text or tools.
+          if (event.type !== "start" && event.type !== "error" && event.type !== "done") {
             emittedTokens = true;
           }
 
           if (event.type === "error") {
             const errorText = event.error.errorMessage || "";
-            if (!emittedTokens && isRateLimitError(errorText) && hasConfiguredAccounts) {
+            if (!emittedTokens && hasConfiguredAccounts && canFailover(errorText)) {
               // Rate limit error before any tokens: discard buffered start event and fail over
               bufferedEvents.length = 0;
               const cooldown = extractCooldownMs(errorText);
@@ -233,8 +245,7 @@ export function executeWithMultiAccountFailover(
           pushAborted();
           return;
         }
-        const failoverAllowed = EnhancedSettingsStore.getInstance().get("balancer.failoverOn429");
-        if (failoverAllowed && !emittedTokens && isRateLimitError(streamErr) && hasConfiguredAccounts) {
+        if (!emittedTokens && hasConfiguredAccounts && canFailover(streamErr)) {
           bufferedEvents.length = 0;
           const cooldown = extractCooldownMs(streamErr);
           balancer.markRateLimited(account.id, cooldown, String(streamErr));

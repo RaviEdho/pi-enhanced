@@ -1,6 +1,6 @@
 # pi-enhanced
 
-Enhanced Pi extension package providing the **Google Antigravity** provider, **Command Code** provider, **Kenari** AI gateway provider, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
+Enhanced Pi extension package providing the **Google Antigravity** provider, **Command Code** provider, **Kenari** and **Token Harbor** AI gateway providers, dynamic OpenAI Codex plan filtering, autonomous commit workflows, terminal output compression, codebase search, and multi-provider web search.
 
 ## Features
 
@@ -10,6 +10,15 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
   - On login, the account plan and purchased balance are checked. Free accounts without purchased credits hide models observed to be restricted in a Free-account probe; paid plans or accounts with purchased credits retain the full catalog. Unknown access is not hidden. The snapshot is an observation, not an Ollama entitlement guarantee.
   - `/usage` and the quota footer show included and purchased balances or legacy limits when reported. Model prices are estimates parsed from Ollama's pricing page; unknown rates use Pi's required numeric zero placeholders and are labeled unknown or incomplete. Output limits are estimates. Actual billing can differ, including off-peak rates.
   - Ollama's catalog is public and is not known to filter by account entitlement. Native model-specific thinking controls are not currently mapped to Pi's effort slider.
+- **Token Harbor Provider**:
+  - Sign in with `/login tokenharbor` using a Universal Key, or set `TOKENHARBOR_API_KEY`. Repeated logins add credentials to the multi-account pool; `/logout` uses the native-style account selector.
+  - Credential-scoped `/v1/models` discovery is enriched from each exact model's public specification page. Models without verified chat/tool support, limits, modalities, or complete prices are omitted—no invented limits or static fallback catalog. Discovery is cached for 30 minutes; public metadata for 24 hours. Offline startup uses the last successful credential-scoped snapshot.
+  - Native OpenAI streaming preserves tools, reasoning output, images, cancellation, and token usage. Reasoning-effort controls are hidden unless discovery explicitly declares supported efforts; model names and accepted-but-ignored parameters are not capability evidence.
+  - Catalog visibility is **not** Pass coverage or funded access. No automatic subscription filtering, wallet fallback, or paid/free model substitution is performed. Select explicit `:free` IDs for free routes; enabling free-route data sharing remains a dashboard action. Free-route content may be retained and used under the provider's terms.
+  - `/usage` and the footer read live allowances through `GET /api/cli/free-tier` using the Universal Key. They show the verified Pass name, separate Pass/free percentages, and their shared seven-day reset window. Activated windows show elapsed markers even at zero usage; inactive windows have no invented timing. Exhaustion flags remain distinct from rounded percentages. Polling is shared per credential at most once a minute; failed refreshes retain the last successful report with an error and age in `/usage`. No browser credentials or inference calls are needed.
+  - Allowance data is reporting-only: model filtering and balancing are unchanged. The API does not expose paid-model Pass coverage, wallet balance, or the wallet-continuation setting. The November 9 response's free-model list used unsuffixed base IDs, contrary to the documented `:free` IDs; it is ignored rather than used for routing. Quota-pace balancing remains unavailable; conservative pre-content 429 failover never bypasses detected spending caps, billing, quota, or access errors.
+  - Displayed costs are list-price estimates, not settled Pass/wallet charges; discounts and boosts can differ. Known complete long-context price tiers are applied when reported. MiMo V2.6 Flash exceeded small output caps in live probes; do not rely on such caps as a financial safeguard.
+  - Sources audited November 8, 2026: [catalog/API](https://tokenharbor.ai/docs/api/models), [Pass rules](https://tokenharbor.ai/docs/billing/subscription), [key restrictions](https://tokenharbor.ai/docs/getting-started/universal-key), and [privacy](https://tokenharbor.ai/privacy). The [read-only allowance API](https://tokenharbor.ai/docs/api/allowance) was verified November 9, 2026. Each cached model also records its exact public specification URL and verification timestamp.
 - **Kenari AI Gateway Provider**:
   - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
   - Dual authentication: Choose browser loopback PKCE sign-in or API-key login via `/login kenari`, or set `KENARI_API_KEY`.
@@ -40,7 +49,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Fast, Cache-First Startup**: Provider registration never waits for network requests. Startup uses cached catalogs (including an expired Codex snapshot) or existing offline fallbacks; Pi refreshes discovery in the background after its TUI/RPC interface initializes. Command viewers, web pipelines, and inference implementations load on demand. Settings and Discord model pickers can also request background refreshes; reopen them to see updates. `--offline` / `PI_OFFLINE` disable automatic catalog, billing, and quota requests.
 - **Dynamic OpenAI Codex Discovery & Plan Filtering**: Automatically discovers newly available models from OpenAI's live Codex catalog, including their context windows, input modalities, and reasoning levels, without waiting for Pi's bundled catalog to update. Detects your ChatGPT plan tier from your OAuth token and filters unavailable or hidden models from `/model` and `pi --list-models`, with cached discovery for offline startup.
 - **Cloudflare Workers AI**: Extension-specific model filtering and usage reporting have been retired. Pi's native provider and existing credentials are unaffected.
-- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI Codex, Command Code, Kenari). Always prefer the highest healthy tier eligible for the requested model; lower tiers are fallback-only, and selection returns to higher tiers when they recover. Session affinity and weekly reset-pace balancing apply within the preferred tier, with automatic OAuth token refresh and transparent failover on 429 / quota exhaustion. ChatGPT priority: Enterprise > Business/Team > Pro > Plus > Go > Free. Unknown tiers and PAYG accounts remain fallback candidates. Pi's native OpenAI provider is not managed by this extension; existing OpenAI credentials are left intact.
+- **Multi-Account Support & Auto-Failover**: Pool multiple accounts per provider (Google Antigravity, OpenAI Codex, Command Code, Kenari, Token Harbor). Where verified plan and quota data exist, prefer the highest healthy tier eligible for the requested model; lower tiers are fallback-only, and selection returns to higher tiers when they recover. Session affinity and weekly reset-pace balancing apply within the preferred tier, with automatic OAuth token refresh and transparent failover on 429 / quota exhaustion. ChatGPT priority: Enterprise > Business/Team > Pro > Plus > Go > Free. Unknown tiers and PAYG accounts remain fallback candidates. Pi's native OpenAI provider is not managed by this extension; existing OpenAI credentials are left intact.
 - **Provider Quotas with Reset Pace Markers**: Live multi-account quota monitoring via `/usage` showing usage percentage, plan tier, reset countdowns, and real-time reset progress markers (`┃`) on the usage bar.
 - **Autonomous Git Assistant (`/git`, `/commit`)**: Inspects staged changes using an isolated, in-memory sub-agent with specialized diff-sampling tools (`git_overview`, `git_file_diff`, `propose_commit`, `propose_commits`), supports atomic multi-stage commits, PR generation (`/git pr`), smart branching (`/git branch`), merge conflict resolution (`/git resolve`), release drafting (`/git release`), and instant zero-token helpers (`/git sync`, `/git undo`).
 - **Terminal Output Compressor (`tools/compressor/`, `/gain`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, compressing 60–90% of raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Stores full uncompressed outputs in an LRU buffer accessible via `/recall <id>` and provides token reduction statistics via `/gain`.
@@ -124,11 +133,14 @@ Use Discord **`/stop`** in an active gateway thread or DM to force stop its curr
 # Or login to Kenari:
 /login kenari
 
+# Or log in to Token Harbor with a Universal Key:
+/login tokenharbor
+
 # Or log in to Ollama Cloud:
 /login ollama-cloud
 ```
 
-Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically where supported. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."`, `KENARI_API_KEY="kn-..."`, or `OLLAMA_API_KEY` directly.
+Credentials and tokens are stored in `~/.pi/agent/auth.json` and refreshed automatically where supported. You can also export `COMMANDCODE_API_KEY="sk-cmd-..."`, `KENARI_API_KEY="kn-..."`, `TOKENHARBOR_API_KEY`, or `OLLAMA_API_KEY` directly.
 
 ### 3. Running with Models
 
@@ -142,6 +154,9 @@ pi --model commandcode/google/gemini-3.7-flash
 pi --model kenari/deepseek-v4-1-flash:free
 pi --model kenari/kenari-free
 pi --model kenari/claude-haiku-5-5
+
+# Token Harbor: use the exact ID discovered for your key
+pi --model tokenharbor/deepseek-v4.1-flash:free
 
 # Interactive mode with default Antigravity model
 pi --model google-antigravity/gemini-3.1-pro
@@ -241,6 +256,11 @@ Explore and design code solutions safely before committing to file modifications
 - **Cache-Safe Sandboxing**: Tool schemas are never altered dynamically, ensuring prefix caching remains completely intact.
 
 ### 8. Autonomous Git Assistant (`/git`, `/commit`)
+
+The TUI footer shows a live repository summary beside the branch, e.g. `(main +2 ~3 ?1 ↑1)`:
+- `+` staged files, `~` unstaged tracked files, `?` untracked files, `!` merge conflicts; zero counts are hidden and a clean working tree shows `clean`.
+- `↑` / `↓` commits ahead of / behind the locally known upstream (no network fetch). Partially staged files count in both `+` and `~`; renamed files count once per category.
+- Refreshes after tools finish and every 5 seconds, including external edits. Works with the quota footer enabled or disabled; outside a Git repository no summary is shown.
 
 Run `/git` or `/commit` to autonomously inspect changes and manage git workflows:
 
