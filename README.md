@@ -258,7 +258,7 @@ Explore and design code solutions safely before committing to file modifications
 ### 8. Autonomous Git Assistant (`/git`, `/commit`)
 
 The TUI footer shows a live repository summary beside the branch, e.g. `(main +2 ~3 ?1 ↑1)`:
-- `+` staged files, `~` unstaged tracked files, `?` untracked files, `!` merge conflicts; zero counts are hidden and a clean working tree shows `clean`.
+- `+` staged files, `~` unstaged tracked files, `?` untracked files, `!` merge conflicts; all indicators use the footer's dim color. Zero counts are hidden; with no changes or ahead/behind commits, only the branch is shown.
 - `↑` / `↓` commits ahead of / behind the locally known upstream (no network fetch). Partially staged files count in both `+` and `~`; renamed files count once per category.
 - Refreshes after tools finish and every 5 seconds, including external edits. Works with the quota footer enabled or disabled; outside a Git repository no summary is shown.
 

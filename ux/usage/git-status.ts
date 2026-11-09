@@ -53,14 +53,14 @@ export function formatGitStatus(
 ): string {
   if (!status) return fallbackBranch ? theme.fg("dim", ` (${fallbackBranch})`) : "";
   const parts: string[] = [];
-  if (status.conflicts) parts.push(theme.fg("error", `!${status.conflicts}`));
-  if (status.staged) parts.push(theme.fg("success", `+${status.staged}`));
-  if (status.unstaged) parts.push(theme.fg("warning", `~${status.unstaged}`));
-  if (status.untracked) parts.push(theme.fg("accent", `?${status.untracked}`));
-  if (!parts.length) parts.push(theme.fg("success", "clean"));
-  if (status.ahead) parts.push(theme.fg("dim", `↑${status.ahead}`));
-  if (status.behind) parts.push(theme.fg("dim", `↓${status.behind}`));
-  return theme.fg("dim", ` (${status.branch} `) + parts.join(" ") + theme.fg("dim", ")");
+  if (status.conflicts) parts.push(`!${status.conflicts}`);
+  if (status.staged) parts.push(`+${status.staged}`);
+  if (status.unstaged) parts.push(`~${status.unstaged}`);
+  if (status.untracked) parts.push(`?${status.untracked}`);
+  if (status.ahead) parts.push(`↑${status.ahead}`);
+  if (status.behind) parts.push(`↓${status.behind}`);
+  const summary = parts.length ? ` ${parts.join(" ")}` : "";
+  return theme.fg("dim", ` (${status.branch}${summary})`);
 }
 
 /** Reject failed, timed-out, or oversized output instead of reporting partial counts. */
