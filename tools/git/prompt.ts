@@ -21,7 +21,7 @@ Your task is to inspect the staged git changes and propose clean, atomic, conven
 - \`type\`: Conventional type (feat, fix, refactor, perf, docs, test, chore, style, ci, build).
 - \`scope\`: Optional short lowercase module name (e.g. "auth", "commit", "providers", "accounts"). Omit or leave null if broad.
 - \`subject\`: Concise summary sentence in imperative or past tense (<= 72 chars, NO trailing period).
-- \`body\`: Required string containing at least 2 concise markdown bullet points explaining *why* and key changes; aim for 4 bullet points.
+- \`body\`: Required Markdown string with at least 2 concise \`- \` bullet points explaining *why* and key changes, or an actual array of bullet strings; aim for 4 bullet points. Never JSON-encode an array into a string. If a proposal tool rejects the body, correct it and call the tool again.
 - \`files\`: (For \`propose_commits\`) Array of file paths or folder prefixes belonging to that commit stage.
 
 Do not output chat commentary instead of calling the tool. Always call \`propose_commit\` or \`propose_commits\` as the final step.`;
@@ -43,6 +43,6 @@ The user invoked /commit with an instruction. Treat that instruction as the goal
 - Every commit stage must explicitly select at least one file or hunk. It is valid to leave other changed files and hunks uncommitted.
 
 ### Commit message:
-Use conventional commit types (feat, fix, refactor, perf, docs, test, chore, style, ci, build), with an optional short lowercase scope: \`type(scope): subject\`. Keep the subject concise and imperative (<= 72 chars, no trailing period). Include a body with at least 2 concise markdown bullet points explaining why and the key changes; aim for 4 bullet points.
+Use conventional commit types (feat, fix, refactor, perf, docs, test, chore, style, ci, build), with an optional short lowercase scope: \`type(scope): subject\`. Keep the subject concise and imperative (<= 72 chars, no trailing period). Include a body as a Markdown string with at least 2 concise \`- \` bullet points explaining why and the key changes, or an actual array of bullet strings; aim for 4 bullet points. Never JSON-encode an array into a string. If a proposal tool rejects the body, correct it and call the tool again.
 
 Do not output chat commentary instead of calling the tool. Always call \`propose_commit\` or \`propose_commits\` as the final step.`;

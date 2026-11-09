@@ -9,25 +9,57 @@ import {
 } from "./git.js";
 import type { CommitActionEntry, CommitHunkSelection, CommitPlanProposal, CommitProposal } from "./types.js";
 
-function parseCommitStage(item: any): CommitProposal | null {
-  if (!item || typeof item !== "object") return null;
-  const commitType = (item.type || "chore").trim();
+function normalizeCommitBody(value: unknown): string {
+  const invalidBody = () => new Error(
+    'Invalid commit body: provide at least 2 non-empty Markdown bullets ("- Why this changed\\n- Key change") or an array of strings. Correct the body and call the proposal tool again.'
+  );
+
+  // Some models serialize a bullet array into a string, sometimes twice.
+  // Decode only JSON-shaped values; ordinary Markdown must stay untouched.
+  for (let depth = 0; depth < 2 && typeof value === "string"; depth++) {
+    const text = value.trim();
+    if (!text.startsWith("[") && !text.startsWith('"')) break;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      throw invalidBody();
+    }
+  }
+
+  let body: string;
+  if (Array.isArray(value)) {
+    if (!value.every((line): line is string => typeof line === "string" && line.trim().length > 0)) {
+      throw invalidBody();
+    }
+    body = value.map((line: string) => {
+      const text = line.trim().replace(/^[-*+•](?:[ \t]+|$)/, "");
+      if (!text.trim()) throw invalidBody();
+      return `- ${text}`;
+    }).join("\n");
+  } else if (typeof value === "string") {
+    body = value.trim();
+  } else {
+    throw invalidBody();
+  }
+
+  // Validate before publishing a proposal, so neither the preview nor Git
+  // receives a malformed body. Preserve wrapped lines and Markdown content.
+  body = body.replace(/\r\n?/g, "\n").replace(/^[-*+•][ \t]+(?=\S)/gm, "- ");
+  if ((body.match(/^- [^\S\n]*\S/gm) ?? []).length < 2) throw invalidBody();
+  return body;
+}
+
+function parseCommitStage(item: any): CommitProposal {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new Error("Invalid commit stage: provide a subject and a body with at least 2 Markdown bullets.");
+  }
+  const commitType = typeof item.type === "string" && item.type.trim() ? item.type.trim() : "chore";
   const scope = item.scope && typeof item.scope === "string" ? item.scope.trim() : undefined;
   const rawSubject = item.subject || item.summary || "";
   const subject = typeof rawSubject === "string" ? rawSubject.trim() : "";
-  if (!subject) return null;
+  if (!subject) throw new Error("Invalid commit stage: provide a non-empty subject and call the proposal tool again.");
 
-  let body: string | undefined;
-  if (typeof item.body === "string" && item.body.trim()) {
-    body = item.body.trim();
-  } else if (Array.isArray(item.body)) {
-    const lines = item.body
-      .filter((l: any): l is string => typeof l === "string" && l.trim().length > 0)
-      .map((line: string) => (line.trim().startsWith("-") ? line.trim() : `- ${line.trim()}`));
-    if (lines.length > 0) {
-      body = lines.join("\n");
-    }
-  }
+  const body = normalizeCommitBody(item.body);
 
   const files = Array.isArray(item.files)
     ? item.files
@@ -58,6 +90,10 @@ const HunkSelectionSchema = Type.Object({
   hunkIds: Type.Array(Type.Integer()),
 });
 
+const CommitBodySchema = Type.Optional(Type.Union([Type.String(), Type.Array(Type.String()), Type.Null()], {
+  description: "Required: at least 2 Markdown bullets in one string, or an array of bullet strings. Do not JSON-encode the array into a string.",
+}));
+
 const CommitStageSchema = Type.Object({
   files: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
   hunks: Type.Optional(Type.Union([Type.Array(HunkSelectionSchema), Type.Null()])),
@@ -65,7 +101,7 @@ const CommitStageSchema = Type.Object({
   scope: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   subject: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   summary: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  body: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Any()), Type.Null()])),
+  body: CommitBodySchema,
 });
 
 export function createCommitTools(options: {
@@ -173,7 +209,7 @@ export function createCommitTools(options: {
       scope: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       subject: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       summary: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      body: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Any()), Type.Null()])),
+      body: CommitBodySchema,
       files: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
       hunks: Type.Optional(Type.Union([Type.Array(HunkSelectionSchema), Type.Null()])),
       commits: Type.Optional(Type.Union([Type.Array(CommitStageSchema), Type.Null()])),
@@ -192,9 +228,8 @@ export function createCommitTools(options: {
       }
     ) {
       if (Array.isArray(params.commits) && params.commits.length > 0) {
-        const stages = params.commits
-          .map((c) => parseCommitStage(c))
-          .filter((c): c is CommitProposal => c !== null);
+        // Validate all stages before recording any; never silently drop one.
+        const stages = params.commits.map((c) => parseCommitStage(c));
 
         if (stages.length > 0) {
           const headerLines = stages.map((s) =>
@@ -253,15 +288,10 @@ export function createCommitTools(options: {
     }),
     async execute(_toolCallId, params: { commits: any[] }) {
       const rawCommits = Array.isArray(params?.commits) ? params.commits : [];
-      const stages = rawCommits
-        .map((c) => parseCommitStage(c))
-        .filter((c): c is CommitProposal => c !== null);
+      const stages = rawCommits.map((c) => parseCommitStage(c));
 
       if (stages.length === 0) {
-        return {
-          content: [{ type: "text", text: "Error: No valid commit stages provided." }],
-          details: undefined,
-        };
+        throw new Error("No commit stages provided. Call propose_commits again with at least one valid stage.");
       }
 
       const headerLines = stages.map((s) =>
