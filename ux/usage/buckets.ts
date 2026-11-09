@@ -23,6 +23,12 @@ export function bucketDurationForOrdering(bucket: QuotaBucket): number {
 }
 
 export function bucketTimeElapsed(bucket: QuotaBucket, now: number): number | undefined {
+  if (bucket.windowStartedAt) {
+    const start = Date.parse(bucket.windowStartedAt);
+    const end = Date.parse(bucket.resetTime ?? "");
+    return Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? Math.max(0, Math.min(1, (now - start) / (end - start))) : undefined;
+  }
   const fixed = bucket.bucketId === "ollama-cloud-included";
   return computeTimeElapsedFraction(bucket.resetTime, bucket.windowSeconds, now, fixed ? undefined : bucket.usedFraction);
 }

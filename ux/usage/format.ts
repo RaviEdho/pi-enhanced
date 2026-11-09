@@ -243,13 +243,17 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0 && bucket.bucketId !== "ollama-cloud-included") {
+  if (bucket.usedFraction <= 0 && !bucket.windowStartedAt && bucket.bucketId !== "ollama-cloud-included") {
     detailStr = "ready";
   } else if (hasValidReset(bucket)) {
     detailStr = formatRelativeTime(bucket.resetTime, now);
   } else if (report.capacitySummary) {
     detailStr = report.capacitySummary;
   }
+
+  const status = bucket.enabled === false ? "disabled" : bucket.exhausted === true ? "exhausted"
+    : bucket.exhausted === false && bucket.usedFraction >= 1 ? "not exhausted" : undefined;
+  if (status) detailStr = [status, detailStr === "ready" ? "" : detailStr].filter(Boolean).join(" · ");
 
   const metric = detailStr
     ? `${pctColored} ${dim("·")} ${dim(detailStr)}`

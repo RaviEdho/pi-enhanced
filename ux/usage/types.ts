@@ -3,6 +3,12 @@ export interface QuotaBucket {
   displayName: string;
   window: string;
   windowSeconds?: number;
+  /** Explicit provider-reported start, including activated windows with zero usage. */
+  windowStartedAt?: string;
+  /** Authoritative provider flag; rounded percentages alone need not imply exhaustion. */
+  exhausted?: boolean;
+  /** Account-side availability, independent of its remaining allowance. */
+  enabled?: boolean;
   remainingFraction: number;
   usedFraction: number;
   resetTime?: string;
