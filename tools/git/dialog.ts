@@ -1,7 +1,7 @@
 import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
-import { DialogFrame } from "../../ux/dialog.js";
+import { DialogFrame, renderDialogActions } from "../../ux/dialog.js";
 import { formatCommitFiles, formatCost, formatDuration } from "./format.js";
 import type {
   CommitActionEntry,
@@ -226,9 +226,7 @@ export class CommitConfirmationDialog implements Component {
       isMulti ? "Edit plan" : "Edit message",
     ];
 
-    const actionLines = actions.map((action, index) => index === this.selectedIndex
-      ? `  ${accentFn("→")} ${boldFn(accentFn(action))}`
-      : `    ${textFn(action)}`);
+    const actionLines = renderDialogActions(actions, this.selectedIndex, width);
 
     return this.frame.render(width, {
       title: titleText,

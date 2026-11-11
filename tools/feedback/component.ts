@@ -10,9 +10,9 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { QuestionItem, SingleAnswerDetail } from "./types.js";
-import { DialogFrame } from "../../ux/dialog.js";
+import { DialogFrame, renderDialogActions } from "../../ux/dialog.js";
 
-const CUSTOM_CHOICE_LABEL = "✎ Type custom answer...";
+const CUSTOM_CHOICE_LABEL = "Type custom answer...";
 
 function wrapQuestion(text: string, width: number): string[] {
   return text.split(/\r?\n/).flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
@@ -81,12 +81,10 @@ export class QuestionnaireComponent implements Component, Focusable {
       }
 
       const textInput = new Input({
-        prompt: "",
         placeholder: item.placeholder || "Type your response...",
         placeholderStyle: (text) => this.theme.fg("dim", text),
       });
       const customInput = new Input({
-        prompt: "",
         placeholder: "Type custom answer...",
         placeholderStyle: (text) => this.theme.fg("dim", text),
       });
@@ -357,7 +355,6 @@ export class QuestionnaireComponent implements Component, Focusable {
           .forEach((line, index) => target.push(`${index === 0 ? prefix : continuation}${style(line)}`));
       };
     const append = appendTo(lines);
-    const appendAction = appendTo(actions);
     const color = (token: string) => (text: string) => this.theme.fg(token, text);
     let actionFocusLine: number | undefined;
 
@@ -378,34 +375,24 @@ export class QuestionnaireComponent implements Component, Focusable {
       lines.push("");
 
       if (st.isChoiceMode) {
-        st.options.forEach((option, index) => {
-          const highlighted = index === st.highlightedIndex;
-          const originallySelected = st.answered && st.selectedOptionIndex === index;
-          if (highlighted) actionFocusLine = actions.length;
-          if (option === CUSTOM_CHOICE_LABEL) {
-            if (highlighted) {
-              st.customInput.focused = this.focused;
-              const prefix = this.theme.fg("accent", "  → ✎ ");
-              actions.push(prefix + st.customInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
-            } else {
-              const label = st.isCustom && st.selectedText
-                ? `✎ ${this.theme.fg("success", `"${st.selectedText}" ✔ (selected)`)}`
-                : CUSTOM_CHOICE_LABEL;
-              appendAction(label, "    ", color("dim"));
-            }
-          } else {
-            const label = this.theme.fg(highlighted ? "accent" : "text", option)
-              + (originallySelected ? `  ${this.theme.fg("success", "✔ (selected)")}` : "");
-            appendAction(label, highlighted ? this.theme.fg("accent", "  → ") : "    ", (text) => text, "    ");
-          }
+        const labels = st.options.map((option, index) => {
+          const label = option === CUSTOM_CHOICE_LABEL && st.isCustom && st.selectedText
+            ? `Custom answer: ${st.selectedText}` : option;
+          return st.answered && st.selectedOptionIndex === index ? `${label} (selected)` : label;
         });
+        actions.push(...renderDialogActions(labels, st.highlightedIndex, width));
+        actionFocusLine = st.highlightedIndex;
+        if (st.options[st.highlightedIndex] === CUSTOM_CHOICE_LABEL) {
+          st.customInput.focused = this.focused;
+          actionFocusLine = actions.length;
+          actions.push(...st.customInput.render(Math.max(1, width - 2)).map((line) => `  ${line}`));
+        }
       } else {
         append("Type your response (press Enter to confirm):", "  ", color("muted"));
         lines.push("");
         st.textInput.focused = this.focused;
         actionFocusLine = actions.length;
-        const prefix = this.theme.fg("accent", "  → ");
-        actions.push(prefix + st.textInput.render(Math.max(1, width - visibleWidth(prefix)))[0]);
+        actions.push(...st.textInput.render(Math.max(1, width - 2)).map((line) => `  ${line}`));
         if (st.answered && st.selectedText) {
           lines.push("");
           append(`${this.theme.fg("dim", "Confirmed answer: ")}${this.theme.fg("success", `"${st.selectedText}"`)}`,

@@ -1,14 +1,23 @@
 import {
   matchesKey,
+  SelectList,
   truncateToWidth,
-  visibleWidth,
   wrapTextWithAnsi,
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
-/** Total dialog height, including borders, actions, margins, and keyboard hints. */
+import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
+
+/** Native action rows for dialogs with specialized shortcuts or disclosures. */
+export function renderDialogActions(labels: string[], selectedIndex: number, width: number): string[] {
+  const list = new SelectList(labels.map((label) => ({ label, value: label })), Math.max(1, labels.length), getSelectListTheme());
+  list.setSelectedIndex(selectedIndex);
+  return list.render(Math.max(1, width - 2)).map((line) => `  ${line}`);
+}
+
+/** Maximum viewport height, never a minimum or a shared page height. */
 export const DIALOG_MAX_ROWS = 24;
 export const DIALOG_TERMINAL_MARGIN = 4;
 
@@ -106,17 +115,13 @@ export class DialogFrame {
     return this.theme?.fg ? this.theme.fg(token, text) : text;
   }
 
-  private header(width: number, title: string, metadata?: string): string {
-    const border = (text: string) => this.color("border", text);
-    if (width < 8) return border("─".repeat(width));
-    const label = truncateToWidth(title.replace(/[\r\n]+/g, " "), Math.max(0, width - 7), "…");
-    const styledTitle = this.color("accent", label);
-    const left = `${border("── ")}${this.theme?.bold ? this.theme.bold(styledTitle) : styledTitle} `;
-    const rightLabel = metadata?.replace(/[\r\n]+/g, " ");
-    const right = rightLabel ? ` ${this.color("dim", rightLabel)}${border(" ──")}` : border("──");
-    const gap = width - visibleWidth(left) - visibleWidth(right);
-    if (gap >= 1) return `${left}${border("─".repeat(gap))}${right}`;
-    return truncateToWidth(`${left}${border("─".repeat(Math.max(0, width - visibleWidth(left))))}`, width);
+  private header(width: number, title: string, metadata?: string): string[] {
+    const label = this.color("accent", truncateToWidth(title.replace(/[\r\n]+/g, " "), width));
+    return [
+      ...new DynamicBorder().render(width),
+      this.theme?.bold ? this.theme.bold(label) : label,
+      ...(metadata ? [this.color("muted", truncateToWidth(metadata.replace(/[\r\n]+/g, " "), width))] : []),
+    ];
   }
 
   private wrap(lines: string[], width: number, focus?: number): WrappedLines {
@@ -138,7 +143,8 @@ export class DialogFrame {
     this.visibleContentRows = [];
     this.visibleActionRows = [];
     const header = this.header(width, options.title, options.metadata);
-    const bottom = this.color("border", "─".repeat(width));
+    const bottom = new DynamicBorder().render(width)[0];
+    const chromeHeight = header.length + 1;
     const content = this.wrap(options.content, width, options.focusLine);
     const actions = this.wrap(options.actions ?? [], width, options.actionFocusLine ?? 0);
     const hasBody = content.lines.length > 0;
@@ -146,18 +152,18 @@ export class DialogFrame {
     const selectedAction = actions.focus ?? 0;
 
     // In exceptionally short terminals, prioritize the active control over chrome.
-    if (height <= 2 || (height === 3 && hasActions)) {
+    if (height <= chromeHeight + 1) {
       if (hasActions) {
-        this.actionsStart = height === 3 ? 1 : 0;
+        const top = height >= 3 ? header.slice(0, height - 2) : [];
+        this.actionsStart = top.length;
         this.visibleActionRows = [actions.origins[selectedAction]];
-        return [...(height === 3 ? [truncateToWidth(header, width)] : []),
-          truncateToWidth(actions.lines[selectedAction], width), ...(height >= 2 ? [bottom] : [])];
+        return [...top, truncateToWidth(actions.lines[selectedAction], width), ...(height >= 2 ? [bottom] : [])];
       }
-      return height === 1 ? [truncateToWidth(header, width)] : [truncateToWidth(header, width), bottom];
+      return height === 1 ? [header[0]] : [...header.slice(0, height - 1), bottom];
     }
 
     const hintWidth = Math.max(1, width - 2);
-    const hintBudget = Math.max(1, Math.min(2, height - 2 - (hasActions ? 1 : 0) - (hasBody ? 1 : 0)));
+    const hintBudget = Math.max(1, Math.min(2, height - chromeHeight - (hasActions ? 1 : 0) - (hasBody ? 1 : 0)));
     const makeHints = (scrollLabel?: string): string[] => {
       const scroll = scrollLabel
         ? this.color("dim", options.scrollKeys ?? "PgUp/PgDn") + this.color("muted", ` ${scrollLabel}`)
@@ -174,10 +180,10 @@ export class DialogFrame {
     };
     const layout = (hintRows: number) => {
       const minimum = (hasBody ? 1 : 0) + (hasActions ? 1 : 0);
-      const spaciousMargins = 3 + (hasBody && hasActions ? 1 : 0);
-      const spacious = height >= 8 && height - 2 - hintRows - spaciousMargins >= minimum;
+      const spaciousMargins = 2 + (hasBody && hasActions ? 1 : 0);
+      const spacious = height >= 8 && height - chromeHeight - hintRows - spaciousMargins >= minimum;
       const gap = spacious && hasBody && hasActions ? 1 : 0;
-      const available = Math.max(0, height - 2 - hintRows - (spacious ? 3 : 0) - gap);
+      const available = Math.max(0, height - chromeHeight - hintRows - (spacious ? 2 : 0) - gap);
       // Keep controls independent from the body. If controls alone overflow,
       // their own bounded window follows the selected row, not the body scroll.
       const actionHeight = hasActions
@@ -217,7 +223,7 @@ export class DialogFrame {
     if (selectedAction >= this.actionTop + actionHeight) this.actionTop = selectedAction - actionHeight + 1;
     this.actionTop = Math.max(0, this.actionTop);
 
-    const lines = [header, ...(spacious ? [""] : [])];
+    const lines = [...header, ...(spacious ? [""] : [])];
     this.bodyStart = lines.length;
     lines.push(...content.lines.slice(this.top, this.top + bodyHeight));
     this.visibleContentRows = content.origins.slice(this.top, this.top + bodyHeight);
@@ -226,7 +232,7 @@ export class DialogFrame {
     lines.push(...actions.lines.slice(this.actionTop, this.actionTop + actionHeight));
     this.visibleActionRows = actions.origins.slice(this.actionTop, this.actionTop + actionHeight);
     lines.push(...(spacious ? [""] : []), ...hints.map((line) => `  ${this.color("dim", line)}`),
-      ...(spacious ? [""] : []), bottom);
+      bottom);
     return lines.slice(0, height).map((line) => truncateToWidth(line, width));
   }
 }

@@ -1,14 +1,13 @@
 import type { Model, Api } from "@earendil-works/pi-ai";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
   stripTerminalSequences,
-  fuzzyFilter,
   getKeybindings,
   Input,
-  SelectList,
   SettingsList,
+  Text,
   wrapTextWithAnsi,
   type Component,
   type SelectItem,
@@ -22,7 +21,8 @@ import { isFeedbackToolActive } from "../../tools/feedback/index.js";
 import { isScoutActive } from "../../tools/scout/register.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
-import { DialogFrame } from "../dialog.js";
+import { DialogFrame, renderDialogActions } from "../dialog.js";
+import { ModelPickerComponent } from "../model-picker.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   COMMIT_MODEL_SESSION_LABEL,
@@ -42,11 +42,12 @@ interface CacheWarningState {
 /**
  * Interactive settings component for pi-enhanced.
  * Matches Pi's native `/settings` modal conventions:
- * - Shared, bounded dialog chrome and page scrolling
+ * - Content-sized native borders, lists, and inline submenus
  * - Built-in search input with real-time fuzzy filtering
  * - Native keyboard navigation (Tab, Left/Right cycling, Home/End, Esc)
  */
 export class EnhancedSettingsComponent implements Component {
+  readonly capturesViewportInput = true;
   private tui: TUI;
   private theme: any;
   private onDone: () => void;
@@ -56,17 +57,18 @@ export class EnhancedSettingsComponent implements Component {
   private items: SettingItem[];
   private cacheWarning?: CacheWarningState;
   private frame: DialogFrame;
-  private focusSearch = true;
   private hasFocus = false;
-  private modelMenu?: { title: string; searchInput: Input; focusLine: number; details: string[]; detailKey: string; refreshing: boolean };
+  private modelMenu?: ModelPickerComponent;
   private bodyIdentity?: string;
+  private listStart = 3;
 
   constructor(
     tui: TUI,
     theme: any,
     onDone: () => void,
     ctx?: ExtensionCommandContext,
-    availableModels: readonly Model<Api>[] = []
+    availableModels: readonly Model<Api>[] = [],
+    private readonly keybindings?: KeybindingsManager
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -147,112 +149,22 @@ export class EnhancedSettingsComponent implements Component {
           : String(currentRaw);
         const selectedChoice = modelChoices.find((choice) => choice.value === selectedValue);
         currentValue = selectedChoice?.label ?? selectedValue;
-        submenu = (_value, done) => {
-          const listTheme = {
-            selectedPrefix: (text: string) => this.theme.fg("accent", text),
-            selectedText: (text: string) => this.theme.fg("accent", text),
-            description: (text: string) => this.theme.fg("muted", text),
-            scrollInfo: (text: string) => this.theme.fg("dim", text),
-            noMatch: (text: string) => this.theme.fg("warning", text),
-          };
-          const searchInput = new Input({
-            placeholder: "Search models...",
-            placeholderStyle: (text) => this.theme.fg("dim", text),
-          });
-          let selectList: SelectList;
-          let focusSearch = false;
-          let listRows = 0;
-          const refresh = this.ctx ? refreshProviderCatalogs(this.ctx) : undefined;
-          const menu = {
-            refreshing: !!refresh,
-            title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
-            searchInput,
-            focusLine: 0,
-            details: [] as string[],
-            detailKey: "",
-          };
-          this.modelMenu = menu;
-          if (refresh) void refresh.then(() => {
-            menu.refreshing = false;
-            if (this.modelMenu === menu) this.tui.requestRender();
-          });
-          this.frame.resetScroll();
-
-          const finish = (value?: string) => {
-            this.modelMenu = undefined;
-            this.focusSearch = false;
-            this.frame.resetScroll();
-            done(value);
-          };
-          const createSelectList = (query: string) => {
-            const choices = query
-              ? fuzzyFilter(modelChoices, query, (choice) => `${choice.value} ${choice.description ?? ""}`)
-              : modelChoices;
-            selectList = new SelectList(choices, this.maxVisibleRows(), listTheme);
-            const selectedIndex = query
-              ? -1
-              : choices.findIndex((choice) => choice.value === selectedValue);
-            if (selectedIndex >= 0) selectList.setSelectedIndex(selectedIndex);
-            selectList.onSelect = (choice) => finish(choice.value);
-            selectList.onCancel = () => finish();
-          };
-          createSelectList("");
-
-          return {
-            render: (width: number) => {
-              searchInput.focused = this.hasFocus;
-              const selected = selectList.getSelectedItem();
-              // Keep native search/list rows pinned; full model details scroll above them.
-              const details = selected
-                ? [selected.label ?? selected.value, selected.description ?? ""]
-                    .filter(Boolean)
-                    .flatMap((text) => wrapTextWithAnsi(text, Math.max(1, width - 2)))
-                : [];
-              menu.details = details.map((line) => this.theme.fg("muted", `  ${line}`));
-              menu.detailKey = JSON.stringify([selected?.value, selected?.label, selected?.description]);
-              (selectList as any).maxVisible = this.maxVisibleRows();
-              const rows = selectList.render(width);
-              listRows = rows.length;
-              const selectedRow = rows.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
-              menu.focusLine = focusSearch ? 0 : 2 + Math.max(0, selectedRow);
-              return [
-                ...searchInput.render(width), "", ...rows,
-              ];
-            },
-            invalidate: () => {
-              searchInput.invalidate();
-              selectList.invalidate();
-            },
-            handleInput: (data: string) => {
-              const keybindings = getKeybindings();
-              if (
-                keybindings.matches(data, "tui.select.up") ||
-                keybindings.matches(data, "tui.select.down") ||
-                keybindings.matches(data, "tui.select.confirm") ||
-                keybindings.matches(data, "tui.select.cancel")
-              ) {
-                focusSearch = false;
-                selectList.handleInput(data);
-              } else {
-                focusSearch = true;
-                const previousQuery = searchInput.getValue();
-                searchInput.handleInput(data);
-                if (searchInput.getValue() !== previousQuery) createSelectList(searchInput.getValue());
-              }
-              this.tui.requestRender();
-            },
-            handleMouse: (event: TuiMouseEvent) => {
-              if (event.y === 0) {
-                focusSearch = true;
-                return searchInput.handleMouse(event);
-              }
-              if (event.y >= 2 && event.y < 2 + listRows) {
-                focusSearch = false;
-                return selectList.handleMouse({ ...event, y: event.y - 2 });
-              }
-              return undefined;
-            },
-          };
+        submenu = (currentValue, done) => {
+          const picker = new ModelPickerComponent(this.tui, this.theme,
+            this.keybindings ?? { matches: (data, action) => getKeybindings().matches(data, action as any) }, {
+              title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
+              choices: modelChoices,
+              currentValue: modelChoices.find((choice) => choice.label === currentValue)?.value ?? currentValue,
+              refresh: this.ctx ? refreshProviderCatalogs(this.ctx) : undefined,
+              bordered: false,
+            }, (value) => {
+              picker.dispose();
+              this.modelMenu = undefined;
+              done(value);
+            });
+          picker.focused = this.hasFocus;
+          this.modelMenu = picker;
+          return picker;
         };
       } else if (def.key === "scout.interceptShell" && !scoutActive) {
         description =
@@ -297,12 +209,16 @@ export class EnhancedSettingsComponent implements Component {
     this.hasFocus = value;
     const searchInput = (this.settingsList as any)?.searchInput as Input | undefined;
     if (searchInput) searchInput.focused = value;
-    if (this.modelMenu) this.modelMenu.searchInput.focused = value;
+    if (this.modelMenu) this.modelMenu.focused = value;
   }
 
   public invalidate(): void {
     this.settingsList.invalidate();
     (this.settingsList as any).searchInput?.invalidate();
+  }
+
+  public dispose(): void {
+    this.modelMenu?.dispose();
   }
 
   public render(width: number): string[] {
@@ -319,16 +235,8 @@ export class EnhancedSettingsComponent implements Component {
       paragraph(`Disabling ${warning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`, "text");
       content.push("");
       paragraph("Subsequent requests will incur cache misses, increasing turnaround latency and token costs.", "dim");
-      const actions: string[] = [];
-      let actionFocusLine = 0;
-      ["Keep enabled (recommended)", "Proceed and disable anyway"].forEach((label, index) => {
-        const selected = index === warning.selectedOption;
-        if (selected) actionFocusLine = actions.length;
-        const prefix = selected ? "→ " : "  ";
-        const rows = wrapTextWithAnsi(selected ? this.theme.bold(label) : label, Math.max(1, innerWidth - 2));
-        actions.push(...rows.map((line, row) =>
-          `  ${this.theme.fg(selected ? "accent" : "dim", `${row === 0 ? prefix : "  "}${line}`)}`));
-      });
+      const actions = renderDialogActions(["Keep enabled (recommended)", "Proceed and disable anyway"], warning.selectedOption, width);
+      const actionFocusLine = warning.selectedOption;
       this.resetScrollForDetails(`warning:${warning.settingKey}`);
       return this.frame.render(width, {
         title: "Prompt Cache Invalidation Warning",
@@ -339,58 +247,28 @@ export class EnhancedSettingsComponent implements Component {
       });
     }
 
-    const anyList = this.settingsList as any;
-    const submenu = !!anyList.submenuComponent;
-    const displayItems: SettingItem[] = anyList.getDisplayItems();
-    const selected = displayItems[anyList.selectedIndex];
-    if (!submenu) {
-      anyList.maxVisible = this.maxVisibleRows();
-      anyList.searchInput.focused = this.hasFocus;
-    }
-    let listLines = this.settingsList.render(innerWidth);
-    let content: string[] = this.modelMenu?.details ?? [];
-    if (!submenu) {
-      // Native SettingsList ends with a blank and its own keyboard hint.
-      // The frame owns hints, including scroll instructions and dismissal.
-      listLines = listLines.slice(0, -2);
-      // Native SettingsList puts a blank description separator after the search,
-      // visible item rows, and optional count. Retain their original row offsets
-      // for mouse dispatch, but move everything after that separator into the body.
-      const descriptionStart = listLines.indexOf("", 2);
-      content = descriptionStart < 0 ? [] : listLines.slice(descriptionStart + 1);
-      if (descriptionStart >= 0) listLines = listLines.slice(0, descriptionStart);
-      if (selected?.submenu && selected.currentValue) {
-        content.push("", ...wrapTextWithAnsi(selected.currentValue, Math.max(1, innerWidth - 2))
-          .map((line) => this.theme.fg("muted", `  ${line}`)));
+    const border = new DynamicBorder().render(width);
+    if (this.modelMenu) this.modelMenu.focused = this.hasFocus;
+    else (this.settingsList as any).searchInput.focused = this.hasFocus;
+    const listLines = this.settingsList.render(width).map((line) => {
+      if (this.modelMenu) return line;
+      const clean = stripTerminalSequences(line);
+      if ((!this.isScoutCurrentlyEnabled() && clean.includes("Scout Shell Interceptor")) ||
+          (!this.isSubagentCurrentlyEnabled() && clean.includes("Subagent Default Mode"))) {
+        return this.theme.fg("dim", clean);
       }
-
-      listLines = listLines.map((line) => {
-        const clean = stripTerminalSequences(line);
-        if ((!this.isScoutCurrentlyEnabled() && clean.includes("Scout Shell Interceptor")) ||
-            (!this.isSubagentCurrentlyEnabled() && clean.includes("Subagent Default Mode"))) {
-          return this.theme.fg("dim", clean);
-        }
-        return line;
-      });
-    }
-    this.resetScrollForDetails(this.modelMenu
-      ? `model:${this.modelMenu.detailKey}`
-      : JSON.stringify([selected?.id, selected?.description, selected?.submenu ? selected.currentValue : undefined]));
-    const selectedRow = listLines.findIndex((line) => stripTerminalSequences(line).startsWith("→ "));
-    return this.frame.render(width, {
-      title: this.modelMenu?.title ?? "Enhanced Settings",
-      metadata: this.modelMenu ? (this.modelMenu.refreshing ? "Refreshing model catalogs…" : "Enhanced Settings") : undefined,
-      content: content.map((line) => `  ${line}`),
-      actions: listLines.map((line) => `  ${line}`),
-      hints: this.modelMenu
-        ? ["Type to search", "↑↓ navigate", "Enter select", "Esc back"]
-        : ["Type to search", "↑↓/Tab navigate", "←→/Enter change", "Esc close"],
-      actionFocusLine: this.modelMenu?.focusLine ?? (this.focusSearch ? 0 : Math.max(0, selectedRow)),
+      return line;
     });
+    // Keep native list, descriptions, search, and submenu rows intact. In
+    // particular, do not move descriptions above the list or pad pages.
+    const header = [...border,
+      ...(!this.modelMenu ? [...new Text(this.theme.bold(this.theme.fg("accent", "Enhanced Settings")), 0, 0).render(width), ""] : [])];
+    this.listStart = header.length;
+    return [...header, ...listLines, ...border];
   }
 
   public handleInput(data: string): boolean {
-    if (this.frame.handleInput(data)) return true;
+    if (this.cacheWarning && this.frame.handleInput(data)) return true;
     // Intercept input during cache warning confirmation
     if (this.cacheWarning) {
       if (
@@ -448,17 +326,6 @@ export class EnhancedSettingsComponent implements Component {
       return true;
     }
     const searchVal: string = anyList.searchInput?.getValue?.() ?? "";
-    const keybindings = getKeybindings();
-    this.focusSearch = !(
-      keybindings.matches(data, "tui.select.up") ||
-      keybindings.matches(data, "tui.select.down") ||
-      keybindings.matches(data, "tui.select.confirm") ||
-      data === "\t" || data === "\x1b[Z" ||
-      (searchVal.length === 0 && (
-        matchesKey(data, "left") || matchesKey(data, "right") ||
-        matchesKey(data, "home") || matchesKey(data, "end") || data === " "
-      ))
-    );
 
     // Escape handling:
     // If search filter has text, clear search input first; if already empty, close dialog
@@ -580,18 +447,10 @@ export class EnhancedSettingsComponent implements Component {
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // Descriptions and warning dialogs scroll without touching the pinned controls.
-    // Preserve native list mouse navigation when the pointer is over that list.
-    const actionRow = this.frame.actionRowAt(event.y);
-    if (this.cacheWarning || actionRow === undefined || event.x < 2) {
-      return this.frame.handleMouse(event);
-    }
-    const adjustedEvent: TuiMouseEvent = {
-      ...event,
-      x: event.x - 2,
-      y: actionRow,
-    };
-    this.focusSearch = adjustedEvent.y === 0 && event.type !== "wheel";
+    if (this.cacheWarning) return this.frame.handleMouse(event);
+    const offset = this.listStart;
+    if (event.y < offset) return undefined;
+    const adjustedEvent: TuiMouseEvent = { ...event, y: event.y - offset, height: Math.max(0, event.height - offset - 1) };
     const result = this.settingsList.handleMouse?.(adjustedEvent);
     if (result) {
       const direction = event.type === "wheel" && (event.wheelDelta ?? 0) < 0 ? "up" : "down";
@@ -599,13 +458,11 @@ export class EnhancedSettingsComponent implements Component {
       this.tui.requestRender();
       return result;
     }
-    return this.frame.handleMouse(event);
+    return undefined;
   }
 
   private maxVisibleRows(): number {
-    // Budget from total height, never bodyHeight (which excludes pinned actions).
-    // Reserve chrome/hints (8), search/gap/count (3), and three detail rows.
-    return Math.max(1, Math.min(10, this.frame.maxHeight - 14));
+    return 10;
   }
 
   private resetScrollForDetails(identity: string): void {

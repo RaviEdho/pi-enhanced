@@ -1,132 +1,49 @@
 import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { matchesKey } from "@earendil-works/pi-tui";
-import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
-import { DialogFrame } from "../ux/dialog.js";
+import { Container, matchesKey, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
+import { DynamicBorder, getSettingsListTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 
 export interface DiscordAccessPaths {
   allowDirectMessages: boolean;
   allowServerMessages: boolean;
 }
 
+/** Native settings controls; changes remain local until Save is selected. */
 export class DiscordToggleDialog implements Component {
-  private readonly frame: DialogFrame;
-  private readonly tui: TUI;
-  private readonly theme: any;
-  private readonly onDone: (values: DiscordAccessPaths | undefined) => void;
-  private readonly keybindings: any;
-  private allowDirectMessages: boolean;
-  private allowServerMessages: boolean;
-  private selectedIndex = 0;
+  private readonly container = new Container();
+  private readonly list: SettingsList;
+  private readonly values: DiscordAccessPaths;
 
   constructor(
-    tui: TUI,
-    theme: any,
+    private readonly tui: TUI,
+    theme: Theme,
     initialValues: DiscordAccessPaths,
-    onDone: (values: DiscordAccessPaths | undefined) => void,
-    keybindings?: any
+    private readonly onDone: (values: DiscordAccessPaths | undefined) => void,
+    private readonly keybindings?: KeybindingsManager
   ) {
-    this.frame = new DialogFrame(tui, theme);
-    this.tui = tui;
-    this.theme = theme;
-    this.allowDirectMessages = initialValues.allowDirectMessages;
-    this.allowServerMessages = initialValues.allowServerMessages;
-    this.onDone = onDone;
-    this.keybindings = keybindings;
+    this.values = { ...initialValues };
+    this.list = new SettingsList([
+      { id: "allowDirectMessages", label: "Direct messages", description: "Accept DMs from allowed users.", currentValue: this.values.allowDirectMessages ? "On" : "Off", values: ["On", "Off"] },
+      { id: "allowServerMessages", label: "Server messages", description: "Accept allowed server mentions and gateway-thread replies.", currentValue: this.values.allowServerMessages ? "On" : "Off", values: ["On", "Off"] },
+      { id: "save", label: "Save changes", description: "Save both message-access settings. Esc discards changes.", currentValue: "save", values: ["save"] },
+    ], 3, getSettingsListTheme(), (id, value) => {
+      if (id === "save") onDone({ ...this.values });
+      else this.values[id as keyof DiscordAccessPaths] = value === "On";
+    }, () => onDone(undefined));
+    this.container.addChild(new DynamicBorder());
+    this.container.addChild(new Text(theme.bold(theme.fg("accent", "Discord Message Access")), 0, 0));
+    this.container.addChild(new Spacer(1));
+    this.container.addChild(this.list);
+    this.container.addChild(new DynamicBorder());
   }
 
-  invalidate(): void {}
+  invalidate(): void { this.container.invalidate(); }
 
-  handleInput(data: string): boolean {
-    if (this.frame.handleInput(data)) return true;
-
-    if (
-      matchesKey(data, "escape") ||
-      data === "\x03" ||
-      data.toLowerCase() === "q" ||
-      (this.keybindings && typeof this.keybindings.matches === "function" && (
-        this.keybindings.matches(data, "app.interrupt") ||
-        this.keybindings.matches(data, "app.clear") ||
-        this.keybindings.matches(data, "tui.select.cancel") ||
-        this.keybindings.matches(data, "cancel")
-      ))
-    ) {
-      this.onDone(undefined);
-      return true;
-    }
-
-    if (matchesKey(data, "up") || data.toLowerCase() === "k") {
-      this.selectedIndex = (this.selectedIndex + 2) % 3;
-      this.tui.requestRender();
-      return true;
-    }
-    if (matchesKey(data, "down") || data.toLowerCase() === "j" || matchesKey(data, "tab")) {
-      this.selectedIndex = (this.selectedIndex + 1) % 3;
-      this.tui.requestRender();
-      return true;
-    }
-
-    if (matchesKey(data, "space") || data === " ") {
-      this.toggleSelectedPath();
-      return true;
-    }
-    if (matchesKey(data, "enter")) {
-      if (this.selectedIndex < 2) this.toggleSelectedPath();
-      else this.onDone({
-        allowDirectMessages: this.allowDirectMessages,
-        allowServerMessages: this.allowServerMessages,
-      });
-      return true;
-    }
-
-    return false;
-  }
-
-  private toggleSelectedPath(): void {
-    if (this.selectedIndex === 0) this.allowDirectMessages = !this.allowDirectMessages;
-    else if (this.selectedIndex === 1) this.allowServerMessages = !this.allowServerMessages;
-    else return;
+  handleInput(data: string): void {
+    if (data === "\x03" || data.toLowerCase() === "q" || this.keybindings?.matches(data, "app.interrupt")) this.onDone(undefined);
+    else this.list.handleInput(matchesKey(data, "tab") ? "\x1b[B" : data);
     this.tui.requestRender();
   }
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    return this.frame.handleMouse(event);
-  }
-
-  render(width: number): string[] {
-    const accent = (value: string) => this.theme?.fg ? this.theme.fg("accent", value) : value;
-    const text = (value: string) => this.theme?.fg ? this.theme.fg("text", value) : value;
-    const bold = (value: string) => this.theme?.bold ? this.theme.bold(value) : value;
-    const stateColor = (enabled: boolean, value: string) => this.theme?.fg
-      ? this.theme.fg(enabled ? "success" : "warning", value)
-      : value;
-
-    const actions: string[] = [];
-
-    const options = [
-      { label: "Direct messages", enabled: this.allowDirectMessages },
-      { label: "Server messages", enabled: this.allowServerMessages },
-      { label: "Save changes", enabled: undefined },
-    ];
-    for (let index = 0; index < options.length; index++) {
-      const option = options[index];
-      const prefix = index === this.selectedIndex ? `${accent("→")} ` : "  ";
-      const label = index === this.selectedIndex ? bold(accent(option.label)) : text(option.label);
-      const state = option.enabled === undefined ? "" : `  ${stateColor(option.enabled, option.enabled ? "On" : "Off")}`;
-      actions.push(`  ${prefix}${label}${state}`);
-    }
-
-    const hints = [
-      rawKeyHint("↑↓", "navigate"),
-      rawKeyHint("Space", "toggle"),
-      keyHint("tui.select.confirm", "toggle/save"),
-      keyHint("tui.select.cancel", "cancel"),
-    ];
-    return this.frame.render(width, {
-      title: "Discord Message Access",
-      content: [],
-      actions,
-      hints,
-      actionFocusLine: this.selectedIndex,
-    });
-  }
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined { return this.container.handleMouse(event); }
+  render(width: number): string[] { return this.container.render(width); }
 }

@@ -17,6 +17,7 @@ import { refreshProviderCatalogs } from "../providers/refresh.js";
 import { getAvailablePickerModels } from "../ux/available-models.js";
 import { DiscordConfirmationDialog, type DiscordConfirmationDialogOptions } from "./confirm-dialog.js";
 import { DiscordInputDialog } from "./input-dialog.js";
+import { withDiscordDialogSession } from "./dialog-session.js";
 import { selectDiscordModel } from "./model-dialog.js";
 import { DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
 import { DiscordToggleDialog, type DiscordAccessPaths } from "./toggle-dialog.js";
@@ -37,54 +38,11 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
   const trimmed = args.trim();
   const action = trimmed ? trimmed.toLowerCase().split(/\s+/, 1)[0] : "menu";
   try {
-    switch (action) {
-      case "menu":
-        await showDiscordMenu(ctx);
-        return;
-      case "setup":
-        await setupGateway(ctx);
-        return;
-      case "config":
-      case "configure":
-        await showConfigureMenu(ctx);
-        return;
-      case "start":
-        await startGateway(ctx);
-        return;
-      case "restart":
-        await restartGateway(ctx);
-        return;
-      case "stop":
-        stopGateway(ctx);
-        return;
-      case "teardown":
-        await teardownGateway(ctx);
-        return;
-      case "status":
-        showStatus(ctx);
-        return;
-      case "logs":
-        showLogs(ctx);
-        return;
-      case "help":
-        notify(
-          ctx,
-          [
-            "/discord          Open the gateway menu (or setup if unconfigured)",
-            "/discord setup    Configure the bot, access allowlists, workspace, and optional home channel",
-            "/discord configure Open gateway settings (also /discord config)",
-            "/discord start    Start the independent background gateway",
-            "/discord restart  Restart the background gateway",
-            "/discord stop     Stop the gateway",
-            "/discord teardown Stop it and remove the saved bot config",
-            "/discord status   Check gateway health",
-            "/discord logs     Show recent gateway logs",
-          ].join("\n"),
-          "info"
-        );
-        return;
-      default:
-        notify(ctx, "Unknown /discord action. Use /discord help.", "error");
+    const run = (dialogCtx: ExtensionCommandContext) => executeDiscordCommand(action, dialogCtx);
+    if (["menu", "setup", "config", "configure", "teardown"].includes(action)) {
+      await withDiscordDialogSession(ctx, run);
+    } else {
+      await run(ctx);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -93,6 +51,58 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
 }
 
 async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
+async function executeDiscordCommand(action: string, ctx: ExtensionCommandContext): Promise<void> {
+  switch (action) {
+    case "menu":
+      await showDiscordMenu(ctx);
+      return;
+    case "setup":
+      await setupGateway(ctx);
+      return;
+    case "config":
+    case "configure":
+      await showConfigureMenu(ctx);
+      return;
+    case "start":
+      await startGateway(ctx);
+      return;
+    case "restart":
+      await restartGateway(ctx);
+      return;
+    case "stop":
+      stopGateway(ctx);
+      return;
+    case "teardown":
+      await teardownGateway(ctx);
+      return;
+    case "status":
+      showStatus(ctx);
+      return;
+    case "logs":
+      showLogs(ctx);
+      return;
+    case "help":
+      notify(
+        ctx,
+        [
+          "/discord          Open the gateway menu (or setup if unconfigured)",
+          "/discord setup    Configure the bot, access allowlists, workspace, and optional home channel",
+          "/discord configure Open gateway settings (also /discord config)",
+          "/discord start    Start the independent background gateway",
+          "/discord restart  Restart the background gateway",
+          "/discord stop     Stop the gateway",
+          "/discord teardown Stop it and remove the saved bot config",
+          "/discord status   Check gateway health",
+          "/discord logs     Show recent gateway logs",
+        ].join("\n"),
+        "info"
+      );
+      return;
+    default:
+      notify(ctx, "Unknown /discord action. Use /discord help.", "error");
+  }
+}
+
   while (true) {
     const config = readDiscordGatewayConfig();
     if (!config) {

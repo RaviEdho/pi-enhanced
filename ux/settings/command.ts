@@ -215,8 +215,8 @@ export async function handleSettingsEnhancedCommand(
     } catch {
       ctx.ui.notify("Could not load available models; model choices are unavailable.", "warning");
     }
-    await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-      return new EnhancedSettingsComponent(tui, theme, () => done(undefined), ctx, availableModels);
+    await ctx.ui.custom<void>((tui, theme, kb, done) => {
+      return new EnhancedSettingsComponent(tui, theme, () => done(undefined), ctx, availableModels, kb);
     });
     return;
   }
