@@ -2,7 +2,8 @@ import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Model, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
+import { withTokenHarborReasoning, type TokenHarborReasoning } from "./reasoning.js";
 import { tokenHarborCredentialHash } from "./credentials.js";
 import {
   CATALOG_TTL_MS, METADATA_TTL_MS, MODELS_URL, PROVIDER_ID,
@@ -13,6 +14,7 @@ type RecordValue = Record<string, unknown>;
 type Cost = Model<"openai-completions">["cost"];
 export interface TokenHarborModel extends Model<"openai-completions"> {
   metadataSource: { url: string; verifiedAt: number };
+  tokenHarborReasoning?: TokenHarborReasoning;
 }
 export interface PageMetadata {
   id: string;
@@ -93,8 +95,10 @@ export function loadTokenHarborCatalog(key: string): TokenHarborCatalog | undefi
     Array.isArray(value.visibleIds) && value.visibleIds.every(validId) &&
     Array.isArray(value.models) && value.models.every(validModel) && Array.isArray(value.skipped)
     ? value as unknown as TokenHarborCatalog : undefined;
-  catalogs.set(hash, cached);
-  return cached;
+  // Old snapshots have no verified reasoning contract; never trust legacy maps.
+  const normalized = cached ? { ...cached, models: cached.models.map(model => withTokenHarborReasoning(model, model.tokenHarborReasoning)) } : undefined;
+  catalogs.set(hash, normalized);
+  return normalized;
 }
 
 /** Call only from an accepted refresh publication, or the explicit login flow. */
@@ -236,32 +240,33 @@ export function buildTokenHarborModel(raw: RecordValue, page?: PageMetadata): To
   const pricing = record(raw.pricing);
   const cost = completeCost(costFields.map((field, i) => price(pricing?.[priceFields[i]]) ?? price(page.cost[field])));
   if (!cost) return undefined;
-  // Unknown effort controls stay hidden. Merely accepting an effort string is not evidence of support.
-  const declared = Array.isArray(raw.supported_reasoning_efforts) ? raw.supported_reasoning_efforts : [];
-  const levels: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-  const supported = levels.filter(level => declared.includes(level === "off" ? "none" : level));
-  const thinkingLevelMap = Object.fromEntries(levels.map(level => [level,
-    supported.includes(level) ? level === "off" ? "none" : level : null])) as ThinkingLevelMap;
+  // Only the documented reasoning contract is capability evidence.
   const model: TokenHarborModel = {
     id: raw.id, name: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : raw.id,
     provider: PROVIDER_ID, api: "openai-completions", baseUrl: TOKENHARBOR_BASE_URL,
-    reasoning: supported.some(level => level !== "off"), ...(supported.length ? { thinkingLevelMap } : {}),
+    reasoning: false,
     input, contextWindow, maxTokens, cost, metadataSource: { url: page.url, verifiedAt: page.verifiedAt },
     // The audit verified both developer-role messages and max_completion_tokens on this gateway.
-    compat: { supportsReasoningEffort: supported.length > 0 },
+    compat: { supportsReasoningEffort: false },
   };
   const long = record(pricing?.long_context);
   const threshold = positive(long?.over_prompt_tokens);
   const longCost = completeCost(priceFields.map(field => price(long?.[field])));
   if (threshold && longCost) model.cost.tiers = [{ inputTokensAbove: threshold, ...longCost }];
-  return model;
+  return withTokenHarborReasoning(model, raw.reasoning);
 }
 
-export async function discoverTokenHarborModels(key: string, signal?: AbortSignal, force = false): Promise<TokenHarborCatalog> {
+export async function discoverTokenHarborModels(key: string, signal?: AbortSignal, force = false, listing?: RecordValue[]): Promise<TokenHarborCatalog> {
   signal?.throwIfAborted();
   const cached = loadTokenHarborCatalog(key);
-  if (!force && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) return cached;
-  const raw = await fetchTokenHarborCatalog(key, signal);
+  if (!force && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) {
+    if (!listing) return cached;
+    const current = new Map(listing.map(item => [item.id, item]));
+    return { ...cached, visibleIds: listing.map(item => item.id as string), models: cached.models
+      .filter(model => current.has(model.id))
+      .map(model => withTokenHarborReasoning(model, current.get(model.id)?.reasoning)) };
+  }
+  const raw = listing ?? await fetchTokenHarborCatalog(key, signal);
   const models: TokenHarborModel[] = [];
   const skipped: TokenHarborCatalog["skipped"] = [];
   let cursor = 0;

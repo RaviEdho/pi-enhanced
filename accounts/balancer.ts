@@ -2,7 +2,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/codex/catalog.js";
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
-import { isTokenHarborModelVisible } from "../providers/tokenharbor/models.js";
+import { isTokenHarborModelAllowed } from "../providers/tokenharbor/access.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { getHighestTierAccounts } from "./priority.js";
@@ -56,7 +56,7 @@ export function isAccountEligibleForModel(account: AccountCredential, modelId?: 
 
   if (account.provider === "tokenharbor") {
     const key = account.apiKey || account.access;
-    return !key || isTokenHarborModelVisible(key, unwrappedModelId);
+    return !!key && isTokenHarborModelAllowed(key, unwrappedModelId);
   }
 
   if (account.provider === "commandcode") {
@@ -207,6 +207,16 @@ export class AccountBalancer {
     modelId?: string
   ): AccountCredential | undefined {
     const allAccounts = this.store.list(provider);
+    if (provider === "tokenharbor" && sessionId && ![...SUPPORTED_PROVIDERS].some(
+      other => other !== provider && modelId?.startsWith(other + "/")
+    )) {
+      // A short-lived coverage check is authorization, not historical identity.
+      // Keep the actual bound account visible after that check expires; request
+      // selection and streaming still enforce fresh coverage independently.
+      const boundId = this.getBoundAccountId(sessionId, provider);
+      const bound = allAccounts.find(account => account.id === boundId && !account.disabledCause);
+      if (bound) return bound;
+    }
     const candidates = allAccounts.filter(
       (a) => !a.disabledCause && isAccountEligibleForModel(a, modelId)
     );
