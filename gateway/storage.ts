@@ -3,6 +3,25 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+export interface DiscordChannelReplies {
+  mode: DiscordChannelReplyMode;
+  routerModel?: { provider: string; id: string };
+  /** Recent channel messages for each routing decision (0–25; defaults to 5). */
+  contextMessages?: number;
+  /** Escalate a channel reply that used editing, shell, or delegation tools. */
+  escalate: boolean;
+  /** Escalate a repeat mention from the same participant in the same channel. */
+  followUp: boolean;
+}
+
+export type DiscordChannelReplyMode = "always-thread" | "channel" | "auto";
+
+export interface DiscordToolCallVisibility {
+  channels: boolean;
+  threads: boolean;
+  dms: boolean;
+}
+
 export interface DiscordGatewayConfig {
   token: string;
   allowedUserIds: string[];
@@ -14,6 +33,10 @@ export interface DiscordGatewayConfig {
   model?: { provider: string; id: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   toolCallVerbosity?: "none" | "tool-only" | "full";
+  toolCallVisibility?: DiscordToolCallVisibility;
+  channelReplies: DiscordChannelReplies;
+  /** Automatically included recent messages per conversation turn (0–25; defaults to 5). */
+  contextMessages: number;
   configuredAt: string;
 }
 
@@ -93,6 +116,10 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     (value.allowServerMessages !== undefined && typeof value.allowServerMessages !== "boolean") ||
     (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
     (value.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(value.toolCallVerbosity)) ||
+    (value.toolCallVisibility !== undefined && !isValidToolCallVisibility(value.toolCallVisibility)) ||
+    (value.channelReplies !== undefined && !isValidChannelReplies(value.channelReplies)) ||
+    (value.contextMessages !== undefined &&
+      (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) ||
     typeof value.cwd !== "string" ||
     !value.cwd.trim() ||
     (value.model !== undefined &&
@@ -118,7 +145,45 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     ...(value.model ? { model: value.model } : {}),
     ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel as DiscordGatewayConfig["thinkingLevel"] } : {}),
     toolCallVerbosity: value.toolCallVerbosity ?? "full",
+    toolCallVisibility: { channels: false, threads: true, dms: true, ...value.toolCallVisibility },
+    channelReplies: readChannelReplies(value.channelReplies),
+    contextMessages: value.contextMessages ?? 5,
     configuredAt: typeof value.configuredAt === "string" ? value.configuredAt : new Date(0).toISOString(),
+  };
+}
+
+function isValidToolCallVisibility(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<DiscordToolCallVisibility>;
+  return [entry.channels, entry.threads, entry.dms].every((setting) => setting === undefined || typeof setting === "boolean");
+}
+
+function isValidChannelReplies(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<DiscordChannelReplies>;
+  if (entry.mode !== undefined && !["always-thread", "channel", "auto"].includes(entry.mode)) return false;
+  if (entry.escalate !== undefined && typeof entry.escalate !== "boolean") return false;
+  if (entry.followUp !== undefined && typeof entry.followUp !== "boolean") return false;
+  if (entry.contextMessages !== undefined &&
+      (!Number.isInteger(entry.contextMessages) || entry.contextMessages < 0 || entry.contextMessages > 25)) return false;
+  if (entry.routerModel !== undefined && !isModelChoice(entry.routerModel)) return false;
+  return true;
+}
+
+function isModelChoice(value: unknown): value is { provider: string; id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const model = value as { provider?: unknown; id?: unknown };
+  return typeof model.provider === "string" && Boolean(model.provider) && typeof model.id === "string" && Boolean(model.id);
+}
+
+function readChannelReplies(value: unknown): DiscordChannelReplies {
+  const entry = (value ?? {}) as Partial<DiscordChannelReplies>;
+  return {
+    mode: entry.mode ?? "always-thread",
+    contextMessages: entry.contextMessages ?? 5,
+    ...(isModelChoice(entry.routerModel) ? { routerModel: entry.routerModel } : {}),
+    escalate: entry.escalate !== false,
+    followUp: entry.followUp !== false,
   };
 }
 

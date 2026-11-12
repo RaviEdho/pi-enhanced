@@ -28,8 +28,10 @@ import {
   isDiscordSnowflake,
   readDiscordGatewayConfig,
   writePrivateJson,
+  type DiscordChannelReplyMode,
   type DiscordGatewayConfig,
   type DiscordGatewayStatus,
+  type DiscordToolCallVisibility,
 } from "./storage.js";
 
 const TOKEN_ENV_VAR = "PI_ENHANCED_DISCORD_BOT_TOKEN";
@@ -50,7 +52,6 @@ export async function handleDiscordCommand(args: string, ctx: ExtensionCommandCo
   }
 }
 
-async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
 async function executeDiscordCommand(action: string, ctx: ExtensionCommandContext): Promise<void> {
   switch (action) {
     case "menu":
@@ -103,6 +104,8 @@ async function executeDiscordCommand(action: string, ctx: ExtensionCommandContex
   }
 }
 
+async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
+  let selectedOption: string | undefined;
   while (true) {
     const config = readDiscordGatewayConfig();
     if (!config) {
@@ -133,7 +136,9 @@ async function executeDiscordCommand(action: string, ctx: ExtensionCommandContex
       title: "Discord Gateway",
       description: `Status: ${statusLabel}`,
       options: actions,
+      selectedOption,
     });
+    selectedOption = selected;
     switch (selected) {
       case "Start":
         await startGateway(ctx);
@@ -165,6 +170,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
     return;
   }
 
+  let selectedOption: string | undefined;
   while (true) {
     const config = readDiscordGatewayConfig();
     if (!config) {
@@ -174,18 +180,90 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
 
     const selected = await selectDiscordOption(ctx, {
       title: "Discord Settings",
-      description: `DMs ${config.allowDirectMessages ? "on" : "off"} · Servers ${config.allowServerMessages ? "on" : "off"} · Notifications ${config.homeChannelId ? "on" : "off"}`,
+      selectedOption,
       options: [
-        "Bot token",
-        "Allowed users",
-        "Allowed channels",
-        "Notification channel",
-        "Workspace",
-        "Default model",
-        "Message access",
-        `Tool call verbosity: ${config.toolCallVerbosity ?? "full"}`,
+        {
+          label: "Bot token",
+          currentValue: "configured",
+          description: "Replace the saved Discord bot token. Input is visible; the token is stored in private local config.",
+        },
+        {
+          label: "Allowed users",
+          currentValue: config.allowedUserIds.includes("*") ? "everyone" : `${config.allowedUserIds.length} allowed`,
+          description: 'Choose which Discord users can interact with the bot in DMs and servers. Use "*" for everyone.',
+        },
+        {
+          label: "Allowed channels",
+          currentValue: config.allowedChannelIds.includes("*") ? "all channels" : `${config.allowedChannelIds.length} allowed`,
+          description: 'Choose allowed server or DM channels, or "*" for all. Also authorizes history sources; shared-thread participants may see history results.',
+        },
+        {
+          label: "Notification channel",
+          currentValue: config.homeChannelId ?? "off",
+          description: "Set the text channel for gateway start, restart, stop, and failure notices, or turn notifications off.",
+        },
+        {
+          label: "Workspace",
+          currentValue: config.cwd,
+          description: "Set the starting directory for gateway Pi sessions. This is not a filesystem sandbox; tools may access other files.",
+        },
+        {
+          label: "Default model",
+          currentValue: config.model ? `${config.model.provider}/${config.model.id}` : "Pi default",
+          description: "Choose the model used when gateway Pi sessions start, or follow Pi's configured default.",
+        },
+        {
+          label: "Message access",
+          currentValue: `DMs ${config.allowDirectMessages ? "on" : "off"} · Servers ${config.allowServerMessages ? "on" : "off"}`,
+          description: "Enable or disable direct messages and server messages independently. User and channel allowlists still apply.",
+        },
+        {
+          label: "Tool call verbosity",
+          currentValue: config.toolCallVerbosity ?? "full",
+          description: "Control tool activity shown in Discord: none, tool only, or full (including intermediate assistant text). Workspace change notices stay visible.",
+        },
+        {
+          label: "Tool call visibility",
+          currentValue: `Channels ${config.toolCallVisibility?.channels ? "on" : "off"} · Threads ${config.toolCallVisibility?.threads !== false ? "on" : "off"} · DMs ${config.toolCallVisibility?.dms !== false ? "on" : "off"}`,
+          description: "Show or hide tool activity and intermediate assistant text separately in server channels, threads, and DMs. Prompts and workspace notices stay visible.",
+        },
+        {
+          label: "Channel replies",
+          currentValue: channelReplyModeLabel(config.channelReplies.mode),
+          description: "Choose where new server conversations answer: a thread, the channel, or a routing model's choice. Existing threads and DMs are unchanged.",
+        },
+        {
+          label: "Recent context",
+          currentValue: contextMessagesLabel(config.contextMessages),
+          description: "Set surrounding messages added for context: before the reply target when replying, or before your new message otherwise. Non-replies skip already-delivered context; off disables history.",
+        },
+        ...(config.channelReplies.mode === "auto"
+          ? [
+            {
+              label: "Routing model",
+              currentValue: config.channelReplies.routerModel ? `${config.channelReplies.routerModel.provider}/${config.channelReplies.routerModel.id}` : "cheapest available",
+              description: "Choose the model that decides between channel and thread replies. Each new server conversation costs one extra model call; failures start a thread.",
+            },
+            {
+              label: "Routing context",
+              currentValue: contextMessagesLabel(config.channelReplies.contextMessages ?? 5),
+              description: "Set channel messages sent to the router, independently of the agent: before the reply target when replying, otherwise before your new message. The direct quote is always included; off disables only history.",
+            },
+            {
+              label: "Tool escalation",
+              currentValue: config.channelReplies.escalate ? "on" : "off",
+              description: "Open a thread when a channel reply uses editing, shell, or delegation tools. Read-only replies stay in the channel; the thread inherits the conversation.",
+            },
+            {
+              label: "Follow-up escalation",
+              currentValue: config.channelReplies.followUp ? "on" : "off",
+              description: "Open a thread when the same user mentions the bot again in the same channel within ten minutes of a channel reply. When off, the routing model decides.",
+            },
+          ]
+          : []),
       ],
     });
+    selectedOption = selected;
     switch (selected) {
       case "Bot token":
         await configureBotToken(ctx, config);
@@ -208,8 +286,29 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
       case "Message access":
         await configureAccessPaths(ctx, config);
         break;
-      case `Tool call verbosity: ${config.toolCallVerbosity ?? "full"}`:
+      case "Tool call verbosity":
         await configureToolCallVerbosity(ctx, config);
+        break;
+      case "Tool call visibility":
+        await configureToolCallVisibility(ctx, config);
+        break;
+      case "Channel replies":
+        await configureChannelReplies(ctx, config);
+        break;
+      case "Recent context":
+        await configureContextMessages(ctx, config);
+        break;
+      case "Routing model":
+        await configureRoutingModel(ctx, config);
+        break;
+      case "Routing context":
+        await configureContextMessages(ctx, config, true);
+        break;
+      case "Tool escalation":
+        await configureToolEscalation(ctx, config);
+        break;
+      case "Follow-up escalation":
+        await configureFollowUpEscalation(ctx, config);
         break;
       default:
         return;
@@ -347,6 +446,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     serverAccessLine,
     "Mention the bot to start a server thread. Allowed channels also authorize history sources, including the requester's DM.",
     "History and channel discovery results may be visible to shared-thread participants.",
+    `Recent context: ${contextMessagesLabel(existing?.contextMessages ?? 5)} added automatically per turn`,
     `Notifications: ${homeChannelId || "off"}`,
     "",
     "UNATTENDED TOOLS",
@@ -380,6 +480,9 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
     toolCallVerbosity: existing?.toolCallVerbosity ?? "full",
+    toolCallVisibility: existing?.toolCallVisibility ?? { channels: false, threads: true, dms: true },
+    channelReplies: existing?.channelReplies ?? { mode: "always-thread", escalate: true, followUp: true, contextMessages: 5 },
+    contextMessages: existing?.contextMessages ?? 5,
     configuredAt: new Date().toISOString(),
   };
   const paths = getDiscordGatewayPaths();
@@ -589,6 +692,173 @@ async function configureToolCallVerbosity(ctx: ExtensionCommandContext, config: 
   saveGatewayConfig(ctx, config, { toolCallVerbosity: value }, `Tool call verbosity set to ${value}.`);
 }
 
+async function configureToolCallVisibility(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = { channels: false, threads: true, dms: true, ...config.toolCallVisibility };
+  const destinations: { key: keyof DiscordToolCallVisibility; label: string }[] = [
+    { key: "channels", label: "Server channels" },
+    { key: "threads", label: "Threads" },
+    { key: "dms", label: "Direct messages" },
+  ];
+  const selected = await selectDiscordOption(ctx, {
+    title: "Tool call visibility",
+    description: "Choose where to change tool activity and intermediate assistant text. Verbosity still applies where enabled; prompts and workspace notices stay visible.",
+    options: destinations.map(({ key, label }) => ({
+      label,
+      currentValue: current[key] ? "on" : "off",
+      description: `Show or hide tool activity and intermediate assistant text in ${label.toLowerCase()}. Prompts and workspace notices remain visible.`,
+    })),
+  });
+  const destination = destinations.find(({ label }) => label === selected);
+  if (!destination) return;
+  const enabled = current[destination.key];
+  const choice = await selectDiscordOption(ctx, {
+    title: `Tool calls: ${destination.label}`,
+    options: [enabled ? "On (current)" : "On", enabled ? "Off" : "Off (current)"],
+  });
+  if (!choice) return;
+  const value = choice.startsWith("On");
+  if (value === enabled) {
+    notify(ctx, "Tool call visibility is unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(ctx, config, {
+    toolCallVisibility: { ...current, [destination.key]: value },
+  }, `Tool call info in ${destination.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
+}
+
+async function configureContextMessages(ctx: ExtensionCommandContext, config: DiscordGatewayConfig, routing = false): Promise<void> {
+  const current = routing ? config.channelReplies.contextMessages ?? 5 : config.contextMessages;
+  const title = routing ? "Routing context" : "Recent context";
+  const values = [...new Set([0, 3, 5, 10, 20, 25, current])].sort((a, b) => a - b);
+  const label = (value: number) => value === 0 ? "Off" : `${value} message${value === 1 ? "" : "s"}`;
+  const selected = await selectDiscordOption(ctx, {
+    title,
+    description: routing
+      ? "Messages sent to the router before the reply target, or before your new message when not replying. Independent of agent context. Off disables history, not the direct quote. More context uses more input tokens."
+      : "Messages before the reply target, or before your new message when not replying. Non-replies skip already-delivered context; explicit replies revisit older context. Off disables history.",
+    options: values.map((value) => `${label(value)}${value === current ? " (current)" : ""}`),
+  });
+  if (!selected) return;
+  const value = values.find((entry) => selected.startsWith(label(entry)));
+  if (value === undefined) return;
+  if (value === current) {
+    notify(ctx, `${title} is unchanged.`, "info");
+    return;
+  }
+  saveGatewayConfig(
+    ctx,
+    config,
+    routing ? { channelReplies: { ...config.channelReplies, contextMessages: value } } : { contextMessages: value },
+    value === 0 ? `${title} disabled.${routing ? " Direct reply quotes remain included." : ""}` : `${title} set to ${label(value).toLowerCase()}.`
+  );
+}
+
+function channelReplyModeLabel(mode: DiscordChannelReplyMode): string {
+  return mode === "always-thread" ? "always thread" : mode === "channel" ? "channel only" : "model decides";
+}
+
+function contextMessagesLabel(count: number): string {
+  return count === 0 ? "off" : `${count} message${count === 1 ? "" : "s"}`;
+}
+
+async function configureChannelReplies(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = config.channelReplies.mode;
+  const choices: { value: DiscordChannelReplyMode; label: string; result: string }[] = [
+    { value: "always-thread", label: "Always start a thread", result: "New server conversations start in a thread." },
+    { value: "channel", label: "Always answer in the channel", result: "New server conversations answer directly in the channel." },
+    { value: "auto", label: "Model decides", result: "New server conversations ask a routing model where to answer; failures start a thread." },
+  ];
+  const selected = await selectDiscordOption(ctx, {
+    title: "Channel replies",
+    description: "Where a new server conversation answers when the bot is mentioned. Threads keep long work out of the channel. Existing threads and DMs are unchanged.",
+    options: choices.map((choice) => `${choice.label}${choice.value === current ? " (current)" : ""}`),
+  });
+  if (!selected) return;
+  const choice = choices.find((entry) => selected.startsWith(entry.label));
+  if (!choice) return;
+  if (choice.value === current) {
+    notify(ctx, "Channel replies are unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(ctx, config, { channelReplies: { ...config.channelReplies, mode: choice.value } }, choice.result);
+}
+
+async function configureRoutingModel(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const refresh = refreshProviderCatalogs(ctx);
+  const currentValue = config.channelReplies.routerModel ? `${config.channelReplies.routerModel.provider}/${config.channelReplies.routerModel.id}` : "";
+  const models = (await getAvailablePickerModels(ctx))
+    .map((model) => ({ value: `${model.provider}/${model.id}`, model }))
+    .sort((a, b) => a.value.localeCompare(b.value));
+  const choices = [
+    {
+      value: "",
+      label: currentValue ? "Cheapest available" : "Cheapest available (current)",
+      description: "Use the lowest-cost authenticated chat model at decision time",
+    },
+    ...models.map(({ value, model }) => ({
+      value,
+      label: `${value}${value === currentValue ? " (current)" : ""}`,
+      description: model.name,
+    })),
+  ];
+  const selected = await selectDiscordModel(ctx, choices, currentValue, refresh);
+  if (selected === undefined) return;
+  if (selected === currentValue) {
+    notify(ctx, "Routing model is unchanged.", "info");
+    return;
+  }
+  const model = models.find((entry) => entry.value === selected)?.model;
+  if (selected && !model) return;
+  saveGatewayConfig(
+    ctx,
+    config,
+    { channelReplies: { ...config.channelReplies, ...(model ? { routerModel: { provider: model.provider, id: model.id } } : { routerModel: undefined }) } },
+    `Routing model set to ${selected || "the cheapest available model"}. Each new server conversation costs one extra model call.`
+  );
+}
+
+async function configureToolEscalation(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = config.channelReplies.escalate;
+  const selected = await selectDiscordOption(ctx, {
+    title: "Tool escalation",
+    description: "Open a thread when a channel reply used editing, shell, or delegation tools. Read-only replies stay in the channel. The thread inherits the channel conversation.",
+    options: [`On${current ? " (current)" : ""}`, `Off${current ? "" : " (current)"}`],
+  });
+  if (!selected) return;
+  const value = selected.startsWith("On");
+  if (value === current) {
+    notify(ctx, "Tool escalation is unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(
+    ctx,
+    config,
+    { channelReplies: { ...config.channelReplies, escalate: value } },
+    `Tool escalation turned ${value ? "on" : "off"}.`
+  );
+}
+
+async function configureFollowUpEscalation(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = config.channelReplies.followUp;
+  const selected = await selectDiscordOption(ctx, {
+    title: "Follow-up escalation",
+    description: "Open a thread when the same user mentions the bot again in the same channel within ten minutes of a channel reply. Turning this off leaves every new mention to the routing model.",
+    options: [`On${current ? " (current)" : ""}`, `Off${current ? "" : " (current)"}`],
+  });
+  if (!selected) return;
+  const value = selected.startsWith("On");
+  if (value === current) {
+    notify(ctx, "Follow-up escalation is unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(
+    ctx,
+    config,
+    { channelReplies: { ...config.channelReplies, followUp: value } },
+    `Follow-up escalation turned ${value ? "on" : "off"}.`
+  );
+}
+
 async function configureAccessPaths(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
   const accessPaths = await promptDiscordAccessPaths(ctx, {
     allowDirectMessages: config.allowDirectMessages,
@@ -680,7 +950,7 @@ async function selectDiscordOption(
 
   return ctx.ui.select(
     options.description ? `${options.title}\n${options.description}` : options.title,
-    options.options
+    options.options.map((option) => typeof option === "string" ? option : option.label)
   );
 }
 

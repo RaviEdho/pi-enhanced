@@ -6,13 +6,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { log, safeErrorName } from "./logging.mjs";
 import { createHistoryIpc } from "./history.mjs";
 import {
-  clearWorkspaceRequest, loadWorkspace, loadWorkspaceRequest, saveWorkspace,
-  validateWorkspaceDirectory,
+  clearWorkspaceRequest, forkConversationForWorkspace, loadWorkspace, loadWorkspaceRequest, saveWorkspace,
+  validateForkSource, validateWorkspaceDirectory,
 } from "./workspace.mjs";
 
 /** One Pi child process and its newline-delimited RPC transport. */
 export class PiRpcSession {
-  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, onWorkspaceChanged = () => {} }) {
+  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, seed, onWorkspaceChanged = () => {} }) {
     this.historyOptions = { client, configPath };
     this.sessionDirectory = sessionDirectory;
     this.config = config;
@@ -24,6 +24,8 @@ export class PiRpcSession {
     this.sessionFile = undefined;
     this.appliedRequestId = undefined;
     this.workspaceChangeNotice = undefined;
+    // A forked source (set by the gateway) is used only for a first start.
+    this.seedFile = seed;
     this.stopping = false;
     this.replacingChild = false;
     this.child = undefined;
@@ -83,6 +85,23 @@ export class PiRpcSession {
         this.replacingChild = false;
       }
     } else {
+    } else if (!saved && this.seedFile) {
+      // A shared channel conversation was handed to this thread; fork it so the
+      // agent keeps its context. Forking is one-shot, so a failure starts fresh.
+      const source = this.seedFile;
+      this.seedFile = undefined;
+      this.replacingChild = true;
+      try {
+        await this.startChild({ cwd, forkFrom: validateForkSource(source) });
+        this.rememberWorkspace();
+        log("Forked a shared Discord conversation into a new session");
+      } catch (error) {
+        await this.stopChild();
+        log(`Could not fork the shared conversation (${safeErrorName(error)}); starting a new session`);
+        await this.startChild({ cwd });
+      } finally {
+        this.replacingChild = false;
+      }
       await this.startChild({ cwd, sessionFile: saved?.sessionFile });
     }
     if (pending) clearWorkspaceRequest(this.sessionDirectory);

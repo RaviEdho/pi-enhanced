@@ -34,6 +34,9 @@ export function loadGatewayConfig(env = process.env) {
     (config.allowServerMessages !== undefined && typeof config.allowServerMessages !== "boolean") ||
     (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
     (config.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(config.toolCallVerbosity)) ||
+    (config.toolCallVisibility !== undefined && !isValidToolCallVisibility(config.toolCallVisibility)) ||
+    (config.channelReplies !== undefined && !isValidChannelReplies(config.channelReplies)) ||
+    (config.contextMessages !== undefined && (!Number.isInteger(config.contextMessages) || config.contextMessages < 0 || config.contextMessages > 25)) ||
     typeof config.cwd !== "string"
   ) {
     throw new Error("Discord gateway configuration is invalid");
@@ -53,6 +56,27 @@ export function isValidAllowlist(value) {
     (value.length === 1 && value[0] === "*") ||
     value.every((entry) => typeof entry === "string" && /^\d{17,20}$/.test(entry))
   );
+}
+
+export function isValidToolCallVisibility(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return [value.channels, value.threads, value.dms].every((setting) => setting === undefined || typeof setting === "boolean");
+}
+
+/** Reply routing settings: thread mode, optional router model, and escalation. */
+export function isValidChannelReplies(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.mode !== undefined && !["always-thread", "channel", "auto"].includes(value.mode)) return false;
+  if (value.escalate !== undefined && typeof value.escalate !== "boolean") return false;
+  if (value.followUp !== undefined && typeof value.followUp !== "boolean") return false;
+  if (value.contextMessages !== undefined &&
+      (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) return false;
+  if (value.routerModel !== undefined) {
+    const model = value.routerModel;
+    if (!model || typeof model !== "object" || typeof model.provider !== "string" || !model.provider ||
+        typeof model.id !== "string" || !model.id) return false;
+  }
+  return true;
 }
 
 export function parseJsonArray(value) {

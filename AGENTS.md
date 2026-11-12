@@ -24,7 +24,7 @@ Guidance for AI agents working in this repository.
 - **Web (`tools/web/`)**: `web_search` / `web_fetch` with priority routing and failover across Brave, Tavily, Antigravity Grounding, TinyFish, Exa, and Parallel; search operators, Markdown extraction, SPA/anti-bot handling, lenient constraints, canonical redirects, and `/login` / `/logout` key management.
 - **Subagents (`tools/subagent/`)**: In-memory sessions inheriting the parent's model/thinking, focused prompts, turn/time limits, context budgets, enhanced tools, escalation, and coordinated follow-ups. Background by default; sync via `background: false` or `/subagent --sync`. Manage with `/jobs`, `subagent_list`, `subagent_status`, and `subagent_cancel`.
 - **Feedback (`tools/feedback/`)**: Native `ask_user` freeform input, three-choice selectors with custom answers, and sequential questionnaires; supports dismissal, non-interactive environments, signals/timeouts, and plan mode.
-- **Discord (`gateway/`)**: Detached bot with `/discord setup|configure|start|stop|teardown|status|logs` and menu; allowlisted DM/server routes, mention threads, full-tool Pi CLI sessions, shared thread history, isolated DM/user sessions, author identity, and participant-scoped approvals.
+- **Discord (`gateway/`)**: Detached bot with `/discord setup|configure|start|stop|teardown|status|logs` and menu; allowlisted DM/server routes, mention threads, per-channel or per-thread conversations, model-decided reply routing with deterministic escalation, bounded automatic recent-message context, full-tool Pi CLI sessions, shared thread history, isolated DM/user sessions, author identity, and participant-scoped approvals.
 
 ### Directory map
 

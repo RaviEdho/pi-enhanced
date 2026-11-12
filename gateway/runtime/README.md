@@ -9,9 +9,10 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 
 | Module | Responsibility |
 | --- | --- |
-| `config.mjs` | Read and validate configuration, paths, executable arguments, and startup reason. |
-| `router.mjs` | Authorize messages, choose DM/thread conversations, deduplicate, and schedule replies. |
-| `sessions.mjs` | Own the session pool, conversation queues, global run slots, and idle eviction. |
+| `config.mjs` | Read and validate configuration, paths, executable arguments, context-message bounds, and startup reason. |
+| `router.mjs` | Authorize messages, choose DM/thread/channel conversations, deduplicate, and schedule replies. |
+| `route-decider.mjs` | Ask a chat model whether a new server conversation needs a thread or a direct channel reply, with timeouts and thread fallback. |
+| `sessions.mjs` | Own the session pool, conversation queues, one-shot fork seeds, global run slots, and idle eviction. |
 | `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, workspace handoffs, and history IPC lifecycle. |
 | `history.mjs` | Authenticate session IPC and authorize bounded history reads and server channel discovery against the active requester and current configuration. |
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
@@ -19,7 +20,7 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
-| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, and safely download supported Discord CDN images. |
+| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, load bounded recent conversation context, and safely download supported Discord CDN images. |
 | `threads.mjs` | Own thread registration, shared conversation keys, persistence, pruning, and generated-title watchers. |
 | `lifecycle.mjs` | Own PID/status files, process handlers, restart requests, draining, and replacement startup. |
 | `persistence.mjs` | Write private JSON files through temporary-file replacement. |
@@ -31,11 +32,30 @@ callbacks where commands and lifecycle depend on each other.
 
 ## Coordination contracts
 
-- Resolve reply context only for authorized, accepted messages inside the queued run.
+- Resolve reply context only for authorized, accepted messages. In auto routing, load
+  it before the routing decision; other routes load it inside the queued run. Memoize
+  the read per accepted message and reuse it for the agent, including thread fallback.
   Fetch only the directly referenced same-channel message via Discord's message API;
-  never traverse reply chains or automatically ingest channel history. Treat its text/author and
-  attachment links as quoted context, not a new user's instructions. An unreadable
-  reference becomes an explicit unavailable-context note without aborting the run.
+  never traverse reply chains. Treat its text/author and attachment links as quoted
+  context, not a new user's instructions. An unreadable reference becomes an explicit
+  unavailable-context note without aborting the run.
+- Every turn also adds bounded automatic context: up to `contextMessages` recent
+  same-channel messages (default 5, maximum 25, `0` disables), oldest first. Replies
+  anchor the window immediately before the direct same-channel reply target; non-replies
+  anchor it before the incoming message. The target is quoted separately and is not
+  part of the history count. Exclude the anchor/current/future and own-bot messages.
+  For non-replies, keep a per-conversation delivered-message watermark: pass only
+  messages newer than it, and skip automatic context when the watermark belongs to a
+  different channel (a freshly created thread has no earlier messages to recover).
+  Explicit replies intentionally bypass this watermark so an older target's context
+  is available even after newer messages were delivered. Label reply-anchored history
+  with its target message ID so it cannot be confused with current channel discussion.
+  Mark the incoming message delivered when it is accepted, not when its run finishes,
+  so queued messages still see only their own gaps. Label the block as quoted context,
+  truncate long text, and degrade to no context on Discord API or permission failures;
+  never fail the run. Reply context and automatic context are appended after the
+  labeled author turn. Automatic context reads only the conversation's own channel, so
+  it obeys the same allowlist and bot permissions that already admit the message.
 - Explicit history-tool calls use the existing channel whitelist (including `*`): DM turns can
   read only the active requester's own allowed DM; thread turns can read allowed text,
   announcement, or ordinary voice channels in the same server, with the destination parent also allowed. Both requester and bot need View Channel and Read Message History, plus Connect for voice. Voice text chat requires no voice join; stage channels are excluded. Recheck DM recipient or requester
@@ -61,6 +81,58 @@ callbacks where commands and lifecycle depend on each other.
   quoted context. Apply this to resumed sessions and workspace handoffs too.
 - Route work through `sessions.enqueue(key, task)` to preserve conversation order.
   Use `sessions.withRunSlot(task)` for agent runs to enforce global concurrency.
+- A mention in an allowlisted server channel starts either a thread or a direct channel reply,
+  decided by `channelReplies.mode` in the saved config: `always-thread` (default, prior
+  behavior), `channel`, or `auto`. Only `auto` consults a model. Resolve the model lazily
+  through the installed `@earendil-works/pi-coding-agent` `ModelRuntime`, registering
+  `providers/index.ts` with Pi's SDK extension loader first. Load only this provider entry
+  point, not the root extension or workspace-discovered extensions: preserve cached
+  discovery, plan filters, auth, and streaming/failover without tools, UI, or agent sessions.
+  Share initialization between warming and concurrent decisions. An explicit routing model
+  must match an authenticated chat model exactly; if unavailable, fall back to a thread,
+  never a different model. With no routing model set, use the cheapest authenticated chat
+  model, not the gateway's conversation model. The six-second deadline bounds context reads,
+  model loading, and completion even if a provider ignores cancellation; also pass its abort signal to the
+  request. Never reuse a conversation child, because overlapping prompts are refused.
+  Keep the task framing in the user turn, not the system prompt, omit `temperature`
+  (subscription transports reject it),
+  cap output tokens, and never log message text or the returned prose.
+- Auto routing includes the direct reply quote (up to 2,000 characters) and an independent
+  same-channel window configured by `channelReplies.contextMessages` (default 5, 0–25;
+  `0` disables recent history but not the direct quote). Both router and agent anchor
+  history before the direct reply target for replies, or before the incoming message
+  otherwise. Routing is stateless and never applies a delivered-message watermark.
+  Fetch at most the larger of the agent/router window once per accepted message and
+  reuse the snapshot, slicing each consumer's independent window before bot/watermark
+  filtering. Keep the agent's non-reply watermark and separate context limit unchanged.
+  Exclude the anchor/current/future and own-bot messages;
+  label authors and quoted context, truncate each message as usual, cap router history
+  at 16,000 characters, and prioritize the current request over quoted instructions or
+  earlier complex work. Unreadable history degrades to no history; an unreadable quote
+  is explicit. Context reads must not run for unauthorized/rejected messages, and routing
+  reads are skipped for forced modes, follow-up escalation, DMs, and existing threads.
+- Channel conversations use one shared session per channel
+  (`getChannelSessionKey`), separate from thread sessions, and reply to the triggering
+  message. They are exempt from thread title generation but keep normal queueing, run slots,
+  author labels, and history scopes (the channel is its own history parent).
+- `toolCallVisibility` independently gates tool activity/failure reports and assistant
+  narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
+  values default to channels off, threads and DMs on, including legacy configurations.
+  Do not classify by `historyScope`: direct server-channel replies also use a thread-shaped
+  history authorization scope. `toolCallVerbosity` still controls the detail level where
+  visible. Visibility must not alter tool tracking/escalation, final replies, interactive
+  prompts, workspace notices, or the dedicated commit/usage workflows.
+- Every routing failure falls back to a thread: unavailable registry, timeout, provider
+  error, or an unlabeled response. Never block or drop a reply on the decision.
+- With escalation enabled in `auto` mode, a channel reply can escalate deterministically. Two
+  independent switches: `escalate` moves a channel run that used `bash`, `edit`, `write`,
+  `subagent`, `set_working_directory`, or `discord_gateway_restart` into a thread after its
+  reply is delivered (read-only channel replies stay put); `followUp` sends the same user's
+  repeat mention in that channel within ten minutes straight to a thread without asking the
+  model. Disable `followUp` to let the routing model decide every mention. Escalation registers
+  the new thread and seeds its session with the channel conversation file, so the first thread
+  turn forks the shared history instead of starting blank; the fork is one-shot and falls back
+  to a fresh session when the source is missing or invalid.
 - Register accepted asynchronous work with `lifecycle.trackTask(promise)`. Message
   handlers also run through `lifecycle.handleMessage(task)`, so a restart cannot
   overtake thread creation or other pre-queue work.
@@ -130,11 +202,17 @@ callbacks where commands and lifecycle depend on each other.
 - `set_working_directory` is a Discord-only, sequential model tool. It writes a
   private per-child-token request and returns `terminate: true`; subsequent tools
   are blocked until the handoff. It refuses to interrupt running background jobs.
-  Do not mutate `process.cwd()`, tool factories, or `ctx.cwd` as a partial override.
+  Do not mutate `process.cwd()`, tool factories, or `ctx.cwd` as a partial override;
+  move `process.cwd()` only as part of a full in-process session rebind.
 - After `agent_settled`, validate the request against the active token, cwd, and
-  session file, fully stop the old child, and launch `--fork <source>` in the new
-  cwd. This preserves the complete history/tree with a new Pi session ID and
-  reloads cwd-bound project resources. Resume the unfinished task automatically
+  session file. Prefer an in-process handoff: write a forked session file whose
+  header points at the target cwd, then send the `switch_session` RPC. Pi tears
+  down and rebinds the session in place, reloading cwd-bound project resources
+  without paying a full process startup. Move `process.cwd()` in
+  `session_before_switch`/`session_start` so cwd-bound extensions see the new
+  directory. If the in-process switch fails, fall back to stopping the child and
+  launching `--fork <source>` in the new cwd. Both paths preserve the complete
+  history/tree with a new Pi session ID. Resume the unfinished task automatically
   inside the same conversation queue, run slot, and lifecycle task. At most five
   switches are allowed per accepted message to prevent workspace loops.
   After a successful handoff is persisted, send the active thread/DM a workspace

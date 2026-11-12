@@ -29,6 +29,40 @@ export function validateConversationFile(path, directory) {
   return file;
 }
 
+/** A conversation file from another gateway session, used as a forking source. */
+export function validateForkSource(path) {
+  if (typeof path !== "string" || !isAbsolute(path) || !path.endsWith(".jsonl")) throw new Error("Invalid fork source");
+  const file = realpathSync(path);
+  const size = statSync(file).size;
+  if (!statSync(file).isFile() || size > 64 * 1024 * 1024) throw new Error("Fork source is unavailable");
+  return file;
+}
+
+/** Fork a conversation into a new file whose header points at a different cwd. */
+export function forkConversationForWorkspace(sourceFile, targetCwd, directory) {
+  const source = validateConversationFile(sourceFile, directory);
+  if (statSync(source).size > 64 * 1024 * 1024) throw new Error("Conversation is too large to fork");
+  const lines = readFileSync(source, "utf8").split("\n").filter((line) => line.trim().length > 0);
+  if (lines.length === 0) throw new Error("Conversation is empty");
+  let header;
+  try { header = JSON.parse(lines[0]); } catch { throw new Error("Conversation header is invalid"); }
+  if (header?.type !== "session") throw new Error("Conversation header is invalid");
+  const id = randomUUID();
+  const timestamp = new Date().toISOString();
+  const file = join(directory, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
+  const body = lines.slice(1).map((line) => `${line}\n`).join("");
+  // Match Pi's SessionManager.forkFrom: the fork always uses the current format.
+  writeFileSync(file, `${JSON.stringify({
+    type: "session",
+    version: 3,
+    id,
+    timestamp,
+    cwd: targetCwd,
+    parentSession: source,
+  })}\n${body}`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  return { file, id };
+}
+
 export function loadWorkspace(directory) {
   const state = readOptionalJson(join(directory, "workspace.json"));
   if (!state) return undefined;

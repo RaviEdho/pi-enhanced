@@ -14,6 +14,7 @@ export function createSessionManager({
   const sessions = new Map();
   const openingSessions = new Map();
   const sessionQueues = new Map();
+  const seededSources = new Map();
   const runQueue = [];
   let activeRuns = 0;
   let closing = false;
@@ -21,6 +22,12 @@ export function createSessionManager({
 
   function assertOpen() {
     if (closing) throw new Error("Pi session manager is stopping");
+  }
+
+  /** Hand the next creation of `key` a source conversation to fork from. */
+  function seed(key, sourceFile) {
+    if (closing || typeof sourceFile !== "string" || !sourceFile) return;
+    seededSources.set(key, sourceFile);
   }
 
   function enqueue(key, task) {
@@ -92,7 +99,9 @@ export function createSessionManager({
     const sessionDirectory = join(sessionRoot, hash);
     mkdirSync(sessionDirectory, { recursive: true, mode: 0o700 });
     try { chmodSync(sessionDirectory, 0o700); } catch { /* best-effort on non-POSIX filesystems */ }
-    const created = createSession(sessionDirectory);
+    const created = createSession(sessionDirectory, { seed: seededSources.get(key) });
+    // A seed is one-shot: it applies to this creation attempt only.
+    seededSources.delete(key);
     sessions.set(key, created);
     try {
       await created.start();
@@ -143,6 +152,7 @@ export function createSessionManager({
 
   return {
     get,
+    seed,
     peek: (key) => sessions.get(key),
     enqueue,
     withRunSlot,

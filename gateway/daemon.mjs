@@ -8,6 +8,7 @@ import { createLifecycle } from "./runtime/lifecycle.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./runtime/logging.mjs";
 import { PiRpcSession } from "./runtime/pi-rpc.mjs";
 import { createMessageRouter } from "./runtime/router.mjs";
+import { createRouteDecider } from "./runtime/route-decider.mjs";
 import { createSessionManager } from "./runtime/sessions.mjs";
 import { createThreadRegistry } from "./runtime/threads.mjs";
 
@@ -31,8 +32,9 @@ const interactions = createInteractionManager();
 // Lazy callbacks break the lifecycle/command dependency without shared mutable state.
 const sessions = createSessionManager({
   sessionRoot: paths.sessionRoot,
-  createSession: (directory) => new PiRpcSession(directory, {
+  createSession: (directory, options = {}) => new PiRpcSession(directory, {
     config, piExecutable, piArgs, interactions, extensionRoot, client, configPath: paths.configPath,
+    seed: options.seed,
     onWorkspaceChanged: (session) => commands.cancelSession(session),
   }),
   onSessionClosed: (session) => commands.cancelSession(session),
@@ -47,8 +49,10 @@ const commands = createCommandHandlers({
   client, config, configPath: paths.configPath,
   allowedUsers, allowedChannels, threads, sessions, lifecycle,
 });
+const routeDecider = createRouteDecider({ config });
 const router = createMessageRouter({
   client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle,
+  routeDecider,
 });
 
 client.on("clientReady", (readyClient) => {
@@ -58,6 +62,8 @@ client.on("clientReady", (readyClient) => {
   void lifecycle.sendHomeNotification(startReason === "start"
     ? "Discord gateway started and is online."
     : "Discord gateway restarted and is online.");
+  // Warm the routing model registry while nobody is waiting on a decision.
+  if (config.channelReplies?.mode === "auto") void routeDecider.warm();
 });
 client.on("shardDisconnect", (event) => {
   lifecycle.updateStatus("disconnected", {
