@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import {
-  fetchRecentContextMessages, getDiscordImageAttachments, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext, loadRecentContext,
+  fetchRecentContextMessages, formatDiscordEmbedContext, getDiscordImageAttachments, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext, loadRecentContext,
   sendText, startTyping, stripBotMention,
 } from "./messages.mjs";
 import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
@@ -106,7 +106,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     return { afterId: last.messageId, skip: false };
   }
 
-  async function chooseConversationTarget({ message, content, imageAttachments, isReply, loadContext }) {
+  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext }) {
     if (!decidePerMessage) {
       return { target: channelReplies.mode === "channel" ? "channel" : "thread", reason: "mode" };
     }
@@ -116,6 +116,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     if (!routeDecider) return { target: "thread", reason: "router-unavailable" };
     const decision = await routeDecider.decide({
       content,
+      embedContext,
       author: message.author.username,
       isReply,
       imageCount: imageAttachments.length,
@@ -173,6 +174,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         : "Please send a text message or attach an image.", message.id);
       return;
     }
+    const embedContext = formatDiscordEmbedContext(message);
     // Lazily read only after authorization. Routing and the queued agent turn
     // share the same snapshot, but format independent windows/watermarks.
     let replyContextPromise;
@@ -208,7 +210,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       sessionKey = route.sessionKey;
       conversationLabel = `Discord thread ${message.channelId}`;
     } else {
-      const decision = await chooseConversationTarget({ message, content, imageAttachments, isReply, loadContext: loadRoutingContext });
+      const decision = await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext });
       if (decision.target === "channel" || typeof message.startThread !== "function") {
         if (decision.target !== "channel") log(`Cannot start a thread in channel ${message.channelId}; replying in the channel instead`);
         sessionKey = getChannelSessionKey(message.guildId, message.channelId);
@@ -267,18 +269,18 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           const imageNote = skippedCount > 0
             ? `\n\n[Gateway note: ${skippedCount} image attachment(s) could not be included. Analyze only the images attached to this prompt.]`
             : "";
-          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${replyContext}${recentContext}`;
+          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${embedContext}${replyContext}${recentContext}`;
           const session = await sessions.get(sessionKey);
           // Observe background title generation during the run, not just after it.
           if (!channelConversation) threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
             channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing,
+            allowNoReply: route.kind === "thread",
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images);
-            allowNoReply: route.kind === "thread",
+          if (!session.forceStopped && result?.disposition === "no_reply") return undefined;
           // Retry if the early watch expired before the title became available.
           if (!channelConversation) threads.watchThreadTitle(target, session);
-          if (!session.forceStopped && result?.disposition === "no_reply") return undefined;
           return {
             text: session.forceStopped ? "The agent run was cancelled." : result,
             escalate: channelConversation && decidePerMessage && escalateChannelReplies && usesEscalatingTool(session.lastRunTools),

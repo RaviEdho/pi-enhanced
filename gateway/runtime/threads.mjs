@@ -58,6 +58,8 @@ export function createThreadRegistry({ threadsPath }) {
         }
         await delay(Math.min(THREAD_TITLE_POLL_MS, Math.max(0, deadline - Date.now())));
       }
+      // A silent title provider failure otherwise looks like a normal thread name.
+      log(`Discord thread ${channel.id} kept its name: no generated session title within ${Math.round(THREAD_TITLE_WAIT_MS / 1000)}s`);
     })()
       .catch((error) => {
         log(`Could not rename Discord thread ${channel.id}: ${safeErrorName(error)}`);

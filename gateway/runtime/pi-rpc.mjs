@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -85,7 +85,6 @@ export class PiRpcSession {
       } finally {
         this.replacingChild = false;
       }
-    } else {
     } else if (!saved && this.seedFile) {
       // A shared channel conversation was handed to this thread; fork it so the
       // agent keeps its context. Forking is one-shot, so a failure starts fresh.
@@ -103,6 +102,7 @@ export class PiRpcSession {
       } finally {
         this.replacingChild = false;
       }
+    } else {
       await this.startChild({ cwd, sessionFile: saved?.sessionFile });
     }
     if (pending) clearWorkspaceRequest(this.sessionDirectory);
@@ -154,7 +154,7 @@ export class PiRpcSession {
         "These paths identify the extension running the gateway, not your current working directory or necessarily the extensions loaded by this Pi process.",
         `Read ${JSON.stringify(join(this.extensionRoot, "AGENTS.md"))} before modifying the extension's code.`,
         "The extension root is also available as PI_ENHANCED_EXTENSION_ROOT.",
-        `This conversation's current workspace is ${JSON.stringify(cwd)}. Use set_working_directory when the user's task clearly targets another project; shell cd and absolute file paths do not update the session cwd used by /commit.`,
+        "Use set_working_directory when the user's task clearly targets another project; shell cd and absolute file paths do not update the session cwd used by /commit.",
       ].join("\n"),
     ];
     const selectedModel = model || (!sessionFile && !forkFrom ? this.config.model : undefined);
@@ -213,24 +213,35 @@ export class PiRpcSession {
       throw new Error("Workspace switch does not match the active Pi session");
     }
     const previous = { cwd: this.cwd, sessionFile: state.sessionFile, model: state.model, thinkingLevel: state.thinkingLevel };
-    await this.ui.flushToolActivity();
-    await this.ui.flushNotifications();
-    await this.ui.flushPendingAskUserCompletion();
-    await this.ui.clearStatusMessages();
     this.replacingChild = true;
+    const startedAt = Date.now();
     try {
-      await this.stopChild();
+      await Promise.all([
+        this.ui.flushToolActivity(),
+        this.ui.flushNotifications(),
+        this.ui.flushPendingAskUserCompletion(),
+        this.ui.clearStatusMessages(),
+      ]);
       try {
-        await this.startChild({ cwd: pending.cwd, forkFrom: previous.sessionFile, model: state.model, thinkingLevel: state.thinkingLevel });
-        if (!this.sessionFile || !existsSync(this.sessionFile)) throw new Error("Workspace fork was not saved");
-        saveWorkspace(this.sessionDirectory, { cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: pending.requestId });
-        this.appliedRequestId = pending.requestId;
+        // Rebind the existing child to a forked session whose header points at
+        // the target cwd. This reloads cwd-bound resources without a 3s respawn.
+        await this.switchWorkspaceInProcess(pending, previous);
+        log(`Workspace switched in-process in ${Date.now() - startedAt}ms`);
       } catch (error) {
+        log(`In-process workspace switch failed (${safeErrorName(error)}); restarting Pi`);
         await this.stopChild();
-        clearWorkspaceRequest(this.sessionDirectory);
-        await this.startChild(previous);
-        throw error;
+        try {
+          await this.startChild({ cwd: pending.cwd, forkFrom: previous.sessionFile, model: previous.model, thinkingLevel: previous.thinkingLevel });
+          if (!this.sessionFile || !existsSync(this.sessionFile)) throw new Error("Workspace fork was not saved");
+        } catch (restartError) {
+          await this.stopChild();
+          clearWorkspaceRequest(this.sessionDirectory);
+          await this.startChild(previous);
+          throw restartError;
+        }
       }
+      saveWorkspace(this.sessionDirectory, { cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: pending.requestId });
+      this.appliedRequestId = pending.requestId;
       try { clearWorkspaceRequest(this.sessionDirectory); } catch {
         log("Workspace changed; pending request cleanup will be retried on startup");
       }
@@ -243,6 +254,48 @@ export class PiRpcSession {
       });
     } finally {
       this.replacingChild = false;
+    }
+  }
+
+  async switchWorkspaceInProcess(pending, previous) {
+    const forked = forkConversationForWorkspace(previous.sessionFile, pending.cwd, this.sessionDirectory);
+    let switched = false;
+    try {
+      const response = await this.request("switch_session", { sessionPath: forked.file }, 120_000);
+      if (!response.success) throw new Error(response.error || "Pi rejected the workspace switch");
+      switched = true;
+      const after = await this.request("get_state");
+      if (!after.success || !after.data?.sessionFile || !existsSync(after.data.sessionFile)) {
+        throw new Error("Workspace switch did not produce a session file");
+      }
+      this.cwd = pending.cwd;
+      this.sessionFile = after.data.sessionFile;
+      await this.restoreSelection(previous, after.data);
+    } catch (error) {
+      // Drop the unused fork; after a successful switch it is the live transcript.
+      if (!switched) try { unlinkSync(forked.file); } catch { /* already removed */ }
+      throw error;
+    }
+  }
+
+  /** Session replacement restores the CLI's initial selection; keep the active one. */
+  async restoreSelection(previous, state) {
+    if (previous.model?.provider && previous.model?.id &&
+        (state.model?.provider !== previous.model.provider || state.model?.id !== previous.model.id)) {
+      try {
+        const restored = await this.request("set_model", { provider: previous.model.provider, modelId: previous.model.id });
+        if (!restored.success) log(`Could not restore model after workspace switch: ${restored.error ?? "unknown error"}`);
+      } catch (error) {
+        log(`Could not restore model after workspace switch: ${safeErrorName(error)}`);
+      }
+    }
+    if (previous.thinkingLevel && state.thinkingLevel !== previous.thinkingLevel) {
+      try {
+        const restored = await this.request("set_thinking_level", { level: previous.thinkingLevel });
+        if (!restored.success) log(`Could not restore thinking level after workspace switch: ${restored.error ?? "unknown error"}`);
+      } catch (error) {
+        log(`Could not restore thinking level after workspace switch: ${safeErrorName(error)}`);
+      }
     }
   }
 
@@ -282,10 +335,34 @@ export class PiRpcSession {
       return;
     }
     if (record?.type === "message_end" && record.message?.role === "assistant") {
+      // Any later assistant response supersedes a terminating no-reply result.
+      this.noReplyCompleted = false;
+      if (["error", "aborted"].includes(record.message.stopReason)) this.noReplyRevoked = true;
       this.lastAssistantNarration = this.ui.queueAssistantNarration(record.message);
       return;
     }
     if (record?.type === "tool_execution_start" || record?.type === "tool_execution_end") {
+      if (record.type === "tool_execution_start" && this.running && typeof record.toolName === "string") {
+        this.lastRunTools = this.lastRunTools ?? new Set();
+        this.noReplyCallId = record.toolName === "discord_no_reply" && !record.parentToolCallId && this.lastRunTools.size === 0
+          ? record.toolCallId : undefined;
+        this.noReplyCompleted = false;
+        this.lastRunTools.add(record.toolName);
+        if (record.toolName === "discord_send_image") this.imageToolCalls?.add(record.toolCallId);
+      }
+      if (record.type === "tool_execution_end" && record.toolName === "discord_send_image") {
+        this.imageToolCalls?.delete(record.toolCallId);
+      }
+      // Invalid/unknown calls may emit only an end event, without a start.
+      // They still count as work/errors that silence must not conceal.
+      if (record.type === "tool_execution_end" && (record.isError || record.toolName !== "discord_no_reply")) {
+        this.noReplyRevoked = true;
+        this.noReplyCompleted = false;
+      }
+      if (record.type === "tool_execution_end" && record.toolName === "discord_no_reply") {
+        this.noReplyCompleted = !record.isError && typeof this.noReplyApprovedId === "string" && record.toolCallId === this.noReplyApprovedId &&
+          record.toolCallId === this.noReplyCallId && record.result?.details?.discordNoReply === true && this.canNoReply();
+      }
       this.ui.queueToolActivity(record);
       return;
     }
@@ -311,6 +388,23 @@ export class PiRpcSession {
     return response;
   }
 
+  canNoReply() {
+    const active = this.interaction;
+    return this.running && !this.closed && !this.stopping && !this.replacingChild && !this.forceStopped &&
+      !this.noReplyRevoked && !this.publicOutputStarted &&
+      active?.allowNoReply === true && !active.workflow && active.historyScope?.kind === "thread" &&
+      Boolean(active.channel?.guildId) && active.channel.isThread?.() === true;
+  }
+
+  approveNoReply(toolCallId) {
+    if (!this.runWaiter || !this.canNoReply() || typeof toolCallId !== "string" ||
+        toolCallId !== this.noReplyCallId || this.noReplyApprovedId) {
+      throw new Error("No-reply is only available before work in an existing, unsteered server thread turn");
+    }
+    this.noReplyApprovedId = toolCallId;
+    return { approved: true };
+  }
+
   async steer(message) {
     // running also covers post-settlement cleanup and workspace replacement.
     // Only steer while the existing prompt still owns a settlement waiter;
@@ -319,6 +413,9 @@ export class PiRpcSession {
       return undefined;
     }
     this.lastUsedAt = Date.now();
+    // A live instruction must never be swallowed by an earlier silence decision.
+    this.noReplyRevoked = true;
+    this.noReplyCompleted = false;
     return this.request("steer", { message });
   }
 
@@ -329,6 +426,14 @@ export class PiRpcSession {
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
     this.lastAssistantNarration = undefined;
+    this.lastRunTools = undefined;
+    this.imageToolCalls = new Set();
+    this.sentImageCount = 0;
+    this.noReplyCallId = undefined;
+    this.noReplyApprovedId = undefined;
+    this.noReplyCompleted = false;
+    this.noReplyRevoked = false;
+    this.publicOutputStarted = false;
     this.ui.resetToolActivity();
     this.ui.resetPrompt();
     try {
@@ -386,9 +491,14 @@ export class PiRpcSession {
           continue;
         }
         this.rememberWorkspace();
+        if (this.noReplyCompleted && this.canNoReply()) {
+          log(`No reply selected for Discord thread ${interaction.channelId}`);
+          return { disposition: "no_reply" };
+        }
         const response = await this.request("get_last_assistant_text", {}, 30_000);
         if (!response.success) throw new Error("Could not retrieve the agent response");
         const text = typeof response.data?.text === "string" ? response.data.text : "";
+        if (!text.trim() && this.sentImageCount > 0) return undefined;
         // A terminating tool may leave its narrated assistant message as the
         // last response. Do not post that same text a second time.
         if (text && text === this.lastAssistantNarration?.text && await this.lastAssistantNarration.delivery) return undefined;
@@ -408,6 +518,7 @@ export class PiRpcSession {
       await this.ui.flushPendingAskUserCompletion();
       await this.ui.flushCommitMessageEdits();
       await this.ui.clearStatusMessages();
+      this.imageToolCalls?.clear();
       this.interaction = undefined;
       this.running = false;
       this.lastUsedAt = Date.now();

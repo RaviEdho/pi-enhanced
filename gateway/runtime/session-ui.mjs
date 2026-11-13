@@ -203,10 +203,10 @@ export class SessionUi {
 
   async notifyWorkspaceChanged(previousCwd, cwd) {
     if (this.closed || previousCwd === cwd || !this.interaction?.channel) return;
+    this.session.publicOutputStarted = true;
     await sendText(this.interaction.channel, `-# Workspace changed: ${workspaceDetail(previousCwd)} → ${workspaceDetail(cwd)}`);
   }
 
-  queueAssistantNarration(message) {
   toolCallsVisible() {
     const channel = this.interaction?.channel;
     if (!channel) return false;
@@ -222,10 +222,11 @@ export class SessionUi {
       (!this.session.lastRunTools?.size || [...this.session.lastRunTools].every((name) => name === "discord_no_reply"));
   }
 
-    const interaction = this.interaction;
+  queueAssistantNarration(message) {
     // A model may include text alongside its silence call. Never announce it.
     const calls = Array.isArray(message?.content) ? message.content.filter((block) => block?.type === "toolCall") : [];
     if (calls.length === 1 && calls[0].name === "discord_no_reply") return undefined;
+    const interaction = this.interaction;
     if (this.closed || !this.toolCallsVisible() || (this.session.config?.toolCallVerbosity ?? "full") !== "full" ||
         !interaction?.channel || ["commit", "usage"].includes(interaction.workflow) ||
         message?.role !== "assistant" || ["error", "aborted"].includes(message.stopReason) ||
@@ -234,8 +235,8 @@ export class SessionUi {
     const text = message.content.filter((block) => block?.type === "text" && typeof block.text === "string")
       .map((block) => block.text).join("").trim();
     if (!text) return undefined;
-    // Preserve the ordering of already buffered activity and narration.
     this.session.publicOutputStarted = true;
+    // Preserve the ordering of already buffered activity and narration.
     this.sendToolActivityBatch();
     const delivery = this.toolActivityPromise.then(async () => {
       await sendText(interaction.channel, text);
@@ -367,8 +368,8 @@ export class SessionUi {
         return;
       }
       if (interaction?.channel && request.message) {
-        const notification = this.notificationPromise.then(async () => {
         this.session.publicOutputStarted = true;
+        const notification = this.notificationPromise.then(async () => {
           const text = String(request.message);
           if (interaction.workflow === "commit") {
             if (/^Commit proposal \(/.test(text)) this.commitProposal = text;
@@ -395,8 +396,8 @@ export class SessionUi {
       return;
     }
 
-    const isCommit = interaction.workflow === "commit";
     this.session.publicOutputStarted = true;
+    const isCommit = interaction.workflow === "commit";
     await this.flushToolActivity();
     await this.notificationPromise;
     const isCommitReview = isCommit && method === "select" && /^Commit Proposal \(/.test(request.title || "");

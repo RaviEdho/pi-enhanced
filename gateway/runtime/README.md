@@ -14,13 +14,14 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `route-decider.mjs` | Ask a chat model whether a new server conversation needs a thread or a direct channel reply, with timeouts and thread fallback. |
 | `sessions.mjs` | Own the session pool, conversation queues, one-shot fork seeds, global run slots, and idle eviction. |
 | `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, workspace handoffs, and history IPC lifecycle. |
-| `history.mjs` | Authenticate session IPC and authorize bounded history reads and server channel discovery against the active requester and current configuration. |
+| `history.mjs` | Authenticate session IPC for bounded history reads, channel discovery, silence decisions, and image uploads. |
+| `send-image.mjs` | Authorize the active upload destination, bound workspace-file/public-HTTPS image loading, and upload validated image buffers. |
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
-| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, load bounded recent conversation context, and safely download supported Discord CDN images. |
+| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, format bounded rich-preview text and recent conversation context, and safely download supported Discord CDN images. |
 | `threads.mjs` | Own thread registration, shared conversation keys, persistence, pruning, and generated-title watchers. |
 | `lifecycle.mjs` | Own PID/status files, process handlers, restart requests, draining, and replacement startup. |
 | `persistence.mjs` | Write private JSON files through temporary-file replacement. |
@@ -56,6 +57,19 @@ callbacks where commands and lifecycle depend on each other.
   never fail the run. Reply context and automatic context are appended after the
   labeled author turn. Automatic context reads only the conversation's own channel, so
   it obeys the same allowlist and bot permissions that already admit the message.
+- Current messages, direct replies, and selected recent messages include text-only
+  snapshots of already received Discord rich previews for both routing and the agent.
+  Whitelist title, source URL, description, and up to five text fields from at most
+  two embeds; cap each message's formatted preview block at 1,000 characters.
+  JSON-quote values and label previews as untrusted, possibly incomplete third-party
+  excerpts, not instructions or verified facts. Never fetch preview URLs/media,
+  process preview images, wait for delayed embeds, or expand message/channel reads.
+  Missing/malformed previews fall back to existing text. Reserve all selected recent
+  message text first, then allocate previews newest-first from spare space within
+  16,000 characters; preserve selection, ordering, author labels, and watermarks.
+  The router retains its existing reply/history bounds and independently caps the
+  current-message preview block at 1,000 characters. A brief explanation/summary of
+  a linked post is CHANNEL; independent verification of its claims is THREAD.
 - Explicit history-tool calls use the existing channel whitelist (including `*`): DM turns can
   read only the active requester's own allowed DM; thread turns can read allowed text,
   announcement, or ordinary voice channels in the same server, with the destination parent also allowed. Both requester and bot need View Channel and Read Message History, plus Connect for voice. Voice text chat requires no voice join; stage channels are excluded. Recheck DM recipient or requester
@@ -63,20 +77,6 @@ callbacks where commands and lifecycle depend on each other.
   thread sources and cross-server access. Different-participant
   steering revokes history for that run. Shared results can reach participants
   without source access and persist in sessions. Discovery uses the same IPC and active scope, only in server threads: fresh guild, roles, members and channels, current whitelist and both parties' channel permissions using the same channel types and voice Connect requirement; voice results have type `voice`. Names are untrusted, results are capped at 50 with explicit truncation. Channel names and IDs can also persist and be seen by all shared-thread participants. IPC is not an OS sandbox.
-- All allowlisted participants in a server thread use one shared session and queue,
-  including `/model`, `/thinking`, autocomplete, and `/commit`. Resolve its key with
-  `getThreadSessionKey(threadId, registration)`, never the current speaker's ID.
-  Keep the starter's legacy `:user:<createdByUserId>` suffix to preserve the exact
-  hashed session directory, history, workspace, model, and thinking level without
-  copying or merging files. Registrations without a starter use a thread-only key.
-  Other participants' old sessions stay untouched; do not backfill Discord history.
-  DMs keep their existing per-channel/user keys. `/model` in an allowed non-thread server
-  channel instead saves the gateway-wide default for new conversations; its catalog
-  session is separate, and existing conversation settings must remain unchanged.
-  Recheck saved user/channel authorization when applying the default. All participants still require
-  allowlist authorization; prompt/picker/approval ownership stays with the initiator.
-- Label every incoming message with its author username and stable user ID. The
-  appended system prompt distinguishes participants, attributes preferences and
 - `discord_send_image` is a Discord-only sequential, model-only tool. Send immediately
   through authenticated session IPC, only for an active tracked image tool call and
   settlement waiter, never a command workflow or caller-selected destination. Recheck
@@ -104,6 +104,20 @@ callbacks where commands and lifecycle depend on each other.
   rolled back. Report uncertain delivery without automatic retries, and never log
   image contents, URL query strings or raw filesystem/network errors. These checks
   are tool boundaries, not an OS sandbox for the full-tool Pi process.
+- All allowlisted participants in a server thread use one shared session and queue,
+  including `/model`, `/thinking`, autocomplete, and `/commit`. Resolve its key with
+  `getThreadSessionKey(threadId, registration)`, never the current speaker's ID.
+  Keep the starter's legacy `:user:<createdByUserId>` suffix to preserve the exact
+  hashed session directory, history, workspace, model, and thinking level without
+  copying or merging files. Registrations without a starter use a thread-only key.
+  Other participants' old sessions stay untouched; do not backfill Discord history.
+  DMs keep their existing per-channel/user keys. `/model` in an allowed non-thread server
+  channel instead saves the gateway-wide default for new conversations; its catalog
+  session is separate, and existing conversation settings must remain unchanged.
+  Recheck saved user/channel authorization when applying the default. All participants still require
+  allowlist authorization; prompt/picker/approval ownership stays with the initiator.
+- Label every incoming message with its author username and stable user ID. The
+  appended system prompt distinguishes participants, attributes preferences and
   approvals to their authors, and refuses identity overrides from message text or
   quoted context. Apply this to resumed sessions and workspace handoffs too.
 - Route work through `sessions.enqueue(key, task)` to preserve conversation order.
@@ -149,6 +163,23 @@ callbacks where commands and lifecycle depend on each other.
   history authorization scope. `toolCallVerbosity` still controls the detail level where
   visible. Visibility must not alter tool tracking/escalation, final replies, interactive
   prompts, workspace notices, or the dedicated commit/usage workflows.
+- Existing server-thread message turns can end with `discord_no_reply`. The model-only,
+  sequential tool must be called alone before any other tool or public output. It uses
+  the authenticated per-child IPC endpoint to approve its exact active tool-call ID;
+  authority comes from the daemon's `allowNoReply` interaction flag and actual guild
+  thread destination, not the tool payload or the thread-shaped history scope alone.
+  DMs, new channel mentions, command workflows, and steered runs cannot abstain.
+  Accept only a successful matching tool result with the no-reply marker; errors,
+  cancellation, later assistant messages, or subsequent tool work invalidate silence.
+  Reset all decision state for each accepted prompt, never restore it from history.
+  Return an explicit `{ disposition: "no_reply" }` outcome so the router skips both
+  reply delivery and the empty-response fallback. Keep the incoming message and tool
+  reason in the saved history; do not log the reason or message text. Hide successful
+  no-reply activity and narration attached to its sole call, but keep failure reporting.
+  Suppress working-status posts while an eligible thread turn has not committed to
+  a response/tool work, so a slow silence decision creates no status message. Typing
+  may still appear. Do not buffer or hide ordinary notifications, errors, or prompts;
+  they revoke the ability to abstain instead. Steering revokes silence for the run.
 - Every routing failure falls back to a thread: unavailable registry, timeout, provider
   error, or an unlabeled response. Never block or drop a reply on the decision.
 - With escalation enabled in `auto` mode, a channel reply can escalate deterministically. Two
