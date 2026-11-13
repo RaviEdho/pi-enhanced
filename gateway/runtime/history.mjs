@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { isValidAllowlist } from "./config.mjs";
+import { ImageDeliveryError, sendImage } from "./send-image.mjs";
 
 const snowflake = (s) => typeof s === "string" && /^\d{17,20}$/.test(s);
 
@@ -125,23 +126,32 @@ export async function createHistoryIpc({ client, configPath, session }) {
     sockets.add(socket);
     // An inactivity timeout alone permits slow clients to hold all slots by
     // trickling bytes. Bound total connection lifetime too (not DoS protection).
-    const deadline = setTimeout(() => socket.destroy(), 15000);
+    let deadline = setTimeout(() => socket.destroy(), 15000);
     deadline.unref();
-    socket.on("close", () => { clearTimeout(deadline); sockets.delete(socket); });
+    const controller = new AbortController();
+    socket.on("close", () => { controller.abort(); clearTimeout(deadline); sockets.delete(socket); });
     socket.setTimeout(15000, () => socket.destroy());
     let data = "";
     socket.on("error", () => {});
     socket.on("data", (chunk) => {
       data += chunk.toString("utf8");
-      if (data.length > 4096) return socket.destroy();
+      if (data.length > 32768) return socket.destroy(); // Bounded image URL, caption and alt text, including JSON escaping.
       if (!data.includes("\n")) return;
       socket.pause();
       void (async () => {
+        let operation;
         try {
           const request = JSON.parse(data.slice(0, data.indexOf("\n")));
           const supplied = typeof request.token === "string" ? Buffer.from(request.token) : Buffer.alloc(0);
           const expected = Buffer.from(token);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw new Error("Unauthorized");
+          operation = request.operation;
+          if (operation === "send_image") {
+            clearTimeout(deadline);
+            deadline = setTimeout(() => socket.destroy(), 55_000);
+            deadline.unref();
+            socket.setTimeout(55_000);
+          }
           const result = request.operation === undefined || request.operation === "history"
             ? await readChannelHistory({ client, configPath, session, request })
             : request.operation === "list_channels"

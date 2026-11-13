@@ -77,6 +77,33 @@ callbacks where commands and lifecycle depend on each other.
   allowlist authorization; prompt/picker/approval ownership stays with the initiator.
 - Label every incoming message with its author username and stable user ID. The
   appended system prompt distinguishes participants, attributes preferences and
+- `discord_send_image` is a Discord-only sequential, model-only tool. Send immediately
+  through authenticated session IPC, only for an active tracked image tool call and
+  settlement waiter, never a command workflow or caller-selected destination. Recheck
+  the active turn, scope, allowlists, fresh guild membership/roles and destination
+  permissions before loading and again before sending. DMs follow normal message
+  authorization (no extra DM channel allowlist); server destinations require the
+  allowed parent. Different-participant steering revokes the scope. Private threads
+  require membership or Manage Threads. The bot needs Attach Files and Send Messages
+  (Send Messages in Threads for threads). Disable all mentions and retain the active
+  reply target. Deduplicate each tool-call ID within the turn; return a message ID,
+  not image bytes. Successful image-only responses skip the empty-text fallback.
+  Reset upload/tool tracking per accepted prompt, not from saved history.
+- Image uploads accept one PNG/JPEG/GIF/WebP per call, validated by magic bytes, with
+  optional caption (1,900 characters) and alt text (1,024). Bound to four attempts /
+  20 MiB per accepted request and 10 MiB per image, including failed attempts. Resolve
+  local files against session.cwd; reject realpath escapes/symlink targets outside
+  that workspace, non-regular files and oversized/growing files. Read bounded buffers,
+  never pass raw paths/URLs to Discord's uploader. HTTPS downloads use port 443 only,
+  no credentials/proxies, a ten-second deadline, checked and pinned public DNS answers,
+  and at most three independently validated redirects; reject private/reserved IPs,
+  mixed DNS answers, compressed responses and oversized streams. Sanitize attachment
+  names and force their detected extension. IPC frames are bounded to 32 KiB; upload
+  requests get a 55-second daemon deadline / 60-second client timeout. Disconnects
+  abort loading and prevent new sends; an already in-flight Discord send cannot be
+  rolled back. Report uncertain delivery without automatic retries, and never log
+  image contents, URL query strings or raw filesystem/network errors. These checks
+  are tool boundaries, not an OS sandbox for the full-tool Pi process.
   approvals to their authors, and refuses identity overrides from message text or
   quoted context. Apply this to resumed sessions and workspace handoffs too.
 - Route work through `sessions.enqueue(key, task)` to preserve conversation order.

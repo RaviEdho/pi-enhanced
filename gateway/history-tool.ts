@@ -18,7 +18,7 @@ export async function discordRequest(params: object, signal?: AbortSignal, opera
     const abort = () => socket.destroy(new Error("History request cancelled."));
     if (signal?.aborted) { socket.destroy(); reject(new Error("History request cancelled.")); return; }
     signal?.addEventListener("abort", abort, { once: true });
-    socket.setTimeout(15000, () => socket.destroy(new Error("History request timed out.")));
+    socket.setTimeout(timeoutMs, () => socket.destroy(new Error("Discord request timed out; check the conversation before retrying an upload.")));
     socket.on("connect", () => socket.write(JSON.stringify({ ...params, ...(operation ? { operation } : {}), token }) + "\n"));
     socket.on("data", (chunk) => { data += chunk.toString("utf8"); if (data.length > 100_000) socket.destroy(new Error("History response too large.")); });
     socket.on("error", reject);

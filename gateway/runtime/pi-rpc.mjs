@@ -36,6 +36,7 @@ export class PiRpcSession {
     this.interaction = undefined;
     this.closed = false;
     this.running = false;
+    this.lastRunTools = undefined;
     this.lastUsedAt = Date.now();
     this.ui = interactions.createSessionUi(this);
   }

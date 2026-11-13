@@ -36,6 +36,7 @@ export function toolActivity(toolName, args = {}, channelName) {
     case "web_fetch": return "Fetching a web page";
     case "ask_user": return "Asking for input";
     case "discord_gateway_restart": return "Requesting gateway restart";
+    case "discord_send_image": return "Sending an image attachment";
     case "discord_list_channels": return "Reading channel list";
     case "discord_channel_history": return channelName ? `Reading #${channelName}’s message history` : "Reading channel message history";
     case "subagent": return "Delegating a task";
