@@ -10,7 +10,7 @@ export const QuestionItemSchema = Type.Object({
       minItems: 2,
       maxItems: 6,
       description:
-        "Optional list of structured choices (recommended: 3 clear options). Do NOT prefix with 'Option 1:' or 'Option 2:'; provide direct, clean labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']).",
+        "Optional list of structured choices (recommended: 3 clear options). Do NOT prefix with 'Option 1:' or 'Option 2:'; provide direct, clean labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']). Prefer labels of 50 characters or fewer for mobile readability (guidance, not a hard limit).",
     })
   ),
   placeholder: Type.Optional(
@@ -41,7 +41,7 @@ export const AskUserParametersSchema = Type.Object({
       minItems: 2,
       maxItems: 6,
       description:
-        "Optional list of structured choices (recommended: 3 clear, distinct options). Do NOT prefix choices with 'Option 1:' or 'Option 2:'; provide direct labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']).",
+        "Optional list of structured choices (recommended: 3 clear, distinct options). Do NOT prefix choices with 'Option 1:' or 'Option 2:'; provide direct labels (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']). Prefer labels of 50 characters or fewer for mobile readability (guidance, not a hard limit).",
     })
   ),
   placeholder: Type.Optional(

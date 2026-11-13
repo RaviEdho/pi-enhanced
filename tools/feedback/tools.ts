@@ -31,12 +31,13 @@ export function createAskUserToolDefinition(): ToolDefinition<
     name: "ask_user",
     label: "Ask User",
     description:
-      "Ask the user for feedback, clarification, or decisions. Keep each displayed question short and direct; include only the question, with no reasoning, rationale, or preamble. Pauses execution and prompts through Pi's interactive TUI or a supported RPC dialog client. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Answers are submitted without a review screen.",
+      "Ask the user for feedback, clarification, or decisions. Keep each displayed question short and direct; include only the question, with no reasoning, rationale, or preamble. Pauses execution and prompts through Pi's interactive TUI or a supported RPC dialog client. Supports single questions (via 'question' and optional 'choices') or multiple sequential questions (via 'questions'). For choices, recommended: 3 distinct clean options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB'] without 'Option 1:' prefixes). Prefer choice labels of 50 characters or fewer for mobile readability; this is guidance, not a hard limit. Answers are submitted without a review screen.",
     promptSnippet: "ask_user(question?, choices?, questions?): Prompt user for feedback, 3 choices, or multiple questions",
     promptGuidelines: [
       "Use 'ask_user' when you need information, preferences, clarification, or architectural direction before proceeding.",
       "Keep each question short, direct, and focused on what the user needs to answer. Put only the question in the displayed question text—do not include your reasoning, rationale, analysis, or a preamble. Include only essential context when needed.",
       "To ask a single question, provide 'question'. For trade-offs or design choices, provide 'choices' with 3 distinct options (e.g. ['PostgreSQL [recommended]', 'SQLite', 'MongoDB']). Do NOT prefix with 'Option 1:' or 'Option 2:'.",
+      "For ask_user choices, prefer labels of 50 characters or fewer for mobile readability; this is guidance, not a hard limit.",
       "To ask multiple questions in one go without back-and-forth turns, provide 'questions' with an array of questions (each with its own question text, optional choices, placeholder, and allow_custom override).",
       "Do not invent synthetic [Cancel] or [Back] options in choices; the user can dismiss via Esc at any time.",
     ],
