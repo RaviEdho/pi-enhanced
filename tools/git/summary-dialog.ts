@@ -1,4 +1,4 @@
-import { keyHint } from "@earendil-works/pi-coding-agent";
+import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { DialogFrame } from "../../ux/dialog.js";
 
@@ -11,7 +11,7 @@ export class GitSummaryDialog implements Component {
     private readonly theme: any,
     private readonly title: string,
     private readonly summary: string,
-    private readonly done: () => void,
+    private readonly done: (action?: "print") => void,
   ) {
     this.frame = new DialogFrame(tui, theme);
   }
@@ -20,6 +20,10 @@ export class GitSummaryDialog implements Component {
 
   handleInput(data: string): boolean {
     if (this.frame.handleInput(data)) return true;
+    if (data.toLowerCase() === "p") {
+      this.done("print");
+      return true;
+    }
     if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "\x03" || data.toLowerCase() === "q") {
       this.done();
       return true;
@@ -46,6 +50,6 @@ export class GitSummaryDialog implements Component {
       const colored = this.theme?.fg ? this.theme.fg("text", text) : text;
       return `  ${heading && this.theme?.bold ? this.theme.bold(colored) : colored}`;
     });
-    return this.frame.render(width, { title: this.title, content: lines, hints: [keyHint("tui.select.cancel", "close")] });
+    return this.frame.render(width, { title: this.title, content: lines, hints: [rawKeyHint("p", "print to transcript"), keyHint("tui.select.cancel", "close")] });
   }
 }

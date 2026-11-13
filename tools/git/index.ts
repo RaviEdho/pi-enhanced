@@ -9,6 +9,15 @@ export function registerGitCommands(pi: ExtensionAPI): void {
   let isGitBusy = false;
 
   // Direct first-class /commit command (backward-compatible)
+  // Durable transcript output without adding the summary to the model's context.
+  pi.registerEntryRenderer<{ title: string; summary: string }>("git-summary", (entry, _options, theme) => {
+    if (!entry.data) return undefined;
+    const content = new Container();
+    content.addChild(new Text(theme.fg("accent", theme.bold(entry.data.title)), 1, 0));
+    content.addChild(new Markdown(entry.data.summary, 1, 1, getMarkdownTheme()));
+    return content;
+  });
+
   pi.registerCommand("commit", {
     description: "Autonomously inspect git changes and propose commits; /commit <instruction> selects relevant files/hunks (-u, -s, -m)",
     handler: async (args, ctx) => {
@@ -82,7 +91,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           case "summary": {
             const { handleSummaryCommand } = await import("./summary-runner.js");
-            await handleSummaryCommand(ctx, subArgs);
+            await handleSummaryCommand(ctx, pi, subArgs);
             break;
           }
           case "sync": {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
-  type ExtensionCommandContext,
+  type ExtensionAPI, type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { execGit, isGitRepository } from "./git.js";
@@ -19,7 +19,7 @@ export async function getSummaryChanges(cwd: string): Promise<{ staged: string[]
   return { staged: staged.split("\0").filter(Boolean), unstaged: unstaged.split("\0").filter(Boolean), untracked: untracked.split("\0").filter(Boolean) };
 }
 
-export async function handleSummaryCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
+export async function handleSummaryCommand(ctx: ExtensionCommandContext, pi: ExtensionAPI, args = ""): Promise<void> {
   if (!(await isGitRepository(ctx.cwd))) {
     ctx.ui.notify("Current directory is not inside a git repository.", "error");
     return;
@@ -149,7 +149,8 @@ Do not infer intent, benefits, correctness, or test results absent from the supp
     if (!summary?.trim()) throw new Error("No summary was generated.");
     const title = kind === "staged" ? "Staged Changes Summary" : "Unstaged and Untracked Changes Summary";
     if (ctx.mode === "tui" && ctx.hasUI) {
-      await ctx.ui.custom<void>((tui, theme, _keys, done) => new GitSummaryDialog(tui, theme, title, summary, done));
+      const action = await ctx.ui.custom<"print" | undefined>((tui, theme, _keys, done) => new GitSummaryDialog(tui, theme, title, summary, done));
+      if (action === "print") pi.appendEntry("git-summary", { title, summary });
     } else {
       process.stdout.write(`\n=== ${title} ===\n\n${summary}\n\n`);
     }
