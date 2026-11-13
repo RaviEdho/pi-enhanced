@@ -275,8 +275,10 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
             channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing,
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images);
+            allowNoReply: route.kind === "thread",
           // Retry if the early watch expired before the title became available.
           if (!channelConversation) threads.watchThreadTitle(target, session);
+          if (!session.forceStopped && result?.disposition === "no_reply") return undefined;
           return {
             text: session.forceStopped ? "The agent run was cancelled." : result,
             escalate: channelConversation && decidePerMessage && escalateChannelReplies && usesEscalatingTool(session.lastRunTools),

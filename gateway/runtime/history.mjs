@@ -146,9 +146,19 @@ export async function createHistoryIpc({ client, configPath, session }) {
             ? await readChannelHistory({ client, configPath, session, request })
             : request.operation === "list_channels"
               ? await listChannels({ client, configPath, session })
-              : (() => { throw new Error("Unknown operation"); })();
+              : request.operation === "no_reply"
+                ? session.approveNoReply(request.toolCallId)
+                : request.operation === "send_image"
+                  ? await sendImage({ client, configPath, session, request, signal: controller.signal })
+                  : (() => { throw new Error("Unknown operation"); })();
           socket.end(JSON.stringify({ result }) + "\n");
-        } catch { socket.end(JSON.stringify({ error: "History unavailable or access denied." }) + "\n"); }
+        } catch (error) {
+          socket.end(JSON.stringify({ error: operation === "send_image"
+            ? (error instanceof ImageDeliveryError ? error.message : "Image sending unavailable or access denied.")
+            : operation === "no_reply"
+            ? "No-reply unavailable: requires an existing, unsteered server thread turn before other tools or public output. Respond normally."
+            : "History unavailable or access denied." }) + "\n");
+        }
       })();
     });
   });

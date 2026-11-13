@@ -207,8 +207,26 @@ export class SessionUi {
   }
 
   queueAssistantNarration(message) {
+  toolCallsVisible() {
+    const channel = this.interaction?.channel;
+    if (!channel) return false;
+    // Classify the actual destination, not historyScope (channel replies also
+    // use a thread-shaped history authorization scope).
+    const kind = channel.isThread?.() ? "threads" : channel.isDMBased?.() ? "dms" : "channels";
+    return this.session.config?.toolCallVisibility?.[kind] ?? kind !== "channels";
+  }
+
+  waitingForReplyDecision() {
+    return this.interaction?.allowNoReply === true && !this.interaction.workflow &&
+      !this.session.noReplyRevoked && !this.session.publicOutputStarted &&
+      (!this.session.lastRunTools?.size || [...this.session.lastRunTools].every((name) => name === "discord_no_reply"));
+  }
+
     const interaction = this.interaction;
-    if (this.closed || (this.session.config?.toolCallVerbosity ?? "full") !== "full" ||
+    // A model may include text alongside its silence call. Never announce it.
+    const calls = Array.isArray(message?.content) ? message.content.filter((block) => block?.type === "toolCall") : [];
+    if (calls.length === 1 && calls[0].name === "discord_no_reply") return undefined;
+    if (this.closed || !this.toolCallsVisible() || (this.session.config?.toolCallVerbosity ?? "full") !== "full" ||
         !interaction?.channel || ["commit", "usage"].includes(interaction.workflow) ||
         message?.role !== "assistant" || ["error", "aborted"].includes(message.stopReason) ||
         !Array.isArray(message.content) || !message.content.some((block) => block?.type === "toolCall")) return undefined;
@@ -217,6 +235,7 @@ export class SessionUi {
       .map((block) => block.text).join("").trim();
     if (!text) return undefined;
     // Preserve the ordering of already buffered activity and narration.
+    this.session.publicOutputStarted = true;
     this.sendToolActivityBatch();
     const delivery = this.toolActivityPromise.then(async () => {
       await sendText(interaction.channel, text);
@@ -231,7 +250,8 @@ export class SessionUi {
 
   queueToolActivity(record) {
     const interaction = this.interaction;
-    if (this.closed || this.session.config?.toolCallVerbosity === "none" || !interaction?.channel || ["commit", "usage"].includes(interaction.workflow)) return;
+    if (this.closed || !this.toolCallsVisible() || this.session.config?.toolCallVerbosity === "none" || !interaction?.channel || ["commit", "usage"].includes(interaction.workflow)) return;
+    if (record.toolName === "discord_no_reply" && (record.type !== "tool_execution_end" || !record.isError)) return;
     if (record.toolName === "set_working_directory" && record.type !== "tool_execution_end") return;
     if (record.type === "tool_execution_end" && !record.isError) return;
     this.toolActivityQueue.push({ record, interaction });
@@ -348,6 +368,7 @@ export class SessionUi {
       }
       if (interaction?.channel && request.message) {
         const notification = this.notificationPromise.then(async () => {
+        this.session.publicOutputStarted = true;
           const text = String(request.message);
           if (interaction.workflow === "commit") {
             if (/^Commit proposal \(/.test(text)) this.commitProposal = text;
@@ -375,6 +396,7 @@ export class SessionUi {
     }
 
     const isCommit = interaction.workflow === "commit";
+    this.session.publicOutputStarted = true;
     await this.flushToolActivity();
     await this.notificationPromise;
     const isCommitReview = isCommit && method === "select" && /^Commit Proposal \(/.test(request.title || "");
@@ -485,7 +507,7 @@ export class SessionUi {
   }
 
   async updateStatusMessage(request, epoch) {
-    if (this.closed || !this.statusActive || epoch !== this.statusEpoch) return;
+    if (this.closed || !this.statusActive || epoch !== this.statusEpoch || this.waitingForReplyDecision()) return;
     const interaction = this.interaction;
     const key = request.statusKey;
     const text = typeof request.statusText === "string" ? request.statusText.trim() : "";

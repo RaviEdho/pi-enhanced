@@ -8,7 +8,7 @@ const Parameters = Type.Object({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25, description: "Messages per page (default 20, maximum 25)." })),
 });
 
-async function discordRequest(params: object, signal?: AbortSignal, operation?: string): Promise<unknown> {
+export async function discordRequest(params: object, signal?: AbortSignal, operation?: string, timeoutMs = 15000): Promise<unknown> {
   const port = Number(process.env.PI_ENHANCED_DISCORD_HISTORY_PORT);
   const token = process.env.PI_ENHANCED_DISCORD_HISTORY_TOKEN;
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !token || process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD !== "1") throw new Error("Discord history is unavailable.");
