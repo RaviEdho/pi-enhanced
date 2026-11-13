@@ -25,6 +25,9 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   // interface. A second session_start refresh would supersede/duplicate it.
 }
 
+// Provider-only SDK entry point for the standalone Discord routing runtime.
+export default registerProviders;
+
 export {
   registerAntigravityProvider,
   registerCodexFilter,
