@@ -1,4 +1,5 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 
 /**
  * Registers both /git and /commit commands.
@@ -8,7 +9,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export function registerGitCommands(pi: ExtensionAPI): void {
   let isGitBusy = false;
 
-  // Direct first-class /commit command (backward-compatible)
   // Durable transcript output without adding the summary to the model's context.
   pi.registerEntryRenderer<{ title: string; summary: string }>("git-summary", (entry, _options, theme) => {
     if (!entry.data) return undefined;
@@ -18,6 +18,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
     return content;
   });
 
+  // Direct first-class /commit command (backward-compatible)
   pi.registerCommand("commit", {
     description: "Autonomously inspect git changes and propose commits; /commit <instruction> selects relevant files/hunks (-u, -s, -m)",
     handler: async (args, ctx) => {
@@ -107,7 +108,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           case "status":
           case "": {
             const { handleStatusCommand } = await import("./routine-runner.js");
-            await handleStatusCommand(ctx);
+            await handleStatusCommand(ctx, pi);
             break;
           }
           default: {

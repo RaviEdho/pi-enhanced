@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   execGit,
   getCurrentBranch,
@@ -74,7 +74,7 @@ export async function handleInitCommand(ctx: ExtensionCommandContext, args?: str
   }
 }
 
-export async function handleStatusCommand(ctx: ExtensionCommandContext): Promise<void> {
+export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
   const cwd = ctx.cwd;
   if (!(await isGitRepository(cwd))) {
     if (ctx.hasUI) {
@@ -114,7 +114,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext): Promise
 
     if (choice?.startsWith("Summarize")) {
       const { handleSummaryCommand } = await import("./summary-runner.js");
-      await handleSummaryCommand(ctx, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
+      await handleSummaryCommand(ctx, pi, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
     } else if (choice?.includes("Commit")) {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);
