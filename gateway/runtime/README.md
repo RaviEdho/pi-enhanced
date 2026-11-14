@@ -10,6 +10,7 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | Module | Responsibility |
 | --- | --- |
 | `config.mjs` | Read and validate configuration, paths, executable arguments, context-message bounds, and startup reason. |
+| `discord-rest.mjs` | Own an isolated Undici 6 dispatcher for Discord REST, with automatic retries disabled. |
 | `router.mjs` | Authorize messages, choose DM/thread/channel conversations, deduplicate, and schedule replies. |
 | `route-decider.mjs` | Ask a chat model whether a new server conversation needs a thread or a direct channel reply, with timeouts and thread fallback. |
 | `sessions.mjs` | Own the session pool, conversation queues, one-shot fork seeds, global run slots, and idle eviction. |
@@ -21,6 +22,8 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
+| `agent-replies.mjs` | Send completed assistant text with ordered table-only images and text fallback. |
+| `table-renderer.mjs` | Parse top-level Markdown tables and render bounded, escaped SVG to PNG locally. |
 | `messages.mjs` | Split/send text, manage typing, resolve direct reply context, format bounded rich-preview text and recent conversation context, and safely download supported Discord CDN images. |
 | `threads.mjs` | Own thread registration, shared conversation keys, persistence, pruning, and generated-title watchers. |
 | `lifecycle.mjs` | Own PID/status files, process handlers, restart requests, draining, and replacement startup. |
@@ -32,6 +35,52 @@ or shared catch-all context object. The entry point supplies lazy cleanup
 callbacks where commands and lifecycle depend on each other.
 
 ## Coordination contracts
+
+- Create Discord REST with its own explicitly supplied Undici 6 `Agent`, not the
+  process-wide dispatcher. Importing Pi's SDK loads Undici 8 and replaces the
+  legacy global dispatcher with a compatibility wrapper; real multipart Discord
+  uploads through that wrapper can stall while JSON requests continue working.
+  Keep `undici` as a direct major-6 runtime dependency, independent of Pi's copy.
+  Set REST `retries: 0`: an aborted message POST may already have been delivered,
+  and four default 15-second attempts can outlast the image tool's 55-second IPC
+  deadline. This also disables automatic transport/5xx retries for other REST
+  requests; normal Discord rate-limit handling remains enabled. Lifecycle owns
+  closing the private dispatcher after Discord client shutdown. Never reset the
+  process-wide dispatcher to fix uploads; that can break provider traffic.
+
+- Completed assistant replies and visible tool-call narration pass through
+  `sendAgentReply`; ordinary notifications, controls, commit/usage workflows and
+  tool reports keep their existing text/card delivery. Parse Markdown with
+  `markdown-it`, using source line maps to preserve exact original slices and
+  surrounding text order. Fenced/indented code and nested list/quote tables stay
+  text. Render top-level tables locally with `sharp`, using only escaped SVG text
+  and fixed shapes: never evaluate HTML, fetch links/images/fonts or use a browser.
+  Repeat headers on vertical pages and the first column on horizontal panels.
+  `tableRendering.enabled` (default false, including legacy configs) is the master
+  toggle: only explicit true enables rendering; otherwise send the original text
+  through the existing splitter without
+  loading the parser/renderer or attaching PNG/Markdown files. It applies to both
+  final replies and visible narration, preserving other saved table preferences.
+  `tableRendering.showTitleFooter` controls the visible title, page numbering
+  and range footer together; `tableRendering.attachMarkdown` independently adds
+  the exact original UTF-8 table as `table-N.md`. These two options default to
+  false, including legacy configurations. Configure them under `/discord` → Settings → Tables;
+  setup preserves saved values and changes apply after a gateway restart, like
+  other settings. Validate optional boolean fields in both TS storage and daemon
+  config loaders. Pass settings to final replies and visible tool narration.
+  Send each table in one message: maximum eight PNGs plus optional source. Always
+  keep page/range context in alt text; with decorations off, fit the canvas to
+  the table plus a small outer margin. Count optional source bytes against the
+  attachment budget. Keep mentions disabled and reference the triggering message
+  only on the first outgoing message.
+  Bound parsing to 200,000 characters, tables to 64 KiB / 200 body rows / 20
+  columns / 4,000 characters per cell, pages to 1100×1400 logical pixels at 2×,
+  PNGs to 8 MiB, and each delivery to 12 images / 16 MiB total attachments.
+  Oversized layouts, unavailable dependencies and render errors fall back to
+  original text without truncating cells. Failed/uncertain uploads send a warning
+  and original text, never retry attachments or replay already sent surrounding
+  text. Keep Pi session/model content unchanged. Dependencies load lazily so a
+  missing native renderer cannot prevent gateway startup or ordinary replies.
 
 - Resolve reply context only for authorized, accepted messages. In auto routing, load
   it before the routing decision; other routes load it inside the queued run. Memoize

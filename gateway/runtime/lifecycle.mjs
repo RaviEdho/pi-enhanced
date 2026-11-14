@@ -6,7 +6,7 @@ import { log, safeErrorName } from "./logging.mjs";
 import { onceExit } from "./pi-rpc.mjs";
 
 /** Process status, graceful draining, and replacement-daemon handoff. */
-export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands }) {
+export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands, closeTransport = () => {} }) {
   const { configPath, pidPath, statusPath, restartRequestPath, logPath } = paths;
   let activeMessageHandlers = 0;
   let pendingMessageTasks = 0;
@@ -125,6 +125,8 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
       await client.destroy();
     } catch {
       // The Discord client may not have completed login.
+    } finally {
+      try { await closeTransport(); } catch { /* process shutdown still proceeds */ }
     }
   }
 

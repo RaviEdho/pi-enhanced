@@ -22,6 +22,12 @@ export interface DiscordToolCallVisibility {
   dms: boolean;
 }
 
+export interface DiscordTableRendering {
+  enabled: boolean;
+  showTitleFooter: boolean;
+  attachMarkdown: boolean;
+}
+
 export interface DiscordGatewayConfig {
   token: string;
   allowedUserIds: string[];
@@ -34,6 +40,7 @@ export interface DiscordGatewayConfig {
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   toolCallVerbosity?: "none" | "tool-only" | "full";
   toolCallVisibility?: DiscordToolCallVisibility;
+  tableRendering?: DiscordTableRendering;
   channelReplies: DiscordChannelReplies;
   /** Automatically included recent messages per conversation turn (0–25; defaults to 5). */
   contextMessages: number;
@@ -117,6 +124,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
     (value.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(value.toolCallVerbosity)) ||
     (value.toolCallVisibility !== undefined && !isValidToolCallVisibility(value.toolCallVisibility)) ||
+    (value.tableRendering !== undefined && !isValidTableRendering(value.tableRendering)) ||
     (value.channelReplies !== undefined && !isValidChannelReplies(value.channelReplies)) ||
     (value.contextMessages !== undefined &&
       (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) ||
@@ -146,6 +154,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel as DiscordGatewayConfig["thinkingLevel"] } : {}),
     toolCallVerbosity: value.toolCallVerbosity ?? "full",
     toolCallVisibility: { channels: false, threads: true, dms: true, ...value.toolCallVisibility },
+    tableRendering: { enabled: false, showTitleFooter: false, attachMarkdown: false, ...value.tableRendering },
     channelReplies: readChannelReplies(value.channelReplies),
     contextMessages: value.contextMessages ?? 5,
     configuredAt: typeof value.configuredAt === "string" ? value.configuredAt : new Date(0).toISOString(),
@@ -156,6 +165,12 @@ function isValidToolCallVisibility(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<DiscordToolCallVisibility>;
   return [entry.channels, entry.threads, entry.dms].every((setting) => setting === undefined || typeof setting === "boolean");
+}
+
+function isValidTableRendering(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<DiscordTableRendering>;
+  return [entry.enabled, entry.showTitleFooter, entry.attachMarkdown].every((setting) => setting === undefined || typeof setting === "boolean");
 }
 
 function isValidChannelReplies(value: unknown): boolean {

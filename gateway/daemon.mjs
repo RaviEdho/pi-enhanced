@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { loadGatewayConfig } from "./runtime/config.mjs";
 import { createCommandHandlers } from "./runtime/commands.mjs";
+import { createDiscordRestTransport } from "./runtime/discord-rest.mjs";
 import { createInteractionManager } from "./runtime/interactions.mjs";
 import { createLifecycle } from "./runtime/lifecycle.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./runtime/logging.mjs";
@@ -18,7 +19,9 @@ const extensionRoot = realpathSync(fileURLToPath(new URL("../", import.meta.url)
 const { config, paths, piExecutable, piArgs, startReason } = loadGatewayConfig();
 const allowedUsers = new Set(config.allowedUserIds);
 const allowedChannels = new Set(config.allowedChannelIds);
+const discordTransport = createDiscordRestTransport();
 const client = new Client({
+  rest: discordTransport.options,
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -43,6 +46,7 @@ const lifecycle = createLifecycle({
   client, config, paths,
   daemonPath: fileURLToPath(import.meta.url),
   sessions, interactions,
+  closeTransport: discordTransport.close,
   closeCommands: () => commands.close(),
 });
 const commands = createCommandHandlers({

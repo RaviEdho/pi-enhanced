@@ -35,12 +35,15 @@ export function loadGatewayConfig(env = process.env) {
     (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
     (config.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(config.toolCallVerbosity)) ||
     (config.toolCallVisibility !== undefined && !isValidToolCallVisibility(config.toolCallVisibility)) ||
+    (config.tableRendering !== undefined && !isValidTableRendering(config.tableRendering)) ||
     (config.channelReplies !== undefined && !isValidChannelReplies(config.channelReplies)) ||
     (config.contextMessages !== undefined && (!Number.isInteger(config.contextMessages) || config.contextMessages < 0 || config.contextMessages > 25)) ||
     typeof config.cwd !== "string"
   ) {
     throw new Error("Discord gateway configuration is invalid");
   }
+
+  config.tableRendering = { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
 
   return {
     config,
@@ -61,6 +64,11 @@ export function isValidAllowlist(value) {
 export function isValidToolCallVisibility(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return [value.channels, value.threads, value.dms].every((setting) => setting === undefined || typeof setting === "boolean");
+}
+
+export function isValidTableRendering(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return [value.enabled, value.showTitleFooter, value.attachMarkdown].every((setting) => setting === undefined || typeof setting === "boolean");
 }
 
 /** Reply routing settings: thread mode, optional router model, and escalation. */

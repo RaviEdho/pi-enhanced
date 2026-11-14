@@ -3,6 +3,7 @@ import {
   fetchRecentContextMessages, formatDiscordEmbedContext, getDiscordImageAttachments, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext, loadRecentContext,
   sendText, startTyping, stripBotMention,
 } from "./messages.mjs";
+import { sendAgentReply } from "./agent-replies.mjs";
 import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 
@@ -289,7 +290,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         });
         if (!result) return;
         if (result.text === undefined) return;
-        if (result.text.trim()) await sendText(target, result.text, replyToMessageId);
+        if (result.text.trim()) await sendAgentReply(target, result.text, replyToMessageId, { tableRendering: config.tableRendering });
         else await sendText(target, "The agent finished without a text response.", replyToMessageId);
         if (channelConversation) rememberChannelReply(message.channelId, message.author.id);
         if (result.escalate) await escalateToThread({ message, content, session: result.session });

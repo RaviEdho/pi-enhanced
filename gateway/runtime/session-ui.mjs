@@ -2,6 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import { ASK_USER_CHOICES_GUIDE, ASK_USER_CUSTOM_GUIDE, ASK_USER_INPUT_GUIDE, buildCommitCardPayload, buildDiscordUiPayload } from "./components.mjs";
 import { log, safeErrorName } from "./logging.mjs";
 import { sendText, truncateDiscordText } from "./messages.mjs";
+import { sendAgentReply } from "./agent-replies.mjs";
 import { listChannels } from "./history.mjs";
 import { safeChannelName, toolActivity, workspaceDetail } from "./tool-activity.mjs";
 
@@ -239,7 +240,7 @@ export class SessionUi {
     // Preserve the ordering of already buffered activity and narration.
     this.sendToolActivityBatch();
     const delivery = this.toolActivityPromise.then(async () => {
-      await sendText(interaction.channel, text);
+      await sendAgentReply(interaction.channel, text, undefined, { tableRendering: this.session.config?.tableRendering });
       return true;
     }).catch((error) => {
       log(`Could not send assistant narration: ${safeErrorName(error)}`);

@@ -32,6 +32,7 @@ import {
   type DiscordGatewayConfig,
   type DiscordGatewayStatus,
   type DiscordToolCallVisibility,
+  type DiscordTableRendering,
 } from "./storage.js";
 
 const TOKEN_ENV_VAR = "PI_ENHANCED_DISCORD_BOT_TOKEN";
@@ -228,6 +229,11 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
           description: "Show or hide tool activity and intermediate assistant text separately in server channels, threads, and DMs. Prompts and workspace notices stay visible.",
         },
         {
+          label: "Tables",
+          currentValue: config.tableRendering?.enabled === true ? `On · Title/footer ${config.tableRendering?.showTitleFooter ? "on" : "off"} · Markdown ${config.tableRendering?.attachMarkdown ? "on" : "off"}` : "rendering off",
+          description: "Enable or disable table images (off by default). Title/footer and Markdown attachment are independent options and also default to off.",
+        },
+        {
           label: "Channel replies",
           currentValue: channelReplyModeLabel(config.channelReplies.mode),
           description: "Choose where new server conversations answer: a thread, the channel, or a routing model's choice. Existing threads and DMs are unchanged.",
@@ -291,6 +297,9 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         break;
       case "Tool call visibility":
         await configureToolCallVisibility(ctx, config);
+        break;
+      case "Tables":
+        await configureTableRendering(ctx, config);
         break;
       case "Channel replies":
         await configureChannelReplies(ctx, config);
@@ -481,6 +490,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
     toolCallVerbosity: existing?.toolCallVerbosity ?? "full",
     toolCallVisibility: existing?.toolCallVisibility ?? { channels: false, threads: true, dms: true },
+    tableRendering: existing?.tableRendering ?? { enabled: false, showTitleFooter: false, attachMarkdown: false },
     channelReplies: existing?.channelReplies ?? { mode: "always-thread", escalate: true, followUp: true, contextMessages: 5 },
     contextMessages: existing?.contextMessages ?? 5,
     configuredAt: new Date().toISOString(),
@@ -724,6 +734,36 @@ async function configureToolCallVisibility(ctx: ExtensionCommandContext, config:
   saveGatewayConfig(ctx, config, {
     toolCallVisibility: { ...current, [destination.key]: value },
   }, `Tool call info in ${destination.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
+}
+
+async function configureTableRendering(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
+  const settings: { key: keyof DiscordTableRendering; label: string; description: string }[] = [
+    { key: "enabled", label: "Render tables", description: "Convert Markdown tables to images. Off sends the original Markdown as text, without table images or .md attachments; other table preferences are preserved." },
+    { key: "showTitleFooter", label: "Title and footer", description: "Show the table title, page numbering and row/column ranges together. Off shows only the table grid." },
+    { key: "attachMarkdown", label: "Markdown attachment", description: "Attach the original table as a .md file alongside its images for copying text and links." },
+  ];
+  const selected = await selectDiscordOption(ctx, {
+    title: "Discord Tables",
+    options: settings.map(({ key, label, description }) => ({ label, description, currentValue: current[key] ? "on" : "off" })),
+  });
+  const setting = settings.find(({ label }) => label === selected);
+  if (!setting) return;
+  const enabled = current[setting.key];
+  const choice = await selectDiscordOption(ctx, {
+    title: `Tables: ${setting.label}`,
+    description: setting.description,
+    options: [enabled ? "On (current)" : "On", enabled ? "Off" : "Off (current)"],
+  });
+  if (!choice) return;
+  const value = choice.startsWith("On");
+  if (value === enabled) {
+    notify(ctx, "Table rendering is unchanged.", "info");
+    return;
+  }
+  saveGatewayConfig(ctx, config, {
+    tableRendering: { ...current, [setting.key]: value },
+  }, `Table ${setting.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
 }
 
 async function configureContextMessages(ctx: ExtensionCommandContext, config: DiscordGatewayConfig, routing = false): Promise<void> {
