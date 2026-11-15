@@ -197,7 +197,7 @@ export class QuotaManager {
     maxAgeMs: number = DEFAULT_CACHE_TTL_MS
   ): Promise<ProviderUsageReport | null> {
     const entry = this.cache.get(account.id);
-    const age = account.provider === "ollama-cloud" || account.provider === "tokenharbor"
+    const age = account.provider === "ollama-cloud" || account.provider === "tokenharbor" || account.provider === "inferhub"
       ? Math.max(maxAgeMs, 60_000) : maxAgeMs;
     try {
       const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
@@ -231,6 +231,9 @@ export class QuotaManager {
             signal,
             account.planType
           );
+        } else if (account.provider === "inferhub") {
+          const { fetchInferHubUsage } = await import("../ux/usage/inferhub.js");
+          report = await fetchInferHubUsage(token, usageAccountIdentity(account), signal);
         } else if (account.provider === "tokenharbor") {
           const { fetchTokenHarborUsage } = await import("../ux/usage/tokenharbor.js");
           report = await fetchTokenHarborUsage(token, usageAccountIdentity(account), signal, account.planType);
@@ -307,9 +310,10 @@ export class QuotaManager {
       // report existed (healthy until a fresh fetch proves otherwise).
     }
 
-    if (!report || report.groups.length === 0 || account.provider === "tokenharbor") {
+    if (!report || report.groups.length === 0 || account.provider === "tokenharbor" || account.provider === "inferhub") {
       // Token Harbor allowances are reporting-only: paid-model coverage and
       // wallet continuation are unknown. Keep its existing neutral balancing.
+      // InferHub's monetary balance is not a quota or a free-route entitlement.
       // No cached report yet: assume unstarted healthy candidate
       return {
         isExhausted: false,

@@ -3,10 +3,11 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 import { tokenHarborAccountId } from "../providers/tokenharbor/credentials.js";
+import { inferHubAccountId } from "../providers/inferhub/credentials.js";
 
 const STORE_VERSION = 2;
 const FILE_CHECK_INTERVAL_MS = 250;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari", "tokenharbor"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari", "tokenharbor", "inferhub"]);
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
@@ -256,6 +257,8 @@ export class AccountStore {
         ? process.env.KENARI_API_KEY?.trim()
         : provider === "tokenharbor"
         ? process.env.TOKENHARBOR_API_KEY?.trim()
+        : provider === "inferhub"
+        ? process.env.INFERHUB_API_KEY?.trim()
         : undefined;
     if (!existingAuth && !envVal) {
       return;
@@ -415,6 +418,7 @@ export class AccountStore {
             const identity = email || accountId || (projectId && projectId !== "aicode-consumers" ? projectId : undefined) || (persistentKey ? `key-${persistentKey.slice(-6)}` : undefined) || tokenSuffix || "default";
             const id = provider === "tokenharbor" && persistentKey
               ? tokenHarborAccountId(persistentKey)
+              : provider === "inferhub" && persistentKey ? inferHubAccountId(persistentKey)
               : AccountStore.generateAccountId(provider, identity);
 
             const planType =
@@ -436,6 +440,8 @@ export class AccountStore {
                   ? process.env.KENARI_API_KEY?.trim()
                   : provider === "tokenharbor"
                   ? process.env.TOKENHARBOR_API_KEY?.trim()
+                  : provider === "inferhub"
+                  ? process.env.INFERHUB_API_KEY?.trim()
                   : undefined;
               // Only the account that Pi mirrored into auth.json can go stale here: auth.json
               // holds a single credential per provider, so other stored accounts are deliberate
@@ -601,6 +607,20 @@ export class AccountStore {
         this.data.accounts.push({ id, provider: "tokenharbor", type: "api_key", apiKey: tokenHarborKey,
           createdAt: Date.now(), updatedAt: Date.now() });
         if (!this.data.activeAccounts.tokenharbor) this.data.activeAccounts.tokenharbor = id;
+        modified = true;
+      }
+    }
+
+    // InferHub account identity is unknown to inference-only keys; match exact keys.
+    const inferHubKey = process.env.INFERHUB_API_KEY?.trim();
+    if (inferHubKey) {
+      authProviders.add("inferhub");
+      const existing = findExisting("inferhub", undefined, undefined, undefined, undefined, inferHubKey);
+      if (!existing) {
+        const id = inferHubAccountId(inferHubKey);
+        this.data.accounts.push({ id, provider: "inferhub", type: "api_key", apiKey: inferHubKey,
+          createdAt: Date.now(), updatedAt: Date.now() });
+        if (!this.data.activeAccounts.inferhub) this.data.activeAccounts.inferhub = id;
         modified = true;
       }
     }

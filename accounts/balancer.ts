@@ -207,6 +207,14 @@ export class AccountBalancer {
     modelId?: string
   ): AccountCredential | undefined {
     const allAccounts = this.store.list(provider);
+    if (provider === "inferhub") {
+      // InferHub never balances or rotates keys; display the actual request binding,
+      // falling back to the configured active credential before the first request.
+      const boundId = this.getBoundAccountId(sessionId, provider);
+      const bound = allAccounts.find(account => account.id === boundId && !account.disabledCause);
+      const active = bound ?? this.store.getActive(provider);
+      return active && !active.disabledCause ? active : undefined;
+    }
     if (provider === "tokenharbor" && sessionId && ![...SUPPORTED_PROVIDERS].some(
       other => other !== provider && modelId?.startsWith(other + "/")
     )) {

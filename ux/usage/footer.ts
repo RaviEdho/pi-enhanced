@@ -10,6 +10,7 @@ import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { isProviderNetworkEnabled } from "../../providers/network.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
+import { getInferHubUsageFailure } from "./inferhub.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
@@ -218,7 +219,9 @@ function renderUsageReport(
   now: number,
   theme: ExtensionContext["ui"]["theme"]
 ): string {
-  if (report.error && report.groups.length === 0) return `${prefix}  Quota unavailable`;
+  if (report.error && report.groups.length === 0) {
+    return `${prefix}  ${report.providerId === "inferhub" ? "Balance unavailable" : "Quota unavailable"}`;
+  }
   const { primary, secondary, balances } = extractKeyBuckets(report, modelId);
   const parts: string[] = [];
   if (primary) {
@@ -278,7 +281,8 @@ function buildUsageBar(ctx: ExtensionContext): string {
     return `${prefix}  [COOLDOWN ~${cooldownStr}]`;
   }
 
-  const report = QuotaManager.getInstance().getReport(account.id);
+  const report = QuotaManager.getInstance().getReport(account.id)
+    ?? (account.provider === "inferhub" && account.apiKey ? getInferHubUsageFailure(account.apiKey) : undefined);
   if (!report) {
     return `${prefix}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
   }

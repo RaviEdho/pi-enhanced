@@ -5,6 +5,7 @@ const PROVIDERS = [
   "google-antigravity",
   "commandcode",
   "kenari",
+  "inferhub",
   "openai-codex",
   "ollama-cloud",
 ];

@@ -4,6 +4,7 @@ import { registerCodexFilter } from "./codex/index.js";
 import { registerCommandCodeProvider } from "./commandcode/register.js";
 import { registerKenariProvider } from "./kenari/register.js";
 import { registerTokenHarborProvider } from "./tokenharbor/register.js";
+import { registerInferHubProvider } from "./inferhub/register.js";
 import { registerOllamaProvider } from "./ollama/index.js";
 
 /**
@@ -12,6 +13,7 @@ import { registerOllamaProvider } from "./ollama/index.js";
  * - Command Code (api.commandcode.ai)
  * - Kenari (kenari.id)
  * - Token Harbor (tokenharbor.ai)
+ * - InferHub consumer marketplace (inferhub.dev)
  * - OpenAI Codex dynamic plan filter
  */
 export async function registerProviders(pi: ExtensionAPI): Promise<void> {
@@ -19,6 +21,7 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerCommandCodeProvider(pi);
   await registerKenariProvider(pi);
   registerTokenHarborProvider(pi);
+  registerInferHubProvider(pi);
   await registerOllamaProvider(pi);
   await registerCodexFilter(pi);
   // Pi refreshes providers in the background after initializing its TUI/RPC
@@ -34,5 +37,6 @@ export {
   registerCommandCodeProvider,
   registerKenariProvider,
   registerTokenHarborProvider,
+  registerInferHubProvider,
   registerOllamaProvider,
 };

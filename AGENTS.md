@@ -13,6 +13,7 @@ Guidance for AI agents working in this repository.
   - **Antigravity**: Google Cloud Code Assist (`daily-cloudcode-pa.googleapis.com`), OAuth, and automatic project discovery/onboarding (`cloudaicompanionProject`).
   - **Command Code**: `https://api.commandcode.ai/provider/v1`, loopback OAuth (`/login commandcode`) or `COMMANDCODE_API_KEY`, dynamic models, Anthropic/OpenAI protocol routing, plan gating/credit bypass, and quota monitoring (`/alpha/billing/credits`).
   - **Kenari**: `https://kenari.id/v1`, loopback OAuth PKCE (`/login kenari`) or `KENARI_API_KEY`, dynamic models/pricing, plan gating (`/api/plans`), prepaid IDR bypass/balance (`/v1/account/balance`), reasoning translation, multi-account failover, and quotas (`/v1/account/quota`).
+  - **InferHub**: Experimental consumer-only marketplace integration (`https://api.inferhub.dev/v1`), `/login inferhub` or `INFERHUB_API_KEY`, authenticated key-scoped discovery/cache, explicit text routes, strict reasoning tiers, server-reported total costs, and read-only USDC balance reporting. No management access or automatic credential rotation.
   - **Codex**: Account model discovery and usage reporting; the managed OpenAI ChatGPT provider was retired.
   - **Ollama**: Model discovery and integration.
 - **Usage and context (`ux/usage/`, `ux/context/`)**: Multi-account `/usage` reports and quota footer; native `/context` modal with category breakdown, headroom/compaction thresholds, and `c` compact / `r` refresh / `Esc` close.

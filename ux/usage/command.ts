@@ -22,6 +22,8 @@ import { fetchCodexUsage } from "./codex.js";
 import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
 import { fetchTokenHarborUsage } from "./tokenharbor.js";
+import { fetchInferHubUsage } from "./inferhub.js";
+import { USAGE_TTL_MS as INFERHUB_USAGE_TTL_MS } from "../../providers/inferhub/constants.js";
 import { ALLOWANCE_TTL_MS } from "../../providers/tokenharbor/constants.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
@@ -515,6 +517,25 @@ export async function collectUsageReports(
     })());
   }
 
+  const inferHubSession = options?.currentProvider === "inferhub"
+    ? balancer.getSessionAccount("inferhub", options.sessionId, options.currentModelId) : undefined;
+  const inferHubPromises: Promise<ProviderUsageReport>[] = [];
+  for (const account of store.list("inferhub")) {
+    if (signal?.aborted) break;
+    inferHubPromises.push((async (): Promise<ProviderUsageReport> => {
+      const base = {
+        providerId: "inferhub", providerName: "InferHub", accountId: account.id,
+        accountEmail: usageAccountIdentity(account), isSessionAccount: account.id === inferHubSession?.id,
+        isActiveAccount: account.id === store.getActive("inferhub")?.id,
+      };
+      if (account.disabledCause) return { ...base, fetchedAt: Date.now(), groups: [], error: account.disabledCause };
+      const report = await QuotaManager.getInstance().refreshReport(account.id,
+        () => fetchInferHubUsage(account.apiKey || "", base.accountEmail, signal), INFERHUB_USAGE_TTL_MS);
+      // Session-specific flags stay out of shared reports.
+      return { ...report, ...base };
+    })());
+  }
+
   // Ollama's balance endpoint recommends polling no more often than once a minute.
   const ollamaAccounts = store.list("ollama-cloud");
   const isOllamaActive = options?.currentProvider === "ollama-cloud";
@@ -554,6 +575,7 @@ export async function collectUsageReports(
     ...commandcodePromises,
     ...kenariPromises,
     ...tokenHarborPromises,
+    ...inferHubPromises,
     ...ollamaPromises,
   ]);
   for (const s of settled) {

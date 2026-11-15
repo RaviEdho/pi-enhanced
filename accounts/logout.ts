@@ -7,6 +7,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   commandcode: "Command Code",
   kenari: "Kenari",
   tokenharbor: "Token Harbor",
+  inferhub: "InferHub",
   "openai-codex": "OpenAI Codex",
 };
 
