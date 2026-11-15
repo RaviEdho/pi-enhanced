@@ -9,6 +9,7 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import type { QuestionItem, SingleAnswerDetail } from "./types.js";
 import { DialogFrame, renderDialogActions } from "../../ux/dialog.js";
 
@@ -85,7 +86,8 @@ export class QuestionnaireComponent implements Component, Focusable {
         placeholderStyle: (text) => this.theme.fg("dim", text),
       });
       const customInput = new Input({
-        placeholder: "Type custom answer...",
+        prompt: "",
+        placeholder: CUSTOM_CHOICE_LABEL,
         placeholderStyle: (text) => this.theme.fg("dim", text),
       });
 
@@ -384,8 +386,8 @@ export class QuestionnaireComponent implements Component, Focusable {
         actionFocusLine = st.highlightedIndex;
         if (st.options[st.highlightedIndex] === CUSTOM_CHOICE_LABEL) {
           st.customInput.focused = this.focused;
-          actionFocusLine = actions.length;
-          actions.push(...st.customInput.render(Math.max(1, width - 2)).map((line) => `  ${line}`));
+          const cursor = getSettingsListTheme().cursor;
+          actions[st.highlightedIndex] = `  ${cursor}${st.customInput.render(Math.max(1, width - 4))[0]}`;
         }
       } else {
         append("Type your response (press Enter to confirm):", "  ", color("muted"));
