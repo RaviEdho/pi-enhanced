@@ -13,14 +13,19 @@ import type {
 // https://commandcode.ai/docs/plans/go
 // https://commandcode.ai/docs/plans/goat
 // https://commandcode.ai/docs/plans/pro
+// https://api.commandcode.ai/provider/v1/models
+// Verified 2026-11-15: plan coverage from the tables above, IDs from the live catalog.
 // IDs are lowercased API IDs with the provider prefix removed, not page slugs.
 // Keep these as allowlists: a catalog entry alone does not imply plan coverage.
 // Coverage is separate from API access (Go currently has no Provider API access).
 const GO_MODELS = new Set<string>([
+  "inkling-2-small:free",
+  "ling-3.1-flash-1019",
   "kimi-k3.1-pro",
   "ornith-1.5-122b",
   "minimax-m3.1-flash",
   "beam:free",
+  "muse-ember",
   "muse-spark-open",
   "nemotron-3.5-super-vl",
   "ling-3.1-flash",
@@ -78,6 +83,7 @@ const GO_MODELS = new Set<string>([
 
 const GOAT_MODELS = new Set<string>([
   ...GO_MODELS,
+  "deepseek-v4.1-flash-ultrafast",
   "jev-1.14.0",
   "claude-haiku-5-5",
   "claude-sonnet-5-5",
@@ -95,6 +101,7 @@ const GOAT_MODELS = new Set<string>([
 
 const PRO_MODELS = new Set<string>([
   ...GOAT_MODELS,
+  "gemini-4-carbon",
   "gpt-6.1-terra",
   "gemini-4-argon",
   "gpt-6-sol",
