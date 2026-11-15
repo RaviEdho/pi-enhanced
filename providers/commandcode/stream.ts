@@ -357,11 +357,17 @@ export function streamCommandCodeInternalGateway(
         } else if (event.type === "finish") {
           finishCurrentBlock();
           if (event.totalUsage) {
-            output.usage.input = event.totalUsage.inputTokens || 0;
             output.usage.output = event.totalUsage.outputTokens || 0;
             output.usage.cacheRead = event.totalUsage.inputTokenDetails?.cacheReadTokens || 0;
             output.usage.cacheWrite = event.totalUsage.inputTokenDetails?.cacheWriteTokens || 0;
-            output.usage.totalTokens = output.usage.input + output.usage.output;
+            // Gateway inputTokens includes cache reads/writes; Pi's input excludes both.
+            // Keeping the inclusive value here double-counts cache in hit rates and costs.
+            output.usage.input = Math.max(
+              0,
+              (event.totalUsage.inputTokens || 0) - output.usage.cacheRead - output.usage.cacheWrite
+            );
+            output.usage.totalTokens =
+              output.usage.input + output.usage.cacheRead + output.usage.cacheWrite + output.usage.output;
             output.usage.cost = calculateCost(
               { ...model, cost: resolveModelCost(model.id) },
               output.usage
