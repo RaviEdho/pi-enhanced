@@ -15,6 +15,8 @@ type Cost = Model<"openai-completions">["cost"];
 export interface TokenHarborModel extends Model<"openai-completions"> {
   metadataSource: { url: string; verifiedAt: number };
   tokenHarborReasoning?: TokenHarborReasoning;
+  /** Pi's numeric cost uses 0 when this base cache-write price is unknown, not verified free. */
+  tokenHarborCacheWritePriceUnknown?: boolean;
 }
 export interface PageMetadata {
   id: string;
@@ -80,6 +82,8 @@ function validModel(value: unknown): value is TokenHarborModel {
     m.baseUrl === TOKENHARBOR_BASE_URL && typeof m.name === "string" && typeof m.reasoning === "boolean" &&
     !!positive(m.contextWindow) && !!positive(m.maxTokens) && Array.isArray(m.input) && m.input.includes("text") &&
     m.input.every(v => v === "text" || v === "image") && !!cost && costFields.every(k => typeof cost[k] === "number" && price(cost[k]) !== undefined) &&
+    (m.tokenHarborCacheWritePriceUnknown === undefined || typeof m.tokenHarborCacheWritePriceUnknown === "boolean") &&
+    (m.tokenHarborCacheWritePriceUnknown !== true || cost.cacheWrite === 0) &&
     (cost.tiers === undefined || (Array.isArray(cost.tiers) && cost.tiers.every(value => {
       const tier = record(value);
       return tier && positive(tier.inputTokensAbove) && costFields.every(k => typeof tier[k] === "number" && price(tier[k]) !== undefined);
@@ -238,7 +242,9 @@ export function buildTokenHarborModel(raw: RecordValue, page?: PageMetadata): To
   const input = page.input;
   if (!contextWindow || !maxTokens || !input?.includes("text")) return undefined;
   const pricing = record(raw.pricing);
-  const cost = completeCost(costFields.map((field, i) => price(pricing?.[priceFields[i]]) ?? price(page.cost[field])));
+  const prices = costFields.map((field, i) => price(pricing?.[priceFields[i]]) ?? price(page.cost[field]));
+  // Only cache-write pricing is optional. Pi requires a numeric rate, so retain its unknown status separately.
+  const cost = completeCost([prices[0], prices[1], prices[2], prices[3] ?? 0]);
   if (!cost) return undefined;
   // Only the documented reasoning contract is capability evidence.
   const model: TokenHarborModel = {
@@ -246,6 +252,7 @@ export function buildTokenHarborModel(raw: RecordValue, page?: PageMetadata): To
     provider: PROVIDER_ID, api: "openai-completions", baseUrl: TOKENHARBOR_BASE_URL,
     reasoning: false,
     input, contextWindow, maxTokens, cost, metadataSource: { url: page.url, verifiedAt: page.verifiedAt },
+    tokenHarborCacheWritePriceUnknown: prices[3] === undefined,
     // The audit verified both developer-role messages and max_completion_tokens on this gateway.
     compat: { supportsReasoningEffort: false },
   };
@@ -259,13 +266,9 @@ export function buildTokenHarborModel(raw: RecordValue, page?: PageMetadata): To
 export async function discoverTokenHarborModels(key: string, signal?: AbortSignal, force = false, listing?: RecordValue[]): Promise<TokenHarborCatalog> {
   signal?.throwIfAborted();
   const cached = loadTokenHarborCatalog(key);
-  if (!force && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) {
-    if (!listing) return cached;
-    const current = new Map(listing.map(item => [item.id, item]));
-    return { ...cached, visibleIds: listing.map(item => item.id as string), models: cached.models
-      .filter(model => current.has(model.id))
-      .map(model => withTokenHarborReasoning(model, current.get(model.id)?.reasoning)) };
-  }
+  // A fresh listing must rebuild all models, including previously skipped and newly added IDs.
+  // The catalog TTL only applies when no fresh listing was supplied; public pages keep their own TTL.
+  if (listing === undefined && !force && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) return cached;
   const raw = listing ?? await fetchTokenHarborCatalog(key, signal);
   const models: TokenHarborModel[] = [];
   const skipped: TokenHarborCatalog["skipped"] = [];
@@ -278,7 +281,7 @@ export async function discoverTokenHarborModels(key: string, signal?: AbortSigna
       const page = await pageMetadata(id, signal, force);
       const model = buildTokenHarborModel(item, page);
       if (model) models.push(model);
-      else skipped.push({ id, reason: "Missing verified chat/tool metadata, limits, modalities, or complete prices" });
+      else skipped.push({ id, reason: "Missing verified chat/tool metadata, limits, modalities, or input/output/cache-read prices" });
     }
   }));
   signal?.throwIfAborted();
