@@ -1139,7 +1139,32 @@ export const COMMANDCODE_MODEL_METADATA: Record<string, ModelMetadata> = {
   },
   "meta/muse-spark-open": {
     efforts: ["low", "medium", "high"],
-  }
+  },
+  // Verified 2026-11-15: efforts and per-1M-token pricing from command-code@1.89.1,
+  // dist/bundled/command-code-knowledge/reference/models.md:
+  // https://registry.npmjs.org/command-code/-/command-code-1.89.1.tgz
+  // Pricing cross-checked against https://commandcode.ai/models.
+  // These models have no separately billed cache writes.
+  "meta/muse-ember": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    cost: { input: 0.1, output: 0.5, cacheRead: 0.004, cacheWrite: 0 },
+  },
+  "thinkingmachines/inkling-2-small:free": {
+    efforts: ["low", "medium", "high", "max"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  },
+  "inclusionai/ling-3.1-flash-1019": {
+    efforts: ["low", "medium", "high"],
+    cost: { input: 0.3, output: 0.9, cacheRead: 0.06, cacheWrite: 0 },
+  },
+  "deepseek/deepseek-v4.1-flash-ultrafast": {
+    efforts: ["off", "low", "high", "max"],
+    cost: { input: 2.4, output: 9.6, cacheRead: 0.048, cacheWrite: 0 },
+  },
+  "google/gemini-4-carbon": {
+    efforts: ["low", "medium", "high"],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+  },
 };
 
 /**
@@ -1489,6 +1514,7 @@ export function loadCachedModels(): Model<any>[] | null {
       const { thinkingLevelMap: _cachedThinkingLevelMap, ...cachedModel } = model;
       return {
         ...cachedModel,
+        ...(meta.cost ? { cost: resolveModelCost(model.id) } : {}),
         reasoning: Boolean(thinkingLevelMap),
         ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
       };
