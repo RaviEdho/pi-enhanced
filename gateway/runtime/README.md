@@ -193,9 +193,11 @@ callbacks where commands and lifecycle depend on each other.
   history before the direct reply target for replies, or before the incoming message
   otherwise. Routing is stateless and never applies a delivered-message watermark.
   Fetch at most the larger of the agent/router window once per accepted message and
-  reuse the snapshot, slicing each consumer's independent window before bot/watermark
-  filtering. Keep the agent's non-reply watermark and separate context limit unchanged.
-  Exclude the anchor/current/future and own-bot messages;
+  reuse the snapshot, slicing each consumer's independent window before the agent's
+  bot/watermark filtering. Include the gateway bot's own messages in routing context
+  so the stateless classifier can resolve follow-up references. Keep the agent's own-bot
+  exclusion, non-reply watermark, and separate context limit unchanged.
+  Exclude the anchor/current/future messages from both consumers;
   label authors and quoted context, truncate each message as usual, cap router history
   at 16,000 characters, and prioritize the current request over quoted instructions or
   earlier complex work. Unreadable history degrades to no history; an unreadable quote

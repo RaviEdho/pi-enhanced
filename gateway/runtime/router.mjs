@@ -194,7 +194,8 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         beforeId: contextBeforeId,
         replyAnchored: isReply,
         limit: routingContextMessageCount,
-        botUserId: client.user?.id,
+        // The stateless router needs our replies to resolve follow-up references.
+        // Omit botUserId here; the agent's context still filters our messages.
         cachedMessages,
       });
       return { replyContext, recentContext };
