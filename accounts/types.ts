@@ -8,6 +8,10 @@ export interface AccountCredential {
   projectId?: string;
   clientId?: string;
   planType?: string;
+  /** Command Code billing snapshot used for plan/credit gating. */
+  monthlyCredits?: number;
+  purchasedCredits?: number;
+  freeCredits?: number;
   orgId?: string;
   orgName?: string;
   access?: string;

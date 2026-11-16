@@ -31,7 +31,13 @@ export async function registerCommandCodeProvider(pi: ExtensionAPI): Promise<voi
   const commandCodeModels = loadCachedModels() || DEFAULT_COMMANDCODE_MODELS;
   const getAccountBilling = () => {
     const account = store.getActive(COMMANDCODE_PROVIDER_ID);
-    return account ? { planId: account.planType, purchasedCredits: 0, freeCredits: 0, monthlyCredits: 0, fetchedAt: account.updatedAt } : null;
+    return account ? {
+      planId: account.planType,
+      purchasedCredits: account.purchasedCredits ?? 0,
+      freeCredits: account.freeCredits ?? 0,
+      monthlyCredits: account.monthlyCredits ?? 0,
+      fetchedAt: account.updatedAt,
+    } : null;
   };
   const resolveKey = async (
     credential: ApiKeyCredential | undefined,
@@ -114,16 +120,27 @@ export async function registerCommandCodeProvider(pi: ExtensionAPI): Promise<voi
         : credential?.type === "oauth" ? getCommandCodeApiKey(credential) : undefined;
       const token = credentialToken || resolveCommandCodeApiKey();
       const currentActive = store.getActive(COMMANDCODE_PROVIDER_ID);
-      if (token) {
-        void fetchBillingInfo(token, context.signal).then((billing) => {
-          if (billing && currentActive && billing.planId && billing.planId !== currentActive.planType) {
-            currentActive.planType = billing.planId;
-            currentActive.updatedAt = Date.now();
-            store.upsert(currentActive);
-          }
-        }).catch(() => {});
-      }
+      const billingPromise = token
+        ? fetchBillingInfo(token, context.signal).catch(() => null)
+        : Promise.resolve(null);
       const live = token ? await fetchCommandCodeModels(token, context.signal) : null;
+      const billing = await billingPromise;
+      if (billing && currentActive) {
+        const nextPlan = billing.planId ||
+          (billing.subscriptionsAvailable && !billing.hasSubscription ? "free" : undefined);
+        const creditsChanged =
+          currentActive.monthlyCredits !== billing.monthlyCredits ||
+          currentActive.purchasedCredits !== billing.purchasedCredits ||
+          currentActive.freeCredits !== billing.freeCredits;
+        if ((nextPlan && nextPlan !== currentActive.planType) || creditsChanged) {
+          if (nextPlan) currentActive.planType = nextPlan;
+          currentActive.monthlyCredits = billing.monthlyCredits;
+          currentActive.purchasedCredits = billing.purchasedCredits;
+          currentActive.freeCredits = billing.freeCredits;
+          currentActive.updatedAt = Date.now();
+          store.upsert(currentActive);
+        }
+      }
       const allModels = live?.length ? live : loadCachedModels() || commandCodeModels;
       return allModels.filter((model) => isModelAllowedForBilling(model.id, getAccountBilling()));
     },

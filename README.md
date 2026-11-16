@@ -38,7 +38,7 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
   - Direct connection to Command Code's Provider API (`https://api.commandcode.ai/provider/v1`) with access to 80+ open & closed frontier models.
   - Dual authentication: Native Pi login supports account OAuth and interactive API-key sign-in; `COMMANDCODE_API_KEY` is also supported.
   - Dynamic live model discovery (`/provider/v1/models`) with dual-protocol routing (Anthropic Messages API for Claude Sonnet/Opus/Haiku, and OpenAI Completions API for DeepSeek V4/4.1, Gemini, GPT-6/5, Qwen, Kimi, GLM, MiniMax, etc.).
-  - Subscription plan gating (GOAT, Pro, Max) and automatic credit bypass rules when on-demand credits exist.
+  - Subscription plan gating (Go, GOAT, Pro, Max) and automatic credit bypass rules when on-demand credits exist. Go and free/no-subscription accounts route through Command Code's internal CLI gateway (`/alpha/generate`); free accounts are limited to the zero-cost catalog models and need at least $1 of credits to start a session.
   - Multi-account pooling with transparent 429 rate limit failover.
   - Live quota, monthly pool, and 5-hour/weekly burst window tracking via `/usage` and interactive footer status bar.
 - **OAuth 2.0 Integration**: Authenticate via `/login google-antigravity` using Google OAuth (browser callback on port 51121 with manual prompt fallback for remote/headless setups).

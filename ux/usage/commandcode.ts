@@ -7,7 +7,7 @@ import {
   SUBSCRIPTIONS_URL,
   USAGE_SUMMARY_URL,
 } from "../../providers/commandcode/constants.js";
-import { getPlanDisplayName } from "../../providers/commandcode/plan.js";
+import { COMMANDCODE_FREE_CREDIT_GUIDANCE, getPlanDisplayName, isCommandCodeFreePlan } from "../../providers/commandcode/plan.js";
 import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL, QUOTA_WINDOW_SHORT_LABEL } from "./windows.js";
 import type {
   CommandCodeCreditsResponse,
@@ -75,8 +75,10 @@ export async function fetchCommandCodeUsage(
     const credData = credRes.ok ? ((await credRes.json()) as CommandCodeCreditsResponse) : null;
     const summaryData = summaryRes.ok ? ((await summaryRes.json()) as CommandCodeUsageSummaryResponse) : null;
 
-    const rawPlan = subData?.data?.planId || credData?.credits?.planId || existingPlanType;
+    const rawPlan = subData?.data?.planId || credData?.credits?.planId ||
+      (subRes.ok && !subData?.data ? "free" : existingPlanType);
     const planType = getPlanDisplayName(rawPlan);
+    const isFreePlan = isCommandCodeFreePlan(rawPlan) || (subRes.ok && !subData?.data);
 
     const monthlyRemaining = Math.max(0, credData?.credits?.monthlyCredits ?? 0);
     const purchasedRemaining = Math.max(0, credData?.credits?.purchasedCredits ?? 0);
@@ -90,36 +92,51 @@ export async function fetchCommandCodeUsage(
 
     const creditBuckets: QuotaBucket[] = [];
 
-    creditBuckets.push({
-      bucketId: "commandcode-credits",
-      displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.monthly],
-      window: QUOTA_WINDOW.monthly,
-      windowSeconds: 30 * 86400,
-      usedFraction,
-      remainingFraction,
-      resetTime: subData?.data?.currentPeriodEnd,
-      description: `$${monthlyRemaining.toFixed(2)} remaining ($${totalPool.toFixed(2)} monthly)`,
-    });
-
-    if (typeof credData?.credits?.purchasedCredits === "number" && Number.isFinite(credData.credits.purchasedCredits)) {
+    if (isFreePlan) {
+      // No subscription: show the credit balance as a named value. Free models
+      // still require at least $1 of credits to start a session, so below that
+      // threshold the capacity summary carries the guidance instead.
+      if (totalRemaining >= 1) {
+        creditBuckets.push({
+          bucketId: "commandcode-credits",
+          displayName: "Credits",
+          window: QUOTA_WINDOW.balance,
+          displayMode: "value",
+          balanceUsd: totalRemaining,
+          usedFraction: 0,
+          remainingFraction: 1,
+          description: `$${totalRemaining.toFixed(2)} credits`,
+        });
+      }
+    } else {
       creditBuckets.push({
-        bucketId: "commandcode-extra",
-        displayName: "Extra Credits",
-        window: QUOTA_WINDOW.onDemand,
-        displayMode: "value",
-        balanceUsd: purchasedRemaining,
-        usedFraction: 0,
-        remainingFraction: 1,
-        description: `$${purchasedRemaining.toFixed(2)} on-demand (never expires)`,
+        bucketId: "commandcode-credits",
+        displayName: QUOTA_WINDOW_LABEL[QUOTA_WINDOW.monthly],
+        window: QUOTA_WINDOW.monthly,
+        windowSeconds: 30 * 86400,
+        usedFraction,
+        remainingFraction,
+        resetTime: subData?.data?.currentPeriodEnd,
+        description: `$${monthlyRemaining.toFixed(2)} remaining ($${totalPool.toFixed(2)} monthly)`,
       });
+
+      if (typeof credData?.credits?.purchasedCredits === "number" && Number.isFinite(credData.credits.purchasedCredits)) {
+        creditBuckets.push({
+          bucketId: "commandcode-extra",
+          displayName: "Extra Credits",
+          window: QUOTA_WINDOW.onDemand,
+          displayMode: "value",
+          balanceUsd: purchasedRemaining,
+          usedFraction: 0,
+          remainingFraction: 1,
+          description: `$${purchasedRemaining.toFixed(2)} on-demand (never expires)`,
+        });
+      }
     }
 
-    const groups: QuotaGroup[] = [
-      {
-        displayName: "Credits",
-        buckets: creditBuckets,
-      },
-    ];
+    const groups: QuotaGroup[] = creditBuckets.length > 0
+      ? [{ displayName: "Credits", buckets: creditBuckets }]
+      : [];
 
     const windowLimits = credData?.windowLimits;
     const limitBuckets: QuotaBucket[] = [];
@@ -161,8 +178,24 @@ export async function fetchCommandCodeUsage(
       });
     }
 
-    let capacitySummary = `$${totalRemaining.toFixed(2)} remaining`;
-    let capacitySummaryShort = capacitySummary;
+    let capacitySummary: string;
+    let capacitySummaryShort: string;
+    if (isFreePlan) {
+      if (totalRemaining > 0) {
+        capacitySummary = `$${totalRemaining.toFixed(2)} credits`;
+        capacitySummaryShort = capacitySummary;
+        if (totalRemaining < 1) {
+          capacitySummary = `$${totalRemaining.toFixed(2)} credits · ${COMMANDCODE_FREE_CREDIT_GUIDANCE}`;
+          capacitySummaryShort = `$${totalRemaining.toFixed(2)} · add $1 credit`;
+        }
+      } else {
+        capacitySummary = `Free plan · ${COMMANDCODE_FREE_CREDIT_GUIDANCE}`;
+        capacitySummaryShort = "Free · add $1 credit";
+      }
+    } else {
+      capacitySummary = `$${totalRemaining.toFixed(2)} remaining`;
+      capacitySummaryShort = capacitySummary;
+    }
     if (windowLimits?.fiveHour && windowLimits.fiveHour.cap > 0) {
       const avail5h = Math.max(0, windowLimits.fiveHour.cap - windowLimits.fiveHour.used);
       capacitySummary = `$${avail5h.toFixed(2)} / $${windowLimits.fiveHour.cap.toFixed(2)} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · $${totalRemaining.toFixed(2)} total`;

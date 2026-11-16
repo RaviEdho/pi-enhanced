@@ -103,6 +103,8 @@ export async function validateAndStoreCommandCodeApiKey(
   const userId = whoami.user?.id || whoami.user?.userName || "user";
   const userLabel = whoami.user?.name || whoami.user?.userName || whoami.org?.name || userId;
   const accountId = AccountStore.generateAccountId(PROVIDER_ID, userId);
+  const planType = billing?.planId ||
+    (billing?.subscriptionsAvailable && !billing.hasSubscription ? "free" : "individual-provider");
 
   store.upsert({
     id: accountId,
@@ -113,7 +115,10 @@ export async function validateAndStoreCommandCodeApiKey(
     accountId: whoami.user?.id,
     orgId: whoami.org?.id,
     orgName: whoami.org?.name,
-    planType: billing?.planId || "individual-provider",
+    planType,
+    monthlyCredits: billing?.monthlyCredits,
+    purchasedCredits: billing?.purchasedCredits,
+    freeCredits: billing?.freeCredits,
     apiKey: normalizedKey,
     access: normalizedKey,
     ...(type === "oauth" ? { refresh: "", expires: 0 } : {}),

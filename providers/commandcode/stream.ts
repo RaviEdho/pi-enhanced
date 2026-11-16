@@ -26,6 +26,7 @@ import {
   COMMANDCODE_USER_AGENT,
 } from "./constants.js";
 import { resolveModelCost } from "./models.js";
+import { COMMANDCODE_FREE_CREDIT_GUIDANCE, isCommandCodeFreePlan } from "./plan.js";
 
 function toWireMessages(messages: TranscriptContext["messages"]): any[] {
   const wire: any[] = [];
@@ -240,6 +241,9 @@ export function streamCommandCodeInternalGateway(
         } catch {
           // Ignore JSON parse error
         }
+        if (/insufficient credits/i.test(parsedMessage)) {
+          parsedMessage = `${parsedMessage} ${COMMANDCODE_FREE_CREDIT_GUIDANCE}`;
+        }
         throw new Error(`Command Code CLI Gateway error (${response.status}): ${parsedMessage}`);
       }
 
@@ -421,8 +425,16 @@ export function isCommandCodeGoPlan(planType?: string): boolean {
 }
 
 /**
+ * Go and free/no-subscription accounts have no Provider API access, so they use
+ * the internal CLI gateway instead.
+ */
+export function isCommandCodeGatewayPlan(planType?: string): boolean {
+  return isCommandCodeGoPlan(planType) || isCommandCodeFreePlan(planType);
+}
+
+/**
  * Streams completion requests to Command Code dynamically routing between:
- * 1. Internal CLI Gateway (/alpha/generate) for Go $1/mo subscriptions or when configured.
+ * 1. Internal CLI Gateway (/alpha/generate) for Go $1/mo and free/no-subscription accounts.
  * 2. Provider API (/provider/v1/messages) for Anthropic Claude models.
  * 3. Provider API (/provider/v1/chat/completions) for OpenAI and open-weight models.
  */
@@ -432,13 +444,13 @@ export function streamCommandCode(
   options: SimpleStreamOptions | undefined,
   auth: ResolvedAccountAuth
 ): AssistantMessageEventStream {
-  const isGoPlan = isCommandCodeGoPlan(auth.account.planType);
+  const useGateway = isCommandCodeGatewayPlan(auth.account.planType);
   const forceInternal =
     process.env.COMMANDCODE_USE_GATEWAY === "1" ||
     process.env.COMMANDCODE_INTERNAL === "1";
 
-  // Use official CLI internal gateway for $1/mo Go accounts or explicit override
-  if (isGoPlan || forceInternal) {
+  // Use official CLI internal gateway for Go/free accounts or explicit override
+  if (useGateway || forceInternal) {
     return streamCommandCodeInternalGateway(model, context, options, auth);
   }
 

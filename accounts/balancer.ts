@@ -62,9 +62,9 @@ export function isAccountEligibleForModel(account: AccountCredential, modelId?: 
   if (account.provider === "commandcode") {
     return isModelAllowedForBilling(unwrappedModelId, {
       planId: account.planType,
-      purchasedCredits: 0,
-      freeCredits: 0,
-      monthlyCredits: 0,
+      purchasedCredits: account.purchasedCredits ?? 0,
+      freeCredits: account.freeCredits ?? 0,
+      monthlyCredits: account.monthlyCredits ?? 0,
       fetchedAt: account.updatedAt,
     });
   }
@@ -79,7 +79,7 @@ export function isRateLimitError(error: unknown): boolean {
   if (!error) return false;
   const msg = error instanceof Error ? error.message : String(error);
   return (
-    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|billing_error|plan_limit_reached|insufficient_balance|free_quota_daily|free_quota_rpm/i.test(
+    /429|402|rate.?limit|quota.?exceeded|resource.?exhausted|usage.?limit|usage.?not.?included|too.?many.?requests|freeusagelimiterror|gousagelimiterror|billing_error|plan_limit_reached|insufficient_balance|insufficient.?credits|free_quota_daily|free_quota_rpm/i.test(
       msg
     ) ||
     (typeof error === "object" &&

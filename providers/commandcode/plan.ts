@@ -122,6 +122,34 @@ const PRO_MODELS = new Set<string>([
 
 const billingCache = new Map<string, AccountBillingInfo>();
 
+/** Guidance shown when a free/no-subscription account cannot start a session. */
+export const COMMANDCODE_FREE_CREDIT_GUIDANCE =
+  "Free models require at least $1 of credits; add credits in Command Code Studio > Billing.";
+
+/**
+ * Free models are the zero-cost catalog entries. Command Code marks them with a
+ * `:free` suffix (and historically a `-free` suffix).
+ */
+export function isFreeModelId(modelId: string): boolean {
+  const cleanId = modelId.replace(/^[^/]+\//, "").toLowerCase();
+  return cleanId.endsWith(":free") || cleanId.endsWith("-free");
+}
+
+/**
+ * Identifies accounts without a paid subscription. Command Code returns
+ * `data: null` from /alpha/billing/subscriptions for these accounts.
+ */
+export function isCommandCodeFreePlan(planId?: string): boolean {
+  if (!planId) return false;
+  const plan = planId.toLowerCase();
+  return (
+    plan.includes("free") ||
+    plan.includes("no-subscription") ||
+    plan.includes("no subscription") ||
+    plan === "none"
+  );
+}
+
 /**
  * Fetches billing and credit status for an API key.
  */
@@ -162,13 +190,16 @@ export async function fetchBillingInfo(
     const subData = subRes.ok ? ((await subRes.json()) as CommandCodeSubscriptionsResponse) : null;
     const credData = credRes.ok ? ((await credRes.json()) as CommandCodeCreditsResponse) : null;
 
+    const subscription = subData?.data;
     const info: AccountBillingInfo = {
-      planId: subData?.data?.planId || credData?.credits?.planId,
-      status: subData?.data?.status,
+      planId: subscription?.planId || credData?.credits?.planId,
+      status: subscription?.status,
+      hasSubscription: Boolean(subscription?.planId),
+      subscriptionsAvailable: subRes.ok,
       monthlyCredits: credData?.credits?.monthlyCredits ?? 0,
       purchasedCredits: credData?.credits?.purchasedCredits ?? 0,
       freeCredits: credData?.credits?.freeCredits ?? 0,
-      currentPeriodEnd: subData?.data?.currentPeriodEnd,
+      currentPeriodEnd: subscription?.currentPeriodEnd,
       fetchedAt: Date.now(),
     };
 
@@ -189,6 +220,11 @@ export function isModelCoveredByPlan(
   if (!planId) return false;
   const plan = planId.toLowerCase();
   const cleanId = modelId.replace(/^[^/]+\//, "").toLowerCase();
+
+  // Free/no-subscription accounts only have the zero-cost catalog entries.
+  if (isCommandCodeFreePlan(plan)) {
+    return isFreeModelId(cleanId);
+  }
 
   // Max / Ultra / Teams plans have access to all models
   if (
@@ -248,6 +284,7 @@ export function isModelAllowedForBilling(
 export function getPlanDisplayName(planId?: string): string {
   if (!planId) return "Unknown";
   const p = planId.toLowerCase();
+  if (isCommandCodeFreePlan(p)) return "Free";
   if (p.includes("goat")) return "GOAT";
   if (p.includes("pro")) return "Pro";
   if (p.includes("provider")) return "Provider";

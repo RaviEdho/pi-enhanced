@@ -90,6 +90,10 @@ export interface CommandCodeUsageSummaryResponse {
 export interface AccountBillingInfo {
   planId?: string;
   status?: string;
+  /** True when /alpha/billing/subscriptions returned a plan. */
+  hasSubscription?: boolean;
+  /** True when the subscriptions endpoint answered, even with `data: null`. */
+  subscriptionsAvailable?: boolean;
   monthlyCredits: number;
   purchasedCredits: number;
   freeCredits: number;
