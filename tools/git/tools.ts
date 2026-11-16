@@ -6,10 +6,10 @@ import {
   formatSelectiveFileDiff,
   getFileDiff,
   getStagedOverview,
-  MAX_FILE_DIFF_CHARS,
   type SelectiveDiffSnapshot,
 } from "./git.js";
 import type { CommitActionEntry, CommitHunkSelection, CommitPlanProposal, CommitProposal } from "./types.js";
+import { DiffPageProperties, GitDiffPager, type DiffPageInput } from "./diff.js";
 
 function normalizeCommitBody(value: unknown): string {
   const invalidBody = () => new Error(
@@ -116,6 +116,7 @@ export function createCommitTools(options: {
   signal?: AbortSignal;
 }): ToolDefinition[] {
   const { cwd, onPropose, onAction, diffedFiles, selectiveSnapshot, instruction, signal } = options;
+  const diffPages = new Map<string, Promise<GitDiffPager>>();
 
   // Tell the agent when unselected hunks mention the requested change, so it can
   // add them before finishing. The last proposal wins, so a corrected call
@@ -175,13 +176,12 @@ export function createCommitTools(options: {
   const gitFileDiffTool: ToolDefinition<any, unknown> = {
     name: "git_file_diff",
     label: "Git File Diff",
-    description: selectiveSnapshot
-      ? "Get the diff for a specific changed file. In selective mode, text hunks are numbered for precise file/hunk selection."
-      : "Get cached git diff for a specific staged file. Automatically omits lockfiles and truncates oversized outputs.",
+    description: "Inspect a file diff in 16k-character pages (also bounded to 48KB/1800 lines). Preserves all changed lines and metadata; only unchanged context is compressed. Follow nextOffset until complete; raw=true restores context. Selective hunks retain their original numbers.",
     parameters: Type.Object({
       filePath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+      ...DiffPageProperties,
     }),
-    async execute(_toolCallId, params: { filePath?: string | null }) {
+    async execute(_toolCallId, params: { filePath?: string | null } & DiffPageInput) {
       if (signal?.aborted) {
         throw new Error("Commit cancelled by user.");
       }
@@ -207,18 +207,20 @@ export function createCommitTools(options: {
         description: `Inspected diff for ${targetPath}`,
       });
 
-      const diff = selectiveSnapshot
-        ? (selectiveSnapshot.files.includes(targetPath)
-            ? formatSelectiveFileDiff(selectiveSnapshot, targetPath)
-            : `(No changes found for ${targetPath})`)
-        : await getFileDiff(targetPath, cwd);
-      const boundedDiff = diff.length > MAX_FILE_DIFF_CHARS
-        ? `${diff.slice(0, MAX_FILE_DIFF_CHARS)}\n... [diff truncated: exceeded ${MAX_FILE_DIFF_CHARS} chars]`
-        : diff;
-      return {
-        content: [{ type: "text", text: boundedDiff }],
-        details: undefined,
-      };
+      let pending = diffPages.get(targetPath);
+      if (!pending) {
+        pending = (async () => {
+          const diff = selectiveSnapshot
+            ? (selectiveSnapshot.files.includes(targetPath)
+                ? formatSelectiveFileDiff(selectiveSnapshot, targetPath)
+                : `(No changes found for ${targetPath})`)
+            : await getFileDiff(targetPath, cwd);
+          return new GitDiffPager(diff, "git diff (commit)");
+        })();
+        diffPages.set(targetPath, pending);
+        void pending.catch(() => { diffPages.delete(targetPath); });
+      }
+      return (await pending).read(params, "git_file_diff", { filePath: targetPath });
     },
   };
 

@@ -4,7 +4,7 @@ Your task is to inspect the staged git changes and propose clean, atomic, conven
 
 ### Workflow:
 1. Always call \`git_overview\` first to examine all staged files and change statistics.
-2. If you need details on specific changes, call \`git_file_diff\` with \`filePath\` set to 1 or 2 key files where the core logic changed. Do not inspect lockfiles or large assets.
+2. Call \`git_file_diff\` for changed source and documentation files needed to understand every concern. Diffs are paginated: follow every \`nextOffset\` for each inspected file before treating it as reviewed. Only unchanged context is compressed; all changed lines, metadata and hunk numbers remain. Use \`raw: true, offset: 0\` to recover original context if needed. Lockfiles and large assets need detailed inspection only when relevant. Never infer unseen changes from the first page.
 3. Analyze whether the changes represent:
    - **Single concern**: A single feature, bugfix, refactor, or standalone documentation change -> call \`propose_commit\`.
    - **Multiple distinct concerns**: Changes that naturally belong to separate atomic commits (e.g. independent features or a feature plus an unrelated bugfix) -> call \`propose_commits\` with ordered commit stages.
@@ -32,7 +32,7 @@ The user invoked /commit with an instruction. Treat that instruction as the goal
 
 ### Workflow:
 1. Always call \`git_overview\` first to list all changed files.
-2. Inspect diffs with \`git_file_diff\` for files relevant to the instruction. Fine-grained text diff hunks (including zero-context edits) are numbered as [HUNK 1], [HUNK 2], etc.
+2. Inspect diffs with \`git_file_diff\` for files relevant to the instruction. Follow every \`nextOffset\` for each inspected file; the first page may not include later relevant hunks. Fine-grained text diff hunks (including zero-context edits) retain their original numbers as [HUNK 1], [HUNK 2], etc. Only unchanged context is compressed; use \`raw: true, offset: 0\` to recover original context if needed. Never select unseen hunks or claim a partial page is a full review.
 3. Select the smallest coherent set of changes that fulfills the user's instruction. You may select whole files or individual numbered hunks. Include documentation that explains or enables a selected feature even when the user did not name the docs file explicitly. Leave unrelated changes out; they will remain uncommitted and the user's staging state will be preserved.
 4. Propose one commit for a single concern, or multiple atomic commits for distinct concerns. Keep each selected feature's implementation and accompanying documentation in the same commit stage; never split them into a feature commit and a docs commit. Do not include unrelated changes merely to make the commit complete.
 5. Before finishing, check coverage: every hunk whose changed lines mention the instruction's key terms must be either selected or genuinely unrelated. Documentation hunks (README, docs/, usage blocks) that describe the selected feature belong in the commit even when the instruction does not name the file. If the proposal tool reports unselected hunks that mention the change, add them and call the tool again.

@@ -7,22 +7,6 @@ import type { CommitProposal, GitStagedOverview } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export const LOCKFILE_PATTERNS = [
-  /package-lock\.json$/,
-  /yarn\.lock$/,
-  /pnpm-lock\.yaml$/,
-  /bun\.lockb?$/,
-  /deno\.lock$/,
-  /Cargo\.lock$/,
-  /go\.sum$/,
-  /composer\.lock$/,
-  /Gemfile\.lock$/,
-  /poetry\.lock$/,
-  /flake\.lock$/,
-];
-
-export const MAX_FILE_DIFF_CHARS = 4000;
-
 export async function execGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
@@ -174,7 +158,7 @@ export async function getBranchDiffSummary(baseBranch: string, cwd: string): Pro
   };
 }
 
-export async function getBranchFullDiff(baseBranch: string, cwd: string, maxChars = 24000): Promise<string> {
+export async function getBranchFullDiff(baseBranch: string, cwd: string): Promise<string> {
   let baseRef = baseBranch;
   try {
     await execGit(["rev-parse", "--verify", `origin/${baseBranch}`], cwd);
@@ -184,11 +168,7 @@ export async function getBranchFullDiff(baseBranch: string, cwd: string, maxChar
   }
 
   try {
-    const diff = await execGit(["diff", `${baseRef}...HEAD`], cwd);
-    if (diff.length > maxChars) {
-      return `${diff.slice(0, maxChars)}\n\n[...diff truncated: exceeded ${maxChars} characters]`;
-    }
-    return diff;
+    return await execGit(["diff", "--no-ext-diff", "--no-color", `${baseRef}...HEAD`], cwd);
   } catch (err: any) {
     return `(Error reading diff: ${err?.message || String(err)})`;
   }
@@ -617,17 +597,9 @@ export async function getFileDiff(filePath: string, cwd: string): Promise<string
     return "(Invalid file path)";
   }
 
-  if (LOCKFILE_PATTERNS.some((pattern) => pattern.test(filePath))) {
-    return "(Diff omitted: lock/generated file)";
-  }
-
-  const rawDiff = await execGit(["diff", "--cached", "--", filePath], cwd);
+  const rawDiff = await execGit(["diff", "--cached", "--no-ext-diff", "--no-color", "--", `${LITERAL_EMPTY_STRING}${filePath}`], cwd);
   if (!rawDiff.trim()) {
     return "(No textual diff for file)";
-  }
-
-  if (rawDiff.length > MAX_FILE_DIFF_CHARS) {
-    return `${rawDiff.slice(0, MAX_FILE_DIFF_CHARS)}\n... [diff truncated: exceeded ${MAX_FILE_DIFF_CHARS} chars]`;
   }
 
   return rawDiff;

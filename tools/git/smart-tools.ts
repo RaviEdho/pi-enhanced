@@ -6,6 +6,7 @@ import {
   getBranchFullDiff,
   getConflictFiles,
 } from "./git.js";
+import { DiffPageProperties, GitDiffPager, SUMMARY_DIFF_PAGE_CHARS, type DiffPageInput } from "./diff.js";
 
 export interface PullRequestProposal {
   title: string;
@@ -30,6 +31,7 @@ export function createPrTools(
   cwd: string,
   onProposal: (pr: PullRequestProposal) => void
 ): ToolDefinition<any, unknown>[] {
+  let diffPages: Promise<GitDiffPager> | undefined;
   const branchOverviewTool: ToolDefinition<any, unknown> = {
     name: "git_branch_overview",
     label: "Git Branch Overview",
@@ -52,19 +54,14 @@ export function createPrTools(
   const branchDiffTool: ToolDefinition<any, unknown> = {
     name: "git_branch_diff",
     label: "Git Branch Diff",
-    description: "Inspect the raw diff between base branch and current branch",
-    parameters: Type.Object({}),
-    execute: async () => {
-      const diff = await getBranchFullDiff(baseBranch, cwd);
-      return {
-        content: [
-          {
-            type: "text",
-            text: diff,
-          },
-        ],
-        details: undefined,
-      };
+    description: "Inspect the complete branch diff in 32k-character pages (48KB/1800 lines max). Only unchanged context is compressed; follow nextOffset until complete. raw=true restores context.",
+    parameters: Type.Object(DiffPageProperties),
+    execute: async (_toolCallId, params: DiffPageInput) => {
+      if (!diffPages) {
+        diffPages = getBranchFullDiff(baseBranch, cwd).then((diff) => new GitDiffPager(diff, "git diff (PR)"));
+        void diffPages.catch(() => { diffPages = undefined; });
+      }
+      return (await diffPages).read(params, "git_branch_diff", {}, SUMMARY_DIFF_PAGE_CHARS);
     },
   };
 
