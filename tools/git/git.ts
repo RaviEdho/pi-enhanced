@@ -418,6 +418,142 @@ export function formatSelectiveFileDiff(snapshot: SelectiveDiffSnapshot, filePat
   return annotated.join("\n");
 }
 
+export interface UnselectedHunkMention {
+  filePath: string;
+  hunkId: number;
+  terms: string[];
+  preview: string;
+}
+
+// Instruction words that carry no selection signal on their own.
+const COVERAGE_STOPWORDS = new Set([
+  "add", "adds", "added", "adding", "update", "updates", "updated", "updating",
+  "fix", "fixes", "fixed", "fixing", "implement", "implements", "implemented", "implementing",
+  "refactor", "refactors", "refactored", "refactoring", "remove", "removes", "removed", "removing",
+  "change", "changes", "changed", "changing", "support", "supports", "supported", "supporting",
+  "feature", "features", "improve", "improves", "improved", "improving", "use", "uses", "used",
+  "using", "make", "makes", "made", "ensure", "ensures", "allow", "allows", "allowed",
+  "include", "includes", "included", "including", "keep", "keeps", "kept", "handle", "handles",
+  "handled", "introduce", "introduces", "introduced", "new", "also", "plus", "and", "or",
+  "but", "for", "with", "without", "from", "into", "onto", "over", "under", "about", "after",
+  "before", "while", "during", "per", "via", "the", "a", "an", "of", "to", "in", "on", "at",
+  "by", "as", "is", "are", "be", "been", "was", "were", "will", "would", "should", "can",
+  "could", "may", "might", "must", "not", "no", "all", "any", "some", "more", "most", "other",
+  "this", "that", "these", "those", "it", "its", "they", "them", "their", "we", "you", "your",
+  "our", "i", "me", "my", "when", "then", "than", "so", "if", "else", "just", "only", "very",
+  "same", "both", "each", "every", "such", "own", "too", "etc", "command", "commands",
+  "subcommand", "subcommands", "helper", "helpers", "option", "options", "flag", "flags", "docs",
+  "doc", "documentation", "readme", "readmes", "file", "files", "code", "thing", "stuff",
+]);
+
+/**
+ * Extracts meaningful keywords from a user instruction or commit subject.
+ * Splits on punctuation, slashes, and dashes so `/git discard --untracked`
+ * yields `git`, `discard`, and `untracked`.
+ */
+export function extractCoverageTerms(text: string): string[] {
+  const terms = new Set<string>();
+  for (const chunk of text.toLowerCase().split(/[^a-z0-9_./-]+/)) {
+    for (const piece of chunk.split(/[./-]+/)) {
+      const term = piece.replace(/^_+|_+$/g, "");
+      if (term.length < 3 || term.length > 40) continue;
+      if (/^\d+$/.test(term)) continue;
+      if (COVERAGE_STOPWORDS.has(term)) continue;
+      terms.add(term);
+    }
+  }
+  return [...terms];
+}
+
+function hunkSearchText(hunk: string[]): string {
+  return hunk
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line))
+    .map((line) => line.slice(1))
+    .join("\n")
+    .toLowerCase();
+}
+
+function hunkPreview(hunk: string[]): string {
+  const line = hunk.find((entry) => /^[+-]/.test(entry) && !/^(\+\+\+|---)/.test(entry));
+  return (line ?? "").slice(1).trim();
+}
+
+function termPattern(term: string): RegExp {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, "i");
+}
+
+/**
+ * Finds hunks that no commit stage selected but whose changed lines mention the
+ * instruction's keywords. Used to catch documentation hunks that belong with a
+ * feature but were left out of the selection.
+ */
+export function findUnselectedHunkMentions(
+  snapshot: SelectiveDiffSnapshot,
+  stages: CommitProposal[],
+  terms: string[]
+): UnselectedHunkMention[] {
+  if (terms.length === 0) return [];
+
+  const wholeFiles = new Set<string>();
+  const selectedHunks = new Map<string, Set<number>>();
+  for (const stage of stages) {
+    for (const file of stage.files ?? []) wholeFiles.add(file);
+    for (const selection of stage.hunks ?? []) {
+      const ids = selectedHunks.get(selection.filePath) ?? new Set<number>();
+      for (const id of selection.hunkIds) ids.add(id);
+      selectedHunks.set(selection.filePath, ids);
+    }
+  }
+
+  const allHunks: { filePath: string; hunkId: number; text: string; preview: string; selected: boolean }[] = [];
+  for (const filePath of snapshot.files) {
+    const patch = snapshot.patches.get(filePath);
+    if (!patch) continue;
+    const wholeFile = wholeFiles.has(filePath);
+    const selected = selectedHunks.get(filePath) ?? new Set<number>();
+    getPatchHunks(patch).forEach((hunk, index) => {
+      const hunkId = index + 1;
+      const text = hunkSearchText(hunk);
+      if (!text.trim()) return;
+      allHunks.push({
+        filePath,
+        hunkId,
+        text,
+        preview: hunkPreview(hunk),
+        selected: wholeFile || selected.has(hunkId),
+      });
+    });
+  }
+  const candidates = allHunks.filter((hunk) => !hunk.selected);
+  if (candidates.length === 0) return [];
+
+  const patterns = terms.map((term) => ({ term, re: termPattern(term) }));
+  const counts = new Map<string, number>();
+  for (const { term, re } of patterns) {
+    counts.set(term, allHunks.filter((hunk) => re.test(hunk.text)).length);
+  }
+
+  // Drop terms spread across most hunks in the change set: they are too generic
+  // to distinguish the requested change from unrelated edits.
+  const maxCount = allHunks.length >= 4 ? Math.max(1, Math.floor(allHunks.length * 0.4)) : allHunks.length;
+  const specific = patterns.filter(({ term }) => (counts.get(term) ?? 0) <= maxCount);
+  if (specific.length === 0) return [];
+
+  const mentions: UnselectedHunkMention[] = [];
+  for (const candidate of candidates) {
+    const matched = specific.filter(({ re }) => re.test(candidate.text)).map(({ term }) => term);
+    if (matched.length === 0) continue;
+    mentions.push({
+      filePath: candidate.filePath,
+      hunkId: candidate.hunkId,
+      terms: matched,
+      preview: candidate.preview.length > 100 ? `${candidate.preview.slice(0, 97)}...` : candidate.preview,
+    });
+  }
+  return mentions;
+}
+
 export async function assertSelectiveSnapshotUnchanged(
   snapshot: SelectiveDiffSnapshot,
   cwd: string

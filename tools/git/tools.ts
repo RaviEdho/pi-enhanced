@@ -1,6 +1,8 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  extractCoverageTerms,
+  findUnselectedHunkMentions,
   formatSelectiveFileDiff,
   getFileDiff,
   getStagedOverview,
@@ -110,9 +112,29 @@ export function createCommitTools(options: {
   onAction?: (action: Omit<CommitActionEntry, "timestamp">) => void;
   diffedFiles?: string[];
   selectiveSnapshot?: SelectiveDiffSnapshot;
+  instruction?: string;
   signal?: AbortSignal;
 }): ToolDefinition[] {
-  const { cwd, onPropose, onAction, diffedFiles, selectiveSnapshot, signal } = options;
+  const { cwd, onPropose, onAction, diffedFiles, selectiveSnapshot, instruction, signal } = options;
+
+  // Tell the agent when unselected hunks mention the requested change, so it can
+  // add them before finishing. The last proposal wins, so a corrected call
+  // replaces the incomplete one.
+  const coverageWarning = (stages: CommitProposal[]): string => {
+    if (!selectiveSnapshot || !instruction) return "";
+    const terms = extractCoverageTerms(instruction);
+    const mentions = findUnselectedHunkMentions(selectiveSnapshot, stages, terms);
+    if (mentions.length === 0) return "";
+    const lines = mentions.map(
+      (mention) => `  - ${mention.filePath} [HUNK ${mention.hunkId}] (${mention.terms.join(", ")}): ${mention.preview}`
+    );
+    return [
+      "",
+      "WARNING: these unselected hunks mention the requested change:",
+      ...lines,
+      "If they document or implement the same change, call the proposal tool again with those hunks added (the last proposal wins). Otherwise leave them out.",
+    ].join("\n");
+  };
 
   const gitOverviewTool: ToolDefinition<any, unknown> = {
     name: "git_overview",
@@ -244,7 +266,7 @@ export function createCommitTools(options: {
             stages,
           });
           return {
-            content: [{ type: "text", text: `Multi-stage commit plan with ${stages.length} commit(s) recorded.` }],
+            content: [{ type: "text", text: `Multi-stage commit plan with ${stages.length} commit(s) recorded.${coverageWarning(stages)}` }],
             details: undefined,
           };
         }
@@ -271,7 +293,7 @@ export function createCommitTools(options: {
         content: [
           {
             type: "text",
-            text: "Commit proposal received and recorded. Done.",
+            text: `Commit proposal received and recorded. Done.${coverageWarning([single])}`,
           },
         ],
         details: undefined,
@@ -312,7 +334,7 @@ export function createCommitTools(options: {
         content: [
           {
             type: "text",
-            text: `Multi-commit plan with ${stages.length} atomic stage(s) recorded. Done.`,
+            text: `Multi-commit plan with ${stages.length} atomic stage(s) recorded.${coverageWarning(stages)}`,
           },
         ],
         details: undefined,

@@ -12,6 +12,8 @@ import {
   execGit,
   executeMultiCommit,
   executeSelectiveCommits,
+  extractCoverageTerms,
+  findUnselectedHunkMentions,
   getSelectiveDiffSnapshot,
   getStagedOverview,
   getWorkingTreeStatus,
@@ -25,6 +27,7 @@ import {
   validateSelectiveCommitPlan,
   type SelectiveDiffSnapshot,
   type StashedState,
+  type UnselectedHunkMention,
 } from "./git.js";
 import { CommitStatusBroadcaster } from "./editor.js";
 import { CommitConfirmationDialog } from "./dialog.js";
@@ -522,6 +525,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           broadcaster.addAction(action);
         },
         diffedFiles,
+        instruction: selectiveMode ? cleanArgs : undefined,
         signal: abortController.signal,
       });
 
@@ -716,6 +720,15 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           return;
         }
       }
+
+      // Warn when unselected hunks mention the requested change (e.g. a README
+      // usage block that belongs with the feature but was not selected).
+      const computeCoverageWarnings = (stages: CommitProposal[]): UnselectedHunkMention[] => {
+        if (!selectiveMode || !selectiveSnapshot) return [];
+        const terms = extractCoverageTerms([cleanArgs, ...stages.map((stage) => stage.subject)].join(" "));
+        return findUnselectedHunkMentions(selectiveSnapshot, stages, terms);
+      };
+      let coverageWarnings = computeCoverageWarnings(commitPlan.stages);
 
       // Fallback calculation for totalCost if model has rates but was not populated
       if (totalCost === 0 && model.cost && (model.cost.input > 0 || model.cost.output > 0)) {
@@ -913,6 +926,12 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             const files = formatCommitFiles(stage);
             if (files) process.stdout.write(`     Files: ${files}\n`);
           }
+          if (coverageWarnings.length > 0) {
+            process.stdout.write(`[commit] Warning: ${coverageWarnings.length} unselected hunk(s) mention this change:\n`);
+            for (const mention of coverageWarnings) {
+              process.stdout.write(`  - ${mention.filePath} [HUNK ${mention.hunkId}] (${mention.terms.join(", ")}): ${mention.preview}\n`);
+            }
+          }
           process.stdout.write("[commit] No commit made: selective commits require interactive review and confirmation.\n");
           return;
         }
@@ -988,6 +1007,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
                   overview,
                   diffedFiles,
                   usage,
+                  coverageWarnings,
                   onDone: (res) => done(res),
                 },
                 keybindings
@@ -1029,7 +1049,12 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
               const hunks = stage.hunks?.map((selection) => `${selection.filePath}: ${selection.hunkIds.join(", ")}`).join("; ");
               return `${index + 1}. ${header}${stage.body?.trim() ? `\n${stage.body.trim()}` : ""}${files ? `\nFiles: ${files}` : ""}${hunks ? `\nHunks: ${hunks}` : ""}`;
             }).join("\n\n");
-            ctx.ui.notify(`Commit proposal (${costBadge})\nModel: ${usage.modelId}\n\n${proposal}`, "info");
+            const coverageNote = coverageWarnings.length > 0
+              ? `\n\nWarning: ${coverageWarnings.length} unselected hunk(s) mention this change:\n${coverageWarnings
+                  .map((mention) => `- ${mention.filePath} [HUNK ${mention.hunkId}] (${mention.terms.join(", ")}): ${mention.preview}`)
+                  .join("\n")}`
+              : "";
+            ctx.ui.notify(`Commit proposal (${costBadge})\nModel: ${usage.modelId}\n\n${proposal}${coverageNote}`, "info");
           }
 
           const choice = await ctx.ui.select(`Commit Proposal (${costBadge})`, [
@@ -1094,6 +1119,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             ...commitPlan,
             stages: newStages,
           };
+          coverageWarnings = computeCoverageWarnings(commitPlan.stages);
           continue;
         }
 

@@ -3,6 +3,7 @@ import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import { DialogFrame, renderDialogActions } from "../../ux/dialog.js";
 import { formatCommitFiles, formatCost, formatDuration } from "./format.js";
+import type { UnselectedHunkMention } from "./git.js";
 import type {
   CommitActionEntry,
   CommitConfirmationResult,
@@ -17,6 +18,7 @@ export interface CommitConfirmationDialogOptions {
   overview: GitStagedOverview;
   diffedFiles: string[];
   usage: CommitUsageCost;
+  coverageWarnings?: UnselectedHunkMention[];
   onDone: (result: CommitConfirmationResult) => void;
 }
 
@@ -27,6 +29,7 @@ export class CommitConfirmationDialog implements Component {
   private plan: CommitPlanProposal;
   private overview: GitStagedOverview;
   private usage: CommitUsageCost;
+  private coverageWarnings: UnselectedHunkMention[];
   private onDone: (result: CommitConfirmationResult) => void;
   private keybindings?: any;
   private selectedIndex: number = 0; // 0 = Commit, 1 = Commit & Push, 2 = Edit
@@ -46,6 +49,7 @@ export class CommitConfirmationDialog implements Component {
     this.plan = options.plan;
     this.overview = options.overview;
     this.usage = options.usage;
+    this.coverageWarnings = options.coverageWarnings ?? [];
     this.onDone = options.onDone;
 
     if (this.plan.stages.length > 0) {
@@ -216,6 +220,31 @@ export class CommitConfirmationDialog implements Component {
     const turnsInfo = `${this.usage.turns} turn${this.usage.turns === 1 ? "" : "s"} in ${formatDuration(this.usage.durationMs)}`;
     const overviewLabel = this.overview.label ?? "Staged";
     append(`${overviewLabel}: ${stagedCount} file${stagedCount === 1 ? "" : "s"}${statSummary} • ${turnsInfo}`, 2, mutedFn);
+
+    // Unselected hunks that mention the requested change (e.g. a README usage
+    // block left out of the selection).
+    if (this.coverageWarnings.length > 0) {
+      const warnFn = (s: string) => (this.theme?.fg ? this.theme.fg("warning", s) : s);
+      lines.push("");
+      append(
+        `⚠ ${this.coverageWarnings.length} unselected hunk${this.coverageWarnings.length === 1 ? "" : "s"} mention this change:`,
+        2,
+        warnFn
+      );
+      for (const mention of this.coverageWarnings.slice(0, 5)) {
+        append(`${mention.filePath} [HUNK ${mention.hunkId}] ${mention.terms.join(", ")}`, 4, mutedFn);
+      }
+      if (this.coverageWarnings.length > 5) {
+        append(`…and ${this.coverageWarnings.length - 5} more`, 4, mutedFn);
+      }
+      append(
+        isMulti
+          ? "Press e to edit the plan and add them, or c to commit as-is."
+          : "Press Esc and re-run /commit to include them, or c to commit as-is.",
+        2,
+        mutedFn
+      );
+    }
 
     lines.push("");
 

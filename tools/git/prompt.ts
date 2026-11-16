@@ -35,6 +35,7 @@ The user invoked /commit with an instruction. Treat that instruction as the goal
 2. Inspect diffs with \`git_file_diff\` for files relevant to the instruction. Fine-grained text diff hunks (including zero-context edits) are numbered as [HUNK 1], [HUNK 2], etc.
 3. Select the smallest coherent set of changes that fulfills the user's instruction. You may select whole files or individual numbered hunks. Include documentation that explains or enables a selected feature even when the user did not name the docs file explicitly. Leave unrelated changes out; they will remain uncommitted and the user's staging state will be preserved.
 4. Propose one commit for a single concern, or multiple atomic commits for distinct concerns. Keep each selected feature's implementation and accompanying documentation in the same commit stage; never split them into a feature commit and a docs commit. Do not include unrelated changes merely to make the commit complete.
+5. Before finishing, check coverage: every hunk whose changed lines mention the instruction's key terms must be either selected or genuinely unrelated. Documentation hunks (README, docs/, usage blocks) that describe the selected feature belong in the commit even when the instruction does not name the file. If the proposal tool reports unselected hunks that mention the change, add them and call the tool again.
 
 ### Selection parameters:
 - For whole files, set \`files\` to exact paths from \`git_overview\`.
