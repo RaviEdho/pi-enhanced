@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 
-// Share first-use imports across parallel result hooks and /recall or /gain.
+// Share first-use imports across parallel result hooks and /recall.
 // Jiti can otherwise expose classes before their modules finish initializing.
 let compressorModulesPromise: Promise<[
   typeof import("./pipeline.js"),
@@ -142,21 +142,6 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
         await ctx.ui.editor(`Raw Output: ${entry.command}`, entry.rawText);
       } else {
         console.log(`=== Raw Output: ${entry.command} ===\n${entry.rawText}`);
-      }
-    },
-  });
-
-  // /gain command to view token savings analytics
-  pi.registerCommand("gain", {
-    description: "Display token savings achieved by native output filtering",
-    handler: async (_args, ctx) => {
-      const [, , { GainTracker }] = await loadCompressorModules();
-      const tracker = GainTracker.getInstance();
-      const summaryText = tracker.formatSummary();
-      if (ctx.hasUI && ctx.mode === "tui") {
-        ctx.ui.notify(summaryText, "info");
-      } else {
-        console.log(summaryText);
       }
     },
   });
