@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   execGit,
@@ -23,6 +25,140 @@ export async function handleSyncCommand(ctx: ExtensionCommandContext): Promise<v
     ctx.ui.notify(`Synced: ${pullOut || "Up to date"} • ${pushOut || "Pushed"}`, "info");
   } catch (err: any) {
     ctx.ui.notify(`Sync failed: ${err?.message}`, "error");
+  } finally {
+    ctx.ui.setWorkingMessage?.();
+  }
+}
+
+async function hasRef(cwd: string, ref: string): Promise<boolean> {
+  try {
+    const out = (await execGit(["rev-parse", "--verify", "-q", ref], cwd)).trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function hasGitState(cwd: string, name: string): Promise<boolean> {
+  try {
+    const gitPath = (await execGit(["rev-parse", "--git-path", name], cwd)).trim();
+    return gitPath.length > 0 && existsSync(resolve(cwd, gitPath));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Discards uncommitted changes in the working tree and index.
+ * Tracked changes are always discarded; untracked files are only removed with --untracked.
+ */
+export async function handleDiscardCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
+  const cwd = ctx.cwd;
+  if (!(await isGitRepository(cwd))) {
+    ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' first.", "error");
+    return;
+  }
+
+  const flag = args.trim();
+  if (flag && !/^(?:--untracked|-u)$/i.test(flag)) {
+    ctx.ui.notify("Usage: /git discard [--untracked]", "warning");
+    return;
+  }
+  const includeUntracked = flag.length > 0;
+
+  // Never rewrite history mid-operation; the user should finish or abort it first.
+  const inProgress: string[] = [];
+  if (await hasGitState(cwd, "MERGE_HEAD")) inProgress.push("merge");
+  if (await hasGitState(cwd, "CHERRY_PICK_HEAD")) inProgress.push("cherry-pick");
+  if (await hasGitState(cwd, "REVERT_HEAD")) inProgress.push("revert");
+  if ((await hasGitState(cwd, "rebase-merge")) || (await hasGitState(cwd, "rebase-apply"))) inProgress.push("rebase");
+  if (await hasGitState(cwd, "BISECT_LOG")) inProgress.push("bisect");
+  if (inProgress.length > 0) {
+    ctx.ui.notify(
+      `Cannot discard changes during an in-progress ${inProgress.join("/")}. Finish or abort it first.`,
+      "error"
+    );
+    return;
+  }
+
+  let statusRaw: string;
+  try {
+    statusRaw = await execGit(["status", "--porcelain"], cwd);
+  } catch (err: any) {
+    ctx.ui.notify(`Failed to inspect working tree: ${err?.message}`, "error");
+    return;
+  }
+
+  const lines = statusRaw.split("\n").filter((line) => line.trim().length > 0);
+  const untracked = lines.filter((line) => line.startsWith("??"));
+  const tracked = lines.filter((line) => !line.startsWith("??"));
+  const trackedStaged = tracked.filter((line) => line[0] !== " ");
+  const trackedUnstaged = tracked.filter((line) => line[1] !== " ");
+
+  if (tracked.length === 0 && (!includeUntracked || untracked.length === 0)) {
+    if (!includeUntracked && untracked.length > 0) {
+      ctx.ui.notify(
+        `No tracked changes to discard. ${untracked.length} untracked file${untracked.length === 1 ? "" : "s"} preserved; pass --untracked to delete them.`,
+        "info"
+      );
+    } else {
+      ctx.ui.notify("Working tree clean; nothing to discard.", "info");
+    }
+    return;
+  }
+
+  const hasHead = await hasRef(cwd, "HEAD");
+  const headSubject = hasHead ? await execGit(["log", "-1", "--oneline"], cwd).catch(() => "") : "";
+  const detailLines: string[] = [];
+  if (trackedStaged.length) detailLines.push(`Staged: ${trackedStaged.length} file${trackedStaged.length === 1 ? "" : "s"}`);
+  if (trackedUnstaged.length) detailLines.push(`Unstaged: ${trackedUnstaged.length} file${trackedUnstaged.length === 1 ? "" : "s"}`);
+  if (includeUntracked && untracked.length) {
+    detailLines.push(`Untracked to delete: ${untracked.length} file${untracked.length === 1 ? "" : "s"}`);
+  } else if (untracked.length) {
+    detailLines.push(`Untracked preserved: ${untracked.length} file${untracked.length === 1 ? "" : "s"} (use --untracked to delete)`);
+  }
+  const scope = hasHead
+    ? `Restore the working tree to:\n${headSubject.trim()}\n\n`
+    : "No commits yet; staged entries will be unstaged and file contents kept.\n\n";
+  const warning = !hasHead
+    ? "Nothing exists in history to restore from, so only the index is reset."
+    : includeUntracked
+      ? "This permanently discards tracked changes and deletes untracked files. Ignored files are kept."
+      : "This permanently discards tracked changes. Untracked files are kept.";
+  const message = `${scope}${detailLines.join("\n")}\n\n${warning}\nThis cannot be undone.`;
+
+  if (ctx.hasUI) {
+    const confirmed = await ctx.ui.confirm("Confirm Discard Changes", message);
+    if (!confirmed) {
+      ctx.ui.notify("Discard cancelled.", "info");
+      return;
+    }
+  }
+
+  ctx.ui.setWorkingMessage?.("Discarding uncommitted changes…");
+  try {
+    if (hasHead) {
+      await execGit(["reset", "--hard", "HEAD"], cwd);
+    } else {
+      // Unborn branch: nothing exists in history to restore from, so only unstage.
+      await execGit(["rm", "-r", "--cached", "--quiet", "."], cwd).catch(() => {});
+    }
+
+    let removedUntracked = 0;
+    if (includeUntracked && untracked.length > 0) {
+      removedUntracked = untracked.length;
+      await execGit(["clean", "-fd"], cwd);
+    }
+
+    const parts = hasHead
+      ? [`Discarded ${tracked.length} tracked change${tracked.length === 1 ? "" : "s"}`]
+      : [`Unstaged ${trackedStaged.length} staged entr${trackedStaged.length === 1 ? "y" : "ies"}`];
+    if (removedUntracked > 0) {
+      parts.push(`removed ${removedUntracked} untracked entr${removedUntracked === 1 ? "y" : "ies"}`);
+    }
+    ctx.ui.notify(`${parts.join(" • ")}.`, "info");
+  } catch (err: any) {
+    ctx.ui.notify(`Discard failed: ${err?.message}`, "error");
   } finally {
     ctx.ui.setWorkingMessage?.();
   }
@@ -110,6 +246,9 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       "Create Pull Request (/git pr)",
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
+      ...(changes.staged.length || changes.unstaged.length || changes.untracked.length
+        ? ["Discard uncommitted changes (/git discard)"]
+        : []),
     ]);
 
     if (choice?.startsWith("Summarize")) {
@@ -128,6 +267,8 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       await handleBranchCommand("", ctx);
     } else if (choice?.includes("Undo")) {
       await handleUndoCommand(ctx);
+    } else if (choice?.includes("Discard")) {
+      await handleDiscardCommand(ctx);
     }
   } else {
     process.stdout.write(`\n=== Git Status ===\n${summary}\n\n`);
