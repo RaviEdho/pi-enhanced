@@ -207,6 +207,16 @@ callbacks where commands and lifecycle depend on each other.
   (`getChannelSessionKey`), separate from thread sessions, and reply to the triggering
   message. They are exempt from thread title generation but keep normal queueing, run slots,
   author labels, and history scopes (the channel is its own history parent).
+- Every new server thread forks the parent channel's shared Pi history when available,
+  regardless of routing mode, classifier fallback, or follow-up escalation. Look up
+  the exact saved source from the live session or persisted workspace metadata without
+  opening a source child. Wait behind earlier channel work and hold its queue until
+  the thread child has forked, so a concurrent channel turn cannot alter the history
+  during the copy. Acquire run slots only inside that source-queue task, never while
+  waiting for the source queue. With no usable source, start fresh with normal bounded
+  Discord context. Existing threads resume their own history and are never reseeded;
+  later channel/thread turns remain independent. This copies shared channel history,
+  not just the requesting participant's turns, and does not reuse previous threads.
 - `toolCallVisibility` independently gates tool activity/failure reports and assistant
   narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
   values default to channels off, threads and DMs on, including legacy configurations.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { loadWorkspace, validateForkSource } from "./workspace.mjs";
 
 /** Owns session affinity, per-conversation ordering, and global run slots. */
 export function createSessionManager({
@@ -28,6 +29,23 @@ export function createSessionManager({
   function seed(key, sourceFile) {
     if (closing || typeof sourceFile !== "string" || !sourceFile) return;
     seededSources.set(key, sourceFile);
+  }
+
+  function sessionDirectoryFor(key) {
+    const hash = createHash("sha256").update(key).digest("hex");
+    return join(sessionRoot, hash);
+  }
+
+  /** Find saved history without reopening an idle/evicted source conversation. */
+  function getForkSource(key) {
+    try {
+      const source = sessions.get(key)?.sessionFile
+        ?? loadWorkspace(sessionDirectoryFor(key))?.sessionFile;
+      return source ? validateForkSource(source) : undefined;
+    } catch {
+      // Missing or invalid history must not prevent a new thread from starting.
+      return undefined;
+    }
   }
 
   function enqueue(key, task) {
@@ -95,8 +113,7 @@ export function createSessionManager({
     assertOpen();
     if (sessions.size >= maxOpenSessions) await closeLeastRecentlyUsedIdleSession();
     assertOpen();
-    const hash = createHash("sha256").update(key).digest("hex");
-    const sessionDirectory = join(sessionRoot, hash);
+    const sessionDirectory = sessionDirectoryFor(key);
     mkdirSync(sessionDirectory, { recursive: true, mode: 0o700 });
     try { chmodSync(sessionDirectory, 0o700); } catch { /* best-effort on non-POSIX filesystems */ }
     const created = createSession(sessionDirectory, { seed: seededSources.get(key) });
@@ -153,6 +170,7 @@ export function createSessionManager({
   return {
     get,
     seed,
+    getForkSource,
     peek: (key) => sessions.get(key),
     enqueue,
     withRunSlot,

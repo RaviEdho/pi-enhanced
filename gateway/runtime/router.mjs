@@ -205,6 +205,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     let conversationLabel;
     let replyToMessageId = message.id;
     let channelConversation = false;
+    let forkSourceKey;
     if (route.kind === "dm") {
       sessionKey = `dm:${message.channelId}:${message.author.id}`;
       conversationLabel = `DM with ${message.author.username}`;
@@ -230,6 +231,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           threads.register(thread.id, registration);
           target = thread;
           sessionKey = getThreadSessionKey(thread.id, registration);
+          forkSourceKey = getChannelSessionKey(message.guildId, message.channelId);
           conversationLabel = `Discord thread ${thread.id}`;
           replyToMessageId = undefined;
           log(`Created thread ${thread.id} in allowlisted channel ${message.channelId} (${decision.reason})`);
@@ -248,6 +250,16 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     const queuedRun = sessions.enqueue(sessionKey, async () => {
       const typing = startTyping(target);
       try {
+        if (forkSourceKey) {
+          // Wait for earlier channel turns, and hold its queue until Pi has
+          // copied the source. Never hold a run slot while waiting on that queue.
+          await sessions.enqueue(forkSourceKey, async () => {
+            const source = sessions.getForkSource(forkSourceKey);
+            if (!source) return;
+            sessions.seed(sessionKey, source);
+            await sessions.withRunSlot(() => sessions.get(sessionKey));
+          });
+        }
         const result = await sessions.withRunSlot(async () => {
           const replyContext = await getReplyContext();
           const recentContext = contextMessageCount > 0 && !watermark.skip
