@@ -256,8 +256,8 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
           ? [
             {
               label: "Routing model",
-              currentValue: config.channelReplies.routerModel ? `${config.channelReplies.routerModel.provider}/${config.channelReplies.routerModel.id}` : "cheapest available",
-              description: "Choose the model that decides between channel and thread replies. Each new server conversation costs one extra model call; failures start a thread.",
+              currentValue: routingModelLabel(config.channelReplies.routerModel),
+              description: "Use the cheapest authenticated model, Pi's global default, the gateway's default, or a specific model. Each routing decision costs one model call; failures start a thread.",
             },
             {
               label: "Routing context",
@@ -839,6 +839,12 @@ function channelReplyModeLabel(mode: DiscordChannelReplyMode): string {
   return mode === "always-thread" ? "always thread" : mode === "channel" ? "channel only" : "model decides";
 }
 
+function routingModelLabel(model: DiscordGatewayConfig["channelReplies"]["routerModel"]): string {
+  if (model === "pi-default") return "Pi default";
+  if (model === "gateway-default") return "Gateway default";
+  return model ? `${model.provider}/${model.id}` : "cheapest available";
+}
+
 function contextMessagesLabel(count: number): string {
   return count === 0 ? "off" : `${count} message${count === 1 ? "" : "s"}`;
 }
@@ -867,7 +873,8 @@ async function configureChannelReplies(ctx: ExtensionCommandContext, config: Dis
 
 async function configureRoutingModel(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
   const refresh = refreshProviderCatalogs(ctx);
-  const currentValue = config.channelReplies.routerModel ? `${config.channelReplies.routerModel.provider}/${config.channelReplies.routerModel.id}` : "";
+  const routerModel = config.channelReplies.routerModel;
+  const currentValue = typeof routerModel === "string" ? routerModel : routerModel ? `${routerModel.provider}/${routerModel.id}` : "";
   const models = (await getAvailablePickerModels(ctx))
     .map((model) => ({ value: `${model.provider}/${model.id}`, model }))
     .sort((a, b) => a.value.localeCompare(b.value));
@@ -877,25 +884,40 @@ async function configureRoutingModel(ctx: ExtensionCommandContext, config: Disco
       label: currentValue ? "Cheapest available" : "Cheapest available (current)",
       description: "Use the lowest-cost authenticated chat model at decision time",
     },
+    {
+      value: "pi-default",
+      label: `Pi default${currentValue === "pi-default" ? " (current)" : ""}`,
+      description: "Follow Pi's global saved default at each decision; missing/unavailable defaults start a thread",
+    },
+    {
+      value: "gateway-default",
+      label: `Gateway default${currentValue === "gateway-default" ? " (current)" : ""}`,
+      description: "Follow the gateway's configured default; use the cheapest authenticated model when unset",
+    },
     ...models.map(({ value, model }) => ({
       value,
       label: `${value}${value === currentValue ? " (current)" : ""}`,
       description: model.name,
     })),
   ];
-  const selected = await selectDiscordModel(ctx, choices, currentValue, refresh);
+  const selected = await selectDiscordModel(ctx, choices, currentValue, refresh, {
+    title: "Discord Routing Model",
+    description: `Current: ${routingModelLabel(routerModel)}. Chooses channel or thread replies; defaults are followed at decision time.`,
+  });
   if (selected === undefined) return;
   if (selected === currentValue) {
     notify(ctx, "Routing model is unchanged.", "info");
     return;
   }
   const model = models.find((entry) => entry.value === selected)?.model;
-  if (selected && !model) return;
+  if (selected && selected !== "pi-default" && selected !== "gateway-default" && !model) return;
+  const nextModel = selected === "pi-default" || selected === "gateway-default"
+    ? selected : model ? { provider: model.provider, id: model.id } : undefined;
   saveGatewayConfig(
     ctx,
     config,
-    { channelReplies: { ...config.channelReplies, ...(model ? { routerModel: { provider: model.provider, id: model.id } } : { routerModel: undefined }) } },
-    `Routing model set to ${selected || "the cheapest available model"}. Each new server conversation costs one extra model call.`
+    { channelReplies: { ...config.channelReplies, routerModel: nextModel } },
+    `Routing model set to ${routingModelLabel(nextModel)}. Each new server conversation costs one extra model call.`
   );
 }
 

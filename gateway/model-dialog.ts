@@ -6,12 +6,13 @@ export async function selectDiscordModel(
   ctx: ExtensionCommandContext,
   choices: SelectItem[],
   currentValue: string,
-  refresh?: Promise<void>
+  refresh?: Promise<void>,
+  presentation?: { title: string; description: string }
 ): Promise<string | undefined> {
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     try {
       return await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
-        new DiscordModelDialog(tui, theme, keybindings, choices, currentValue, done, refresh)
+        new DiscordModelDialog(tui, theme, keybindings, choices, currentValue, done, refresh, presentation)
       );
     } catch {
       // RPC clients and hosts without custom rendering use Pi's native selector.
@@ -20,7 +21,8 @@ export async function selectDiscordModel(
 
   if (refresh) ctx.ui.notify("Refreshing model catalogs in the background; reopen the picker to see updates.", "info");
   const selected = await ctx.ui.select(
-    `Discord Default Model\nCurrent: ${currentValue || "Pi default"}\nUsed when gateway Pi sessions start.`,
+    presentation ? `${presentation.title}\n${presentation.description}`
+      : `Discord Default Model\nCurrent: ${currentValue || "Pi default"}\nUsed when gateway Pi sessions start.`,
     choices.map((choice) => choice.label)
   );
   return choices.find((choice) => choice.label === selected)?.value;
@@ -34,11 +36,12 @@ export class DiscordModelDialog extends ModelPickerComponent {
     choices: SelectItem[],
     currentValue: string,
     onDone: (value: string | undefined) => void,
-    refresh?: Promise<void>
+    refresh?: Promise<void>,
+    presentation?: { title: string; description: string }
   ) {
     super(tui, theme, keybindings, {
-      title: "Discord Default Model",
-      description: `Current: ${currentValue || "Pi default"}. Used when gateway Pi sessions start.`,
+      title: presentation?.title ?? "Discord Default Model",
+      description: presentation?.description ?? `Current: ${currentValue || "Pi default"}. Used when gateway Pi sessions start.`,
       choices,
       currentValue,
       refresh,

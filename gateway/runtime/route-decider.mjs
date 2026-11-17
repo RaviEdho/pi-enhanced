@@ -69,17 +69,30 @@ export function buildRoutingPrompt({ content, author, isReply, imageCount, embed
   return `${INSTRUCTIONS}\n\n${context}\nauthor: ${safeAuthor(author) || "unknown"}${history}\n\n<message>\n${message}\n</message>`;
 }
 
-/** Honor an explicit router model exactly; otherwise pick the cheapest chat model. */
+/** Honor a resolved explicit/default model exactly; only omission picks the cheapest. */
 export function pickRouterModel(models, preferred) {
   const chat = Array.isArray(models) ? models.filter((model) => (model.type ?? "chat") === "chat") : [];
-  if (preferred?.provider && preferred?.id) {
-    return chat.find((model) => model.provider === preferred.provider && model.id === preferred.id);
+  if (preferred !== undefined) {
+    return chat.find((model) => preferred?.provider && preferred?.id &&
+      model.provider === preferred.provider && model.id === preferred.id);
   }
   return chat
     .slice()
     .sort((a, b) => (a.cost?.output ?? 0) - (b.cost?.output ?? 0)
       || (a.cost?.input ?? 0) - (b.cost?.input ?? 0)
       || `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`))[0];
+}
+
+/** Read only Pi's global saved default, never project settings or the active session. */
+export async function loadPiDefaultModel(cwd) {
+  const { SettingsManager, getAgentDir } = await import("@earendil-works/pi-coding-agent");
+  const settings = SettingsManager.create(cwd, getAgentDir());
+  if (settings.drainErrors().some((error) => error.scope === "global")) {
+    throw new Error("Pi's global settings could not be read");
+  }
+  const { defaultProvider, defaultModel } = settings.getGlobalSettings();
+  return typeof defaultProvider === "string" && defaultProvider && typeof defaultModel === "string" && defaultModel
+    ? { provider: defaultProvider, id: defaultModel } : undefined;
 }
 
 export async function loadPiModels() {
@@ -122,20 +135,41 @@ export async function loadPiModels() {
  * server conversation. Never throws: every failure falls back to a thread,
  * which is the reversible choice.
  */
-export function createRouteDecider({ config, loadModels = loadPiModels, now = Date.now }) {
+export function createRouteDecider({ config, loadModels = loadPiModels, loadDefaultModel = loadPiDefaultModel, now = Date.now }) {
   const settings = config?.channelReplies ?? {};
   let prepared;
   let preparing;
+  let loadedRuntime;
   let unavailableAt;
 
+  async function selectModel(runtime) {
+    let preferred = settings.routerModel;
+    if (preferred === "pi-default") {
+      preferred = await loadDefaultModel(config.cwd);
+      if (!preferred) throw new Error("Pi has no global saved default model");
+    } else if (preferred === "gateway-default") {
+      // No gateway override means cheapest, not Pi's default or a conversation's model.
+      preferred = config.model;
+    }
+    const model = pickRouterModel((await runtime.getAvailable?.()) ?? runtime.getModels?.() ?? [], preferred);
+    if (!model) throw new Error("No authenticated chat model matches the routing configuration");
+    return model;
+  }
+
   async function prepare() {
-    if (prepared) return prepared;
+    if (prepared) {
+      // Follow changes to saved defaults without reloading providers or pinning
+      // the model selected during startup warming. Explicit models stay fixed.
+      return settings.routerModel === "pi-default" || settings.routerModel === "gateway-default"
+        ? { runtime: prepared.runtime, model: await selectModel(prepared.runtime) } : prepared;
+    }
     // Startup warming and simultaneous mentions must share one initialization.
     if (!preparing) {
       preparing = (async () => {
-        const runtime = await loadModels();
-        const model = pickRouterModel((await runtime.getAvailable?.()) ?? runtime.getModels?.() ?? [], settings.routerModel);
-        if (!model) throw new Error("No authenticated chat model matches the routing configuration");
+        // Keep a loaded registry even if a followed default is not configured
+        // yet, so a later decision can see it without reloading providers.
+        const runtime = loadedRuntime ??= await loadModels();
+        const model = await selectModel(runtime);
         prepared = { runtime, model };
         unavailableAt = undefined;
         return prepared;
@@ -149,7 +183,7 @@ export function createRouteDecider({ config, loadModels = loadPiModels, now = Da
     try {
       await prepare();
     } catch (error) {
-      unavailableAt = now();
+      if (!loadedRuntime) unavailableAt = now();
       log(`Discord reply routing unavailable: ${safeErrorName(error)}`);
     }
   }
@@ -198,7 +232,7 @@ export function createRouteDecider({ config, loadModels = loadPiModels, now = Da
     } catch (error) {
       const message = safeErrorName(error);
       // Import and registry failures are expensive; stop retrying them for a while.
-      if (!prepared) unavailableAt = now();
+      if (!loadedRuntime) unavailableAt = now();
       log(`Discord reply routing unavailable: ${message}`);
       return { target: "thread", reason: "router-error", latencyMs: now() - started };
     } finally {

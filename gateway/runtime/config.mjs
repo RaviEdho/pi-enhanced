@@ -85,7 +85,7 @@ export function isValidChannelReplies(value) {
   if (value.followUp !== undefined && typeof value.followUp !== "boolean") return false;
   if (value.contextMessages !== undefined &&
       (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) return false;
-  if (value.routerModel !== undefined) {
+  if (value.routerModel !== undefined && value.routerModel !== "pi-default" && value.routerModel !== "gateway-default") {
     const model = value.routerModel;
     if (!model || typeof model !== "object" || typeof model.provider !== "string" || !model.provider ||
         typeof model.id !== "string" || !model.id) return false;

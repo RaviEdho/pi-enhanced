@@ -195,7 +195,14 @@ callbacks where commands and lifecycle depend on each other.
   Share initialization between warming and concurrent decisions. An explicit routing model
   must match an authenticated chat model exactly; if unavailable, fall back to a thread,
   never a different model. With no routing model set, use the cheapest authenticated chat
-  model, not the gateway's conversation model. The six-second deadline bounds context reads,
+  model, not the gateway's conversation model. `routerModel: "pi-default"` follows
+  Pi's global saved `defaultProvider`/`defaultModel`, ignoring project defaults and
+  conversation selections; a missing/unavailable Pi default falls back to a thread.
+  `routerModel: "gateway-default"` follows the live `config.model`; only an unset
+  gateway model falls back to cheapest. Resolve both default-following choices at
+  every decision, including after warming, so changes are not pinned in the model
+  registry cache. Unavailable configured targets still fall back to a thread.
+  The six-second deadline bounds context reads,
   model loading, and completion even if a provider ignores cancellation; also pass its abort signal to the
   request. Never reuse a conversation child, because overlapping prompts are refused.
   Keep the task framing in the user turn, not the system prompt, omit `temperature`

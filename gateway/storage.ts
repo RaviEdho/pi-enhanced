@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 
 export interface DiscordChannelReplies {
   mode: DiscordChannelReplyMode;
-  routerModel?: { provider: string; id: string };
+  /** Omit for cheapest; follow Pi's global or the gateway's configured default explicitly. */
+  routerModel?: "pi-default" | "gateway-default" | { provider: string; id: string };
   /** Recent channel messages for each routing decision (0–25; defaults to 5). */
   contextMessages?: number;
   /** Escalate a channel reply that used editing, shell, or delegation tools. */
@@ -209,7 +210,8 @@ function isValidChannelReplies(value: unknown): boolean {
   if (entry.followUp !== undefined && typeof entry.followUp !== "boolean") return false;
   if (entry.contextMessages !== undefined &&
       (!Number.isInteger(entry.contextMessages) || entry.contextMessages < 0 || entry.contextMessages > 25)) return false;
-  if (entry.routerModel !== undefined && !isModelChoice(entry.routerModel)) return false;
+  if (entry.routerModel !== undefined && entry.routerModel !== "pi-default" &&
+      entry.routerModel !== "gateway-default" && !isModelChoice(entry.routerModel)) return false;
   return true;
 }
 
@@ -224,7 +226,8 @@ function readChannelReplies(value: unknown): DiscordChannelReplies {
   return {
     mode: entry.mode ?? "always-thread",
     contextMessages: entry.contextMessages ?? 5,
-    ...(isModelChoice(entry.routerModel) ? { routerModel: entry.routerModel } : {}),
+    ...(entry.routerModel === "pi-default" || entry.routerModel === "gateway-default" || isModelChoice(entry.routerModel)
+      ? { routerModel: entry.routerModel } : {}),
     escalate: entry.escalate !== false,
     followUp: entry.followUp !== false,
   };
