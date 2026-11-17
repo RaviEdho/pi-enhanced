@@ -266,6 +266,33 @@ callbacks where commands and lifecycle depend on each other.
   stable ID, but keep the active run's interaction and UI ownership unchanged.
   Pi delivers steering after the current turn's tool calls, before the next model
   call. The existing prompt waiter owns settlement and the final Discord reply;
+- Track the last authoritative assistant `message_end` for each accepted RPC
+  attempt, clearing it before each prompt/workspace continuation. Wait for
+  `agent_settled` before treating an error as terminal: a later successful
+  assistant message supersedes an earlier error from Pi's native retries. Never
+  retrieve stale assistant text or return the empty-response fallback for a
+  terminal provider error. Rejected prompt responses also get a safe error.
+- `model-failures.mjs` publishes only recognized reason categories, never raw
+  provider bodies, account/email lists, tokens or echoed prompt text. Include
+  model identity as inert bounded inline code. Unknown failures get an explicit
+  generic provider-error reason; raw details remain in Pi's own session history,
+  not gateway logs or Discord notices.
+- An unavailable-model/plan/authentication failure may switch once per accepted
+  request to the exact current `config.model`, only before tool work/public
+  output and outside command workflows. Never invent a fallback model, switch
+  for quota/balance/context/transient failures, or change global config. Compare
+  `get_state` with the configured target, post the original safe failure, call
+  native `set_model`, verify via `get_state`, persist workspace metadata, then
+  announce the confirmed old → new selection through ordered native notification
+  delivery. These notices ignore tool-visibility/verbosity toggles. Only after
+  the announcement succeeds send one gateway continuation prompt, not another
+  copy of an already accepted request/images. A rejected prompt was never
+  accepted into history: retry its original message/images instead.
+  Retain accepted-request tool/image/no-reply
+  tracking and a separate workspace-switch counter across this fallback.
+  If the setter, verification, or announcement fails, do not retry; report what
+  could be confirmed. A replacement model's failure is terminal. Cancellation
+  must never trigger model switching or another inference request.
   steering must not create a second waiter, reset UI, or duplicate the reply.
   Normal Discord messages keep their existing queued behavior.
 - `/stop` requires the same user and conversation-route authorization as other

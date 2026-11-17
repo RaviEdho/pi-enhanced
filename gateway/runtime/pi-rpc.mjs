@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { log, safeErrorName } from "./logging.mjs";
 import { createHistoryIpc } from "./history.mjs";
+import { formatModelFailure, modelFailure, modelIdentity, modelLabel, sameModel, summarizeModelFailure } from "./model-failures.mjs";
 import {
   clearWorkspaceRequest, forkConversationForWorkspace, loadWorkspace, loadWorkspaceRequest, saveWorkspace,
   validateForkSource, validateWorkspaceDirectory,
@@ -37,6 +38,8 @@ export class PiRpcSession {
     this.closed = false;
     this.running = false;
     this.lastRunTools = undefined;
+    this.lastAssistantMessage = undefined;
+    this.currentModel = undefined;
     this.lastUsedAt = Date.now();
     this.ui = interactions.createSessionUi(this);
   }
@@ -299,6 +302,50 @@ export class PiRpcSession {
     }
   }
 
+  async notifyModelStatus(message) {
+    if (!this.interaction?.channel?.send) throw new Error("No Discord destination for a model notice");
+    // Native notification delivery is ordered, ignores tool-visibility toggles,
+    // and preserves private usage/commit UI behavior.
+    await this.ui.handleRequest({ method: "notify", message, notifyType: "warning" });
+  }
+
+  /** Retry only the explicitly configured default, never an arbitrary model. */
+  async fallbackToDefault(failure) {
+    const target = modelIdentity(this.config.model);
+    if (!target) return { reported: false, detail: "No explicit gateway default model is configured; no automatic switch was made." };
+    let reported = false;
+    let confirmedChange;
+    try {
+      const before = await this.request("get_state");
+      if (!before.success) return { reported, detail: "Could not inspect the active model; no automatic switch was made." };
+      const previous = modelIdentity(before.data?.model) ?? failure.model;
+      if (sameModel(previous, target)) return { reported, detail: "The configured default is already the active model; no automatic switch was made." };
+      if (this.stopping) throw new Error("Pi session is stopping");
+      await this.notifyModelStatus(formatModelFailure(failure));
+      reported = true;
+      const changed = await this.request("set_model", { provider: target.provider, modelId: target.id });
+      if (!changed.success) return {
+        reported, detail: `Could not switch to the configured default (\`${modelLabel(target)}\`): ${summarizeModelFailure(changed.error).reason} The request was not retried.`,
+      };
+      const after = await this.request("get_state");
+      if (!after.success || !sameModel(modelIdentity(after.data?.model), target)) return {
+        reported, detail: `The automatic switch to \`${modelLabel(target)}\` could not be confirmed${after.success ? ` (Pi reports \`${modelLabel(modelIdentity(after.data?.model))}\`)` : ""}; the request was not retried.`,
+      };
+      confirmedChange = `Automatically switched model: \`${modelLabel(previous)}\` → \`${modelLabel(target)}\` (configured default).`;
+      this.rememberWorkspace();
+      if (this.stopping) throw new Error("Pi session is stopping");
+      // Never issue the retry before Discord confirms delivery of the notice.
+      await this.notifyModelStatus(`${confirmedChange} Retrying your request once.`);
+      return { reported, switched: true };
+    } catch (error) {
+      if (this.stopping || this.forceStopped) throw error;
+      log(`Automatic model fallback failed: ${safeErrorName(error)}`);
+      return { reported, detail: confirmedChange
+        ? `${confirmedChange} Persistence or Discord delivery could not be confirmed, so the request was not retried.`
+        : "The automatic model switch or its Discord announcement could not be confirmed; the request was not retried." };
+    }
+  }
+
   consumeStdout(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     let newline;
@@ -335,6 +382,8 @@ export class PiRpcSession {
       return;
     }
     if (record?.type === "message_end" && record.message?.role === "assistant") {
+      // Track only this attempt, never a stale response from resumed history.
+      if (this.running && this.runWaiter) this.lastAssistantMessage = record.message;
       // Any later assistant response supersedes a terminating no-reply result.
       this.noReplyCompleted = false;
       if (["error", "aborted"].includes(record.message.stopReason)) this.noReplyRevoked = true;
@@ -385,7 +434,10 @@ export class PiRpcSession {
       this.pendingRequests.set(id, { resolve, reject, timer });
     });
     this.child.stdin.write(`${JSON.stringify({ id, type, ...fields })}\n`);
-    return response;
+    const result = await response;
+    if (result.success && type === "get_state") this.currentModel = modelIdentity(result.data?.model);
+    if (result.success && type === "set_model") this.currentModel = modelIdentity(result.data) ?? this.currentModel;
+    return result;
   }
 
   canNoReply() {
@@ -426,6 +478,7 @@ export class PiRpcSession {
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
     this.lastAssistantNarration = undefined;
+    this.lastAssistantMessage = undefined;
     this.lastRunTools = undefined;
     this.imageToolCalls = new Set();
     this.sentImageCount = 0;
@@ -447,8 +500,11 @@ export class PiRpcSession {
           log(`Could not send recovered workspace change notification: ${safeErrorName(error)}`);
         });
       }
-      for (let switches = 0; ; switches += 1) {
+      let switches = 0;
+      let fallbackUsed = false;
+      for (;;) {
         if (this.stopping) throw new Error("Pi session is stopping");
+        this.lastAssistantMessage = undefined;
         const settledPromise = new Promise((resolve, reject) => {
           this.runWaiter = { resolve, reject };
         });
@@ -459,19 +515,50 @@ export class PiRpcSession {
             if (extensionCommand) await this.stop();
             throw error;
           });
-        if (!accepted.success) throw new Error("Pi rejected the Discord message");
-        if (accepted.data?.disposition === "handled") {
-          this.rememberWorkspace();
-          return "";
+        if (!accepted.success) {
+          if (extensionCommand) throw new Error(`Pi rejected the extension command: ${summarizeModelFailure(accepted.error).reason}`);
+          this.runWaiter = undefined;
+          this.lastAssistantMessage = { role: "assistant", stopReason: "error", errorMessage: accepted.error };
+        } else {
+          if (accepted.data?.disposition === "handled") {
+            this.rememberWorkspace();
+            return "";
+          }
+          if (extensionCommand) {
+            await this.stop();
+            throw new Error("Pi did not handle the extension command");
+          }
+          const settled = await settledPromise;
+          if (settled.aborted || this.lastAssistantMessage?.stopReason === "aborted") {
+            clearWorkspaceRequest(this.sessionDirectory);
+            return "The agent run was cancelled.";
+          }
         }
-        if (extensionCommand) {
-          await this.stop();
-          throw new Error("Pi did not handle the extension command");
-        }
-        const settled = await settledPromise;
-        if (settled.aborted) {
+        if (this.lastAssistantMessage?.stopReason === "error") {
           clearWorkspaceRequest(this.sessionDirectory);
-          return "The agent run was cancelled.";
+          this.rememberWorkspace();
+          const failure = modelFailure(this.lastAssistantMessage, this.currentModel);
+          const text = formatModelFailure(failure);
+          if (failure.unavailable && !fallbackUsed && !interaction.workflow && !this.lastRunTools?.size && !this.publicOutputStarted) {
+            const fallback = await this.fallbackToDefault(failure);
+            if (fallback.switched) {
+              fallbackUsed = true;
+              this.lastAssistantNarration = undefined;
+              // Accepted prompts/images already live in Pi history. Rejected
+              // prompts do not: preserve their original payload for the retry.
+              if (accepted.success) {
+                message = "[Gateway note: The previous model was unavailable before any tool work. The gateway switched to its configured default model and notified the user. Answer the pending Discord request above using the existing conversation context.]";
+                images = [];
+              }
+              continue;
+            }
+            return `${fallback.reported ? "" : `${text}\n`}${fallback.detail}`;
+          }
+          const skipped = failure.unavailable && this.lastRunTools?.size
+            ? "\nAutomatic retry was skipped because this request already started tool work."
+            : failure.unavailable && this.publicOutputStarted && !fallbackUsed
+              ? "\nAutomatic retry was skipped because this request already produced public output." : "";
+          return `${text}${skipped}`;
         }
         let pending;
         try {
@@ -485,6 +572,7 @@ export class PiRpcSession {
             clearWorkspaceRequest(this.sessionDirectory);
             throw new Error("Too many workspace switches in one request");
           }
+          switches += 1;
           await this.changeWorkspace(pending);
           message = `Gateway workspace handoff completed. The actual session working directory is now ${JSON.stringify(this.cwd)}. Project instructions, tools, and Git commands now use this directory. Continue the user's unfinished task from the preserved conversation; do not repeat completed work. The preceding set_working_directory request has been applied successfully.`;
           images = [];
