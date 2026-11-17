@@ -350,6 +350,26 @@ callbacks where commands and lifecycle depend on each other.
   are blocked until the handoff. It refuses to interrupt running background jobs.
   Do not mutate `process.cwd()`, tool factories, or `ctx.cwd` as a partial override;
   move `process.cwd()` only as part of a full in-process session rebind.
+- `/git unstage` sends the literal extension command using the same authorized
+  conversation queue, run slot, lifecycle tracking, and dequeued workspace as
+  other Git commands. It accepts no arguments and uses `workflow: "git-unstage"`:
+  ordinary notifications report the result without commit-review controls or a
+  model turn. The extension performs an index-only, root-scoped path reset,
+  preserving working-tree files, HEAD, and merge/rebase metadata, including in
+  repositories with no commits. Never substitute a discard or hard reset.
+- `/git summary` (optional `scope: staged|unstaged`) and `/git commit` (optional
+  `args`) share `/commit`'s authorized conversation queue, run slot, lifecycle,
+  workspace resolution, and reusable commit card. Send literal `/git` extension
+  commands after checking `get_commands`; never substitute an agent prompt.
+  Summary selectors use the title prefix `Git Changes Summary (` and carry the
+  full summary plus proposed commit instructions in the title, paginated without
+  truncation. Render every `Commit <topic>` option as a button, preserving its
+  original option index, requester/channel ownership, expiry, and dismissal.
+  Selection returns to the same locked `/git` handler, which invokes the normal
+  selective commit runner with that topic's instruction. It re-inspects current
+  changes and still requires final commit approval; summary selection alone
+  never stages or commits. Do not route these choices as new Discord messages
+  or nested RPC commands, which would deadlock the active conversation queue.
 - After `agent_settled`, validate the request against the active token, cwd, and
   session file. Prefer an in-process handoff: write a forked session file whose
   header points at the target cwd, then send the `switch_session` RPC. Pi tears

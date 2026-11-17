@@ -253,7 +253,11 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
 
     if (choice?.startsWith("Summarize")) {
       const { handleSummaryCommand } = await import("./summary-runner.js");
-      await handleSummaryCommand(ctx, pi, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
+      const instruction = await handleSummaryCommand(ctx, pi, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
+      if (instruction) {
+        const { handleCommitCommand } = await import("./runner.js");
+        await handleCommitCommand(instruction, ctx);
+      }
     } else if (choice?.includes("Commit")) {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);

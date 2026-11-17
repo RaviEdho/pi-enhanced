@@ -51,7 +51,8 @@ function buildCommitUiPayload(pending, statusText, responseValue, disableControl
     : pending.commitProposal ? "Review the details. Actions apply to the entire proposal, not just this page."
       : "Review the details before choosing an action.";
   return buildCommitCardPayload(pages[page], {
-    title: pending.commitProposal ? "Commit proposal" : pending.request?.title || "Git commit",
+    title: /^Git Changes Summary \(/.test(pending.request?.title || "") ? "Changes summary and proposed commits"
+      : pending.commitProposal ? "Commit proposal" : pending.request?.title || "Git commit",
     workspace: pending.workspace,
     notifyType: pending.notifyType,
     rows,
@@ -148,6 +149,19 @@ export function buildDiscordUiPayload(pending, statusText, responseValue = pendi
 }
 
 export function buildDiscordUiComponents(pending, disabled = false) {
+  if (pending.isCommit && pending.method === "select" && /^Git Changes Summary \(/.test(pending.request?.title || "")) {
+    const buttons = pending.options.map((option, index) => new ButtonBuilder()
+      .setCustomId(`piui:${pending.token}:choose-${index}`)
+      .setLabel(truncateDiscordText(option, 80))
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled));
+    buttons.push(new ButtonBuilder().setCustomId(`piui:${pending.token}:cancel`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary).setDisabled(disabled));
+    const rows = [];
+    for (let start = 0; start < buttons.length; start += 5) {
+      rows.push(new ActionRowBuilder().addComponents(buttons.slice(start, start + 5)));
+    }
+    return rows;
+  }
   if (pending.isCommit && pending.method === "select" && pending.options.length <= 4) {
     const buttons = pending.options.map((option, index) => {
       let label = option;

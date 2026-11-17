@@ -398,6 +398,8 @@ export class SessionUi {
     }
 
     this.session.publicOutputStarted = true;
+    // Summary topic selection continues into commit review in the same command.
+    if (method === "select" && /^Git Changes Summary \(/.test(request.title || "")) interaction.workflow = "commit";
     const isCommit = interaction.workflow === "commit";
     await this.flushToolActivity();
     await this.notificationPromise;

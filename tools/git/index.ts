@@ -92,7 +92,12 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           case "summary": {
             const { handleSummaryCommand } = await import("./summary-runner.js");
-            await handleSummaryCommand(ctx, pi, subArgs);
+            const instruction = await handleSummaryCommand(ctx, pi, subArgs);
+            if (instruction) {
+              // Same dispatch as /git commit <instruction>, without re-entering the busy guard.
+              const { handleCommitCommand } = await import("./runner.js");
+              await handleCommitCommand(instruction, ctx);
+            }
             break;
           }
           case "sync": {

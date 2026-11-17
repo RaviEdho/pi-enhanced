@@ -3,6 +3,35 @@ import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { DiffPageProperties, GitDiffPager, SUMMARY_DIFF_PAGE_CHARS, type DiffPageInput } from "./diff.js";
+import type { GitSummaryProposal } from "./types.js";
+
+/** Capture a structured result, keeping action instructions separate from display labels. */
+export function createSummaryProposalTool(onProposal: (proposal: GitSummaryProposal) => void): ToolDefinition<any, unknown> {
+  return {
+    name: "git_summary_propose",
+    label: "Summary and Commit Topics",
+    description: "Finish the summary with Markdown and the fewest coherent commit topics. Default to one proposal for one end-to-end feature, including its UI, routing, integrations, docs, and related fixes. Split only genuinely independent changes that can be reviewed and reverted separately; eight is a maximum, not a target. This only proposes actions; it does not stage or commit anything. Call after inspecting all changes.",
+    parameters: Type.Object({
+      summary: Type.String({ minLength: 1, description: "Human-readable Markdown summary" }),
+      commits: Type.Array(Type.Object({
+        topic: Type.String({ minLength: 1, maxLength: 73, description: "Short unique topic, without the leading word Commit" }),
+        instruction: Type.String({ minLength: 1, maxLength: 1200, description: "Self-contained selective commit instruction: behavior, relevant paths, associated docs, and exclusions. No slash commands or CLI flags." }),
+      }), { minItems: 1, maxItems: 8, description: "Prefer one commit for one feature. Use multiple commits only for genuinely independent changes, never separate layers or interfaces of the same feature." }),
+    }),
+    async execute(_id, params: GitSummaryProposal) {
+      const proposal = {
+        summary: params.summary.trim(),
+        commits: params.commits.map(({ topic, instruction }) => ({ topic: topic.trim().replace(/\s+/g, " "), instruction: instruction.trim() })),
+      };
+      const topics = new Set(proposal.commits.map(({ topic }) => topic.toLowerCase()));
+      if (!proposal.summary || proposal.commits.some(({ topic, instruction }) => !topic || !instruction) || topics.size !== proposal.commits.length) {
+        throw new Error("Provide a nonempty summary and distinct, nonempty commit topics and instructions.");
+      }
+      onProposal(proposal);
+      return { content: [{ type: "text", text: "Summary and commit topics prepared for user review." }], details: {}, terminate: true };
+    },
+  };
+}
 
 /** Read-only tools scoped to the summary's tracked diff and listed untracked files. */
 export function createSummaryTools(cwd: string, diff: string, untracked: string[]): ToolDefinition<any, unknown>[] {

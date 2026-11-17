@@ -1,3 +1,8 @@
+export interface GitSummaryProposal {
+  summary: string;
+  commits: { topic: string; instruction: string }[];
+}
+
 export interface CommitHunkSelection {
   filePath: string;
   hunkIds: number[];
