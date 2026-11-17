@@ -8,6 +8,36 @@ import {
   pushCommit,
 } from "./git.js";
 
+/** Unstage the entire repository without changing files, HEAD, or operation metadata. */
+export async function handleUnstageCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
+  if (args.trim()) {
+    ctx.ui.notify("Usage: /git unstage (unstages all staged changes)", "warning");
+    return;
+  }
+  if (!(await isGitRepository(ctx.cwd))) {
+    ctx.ui.notify("Current directory is not inside a git repository. Run '/git init' first.", "error");
+    return;
+  }
+
+  ctx.ui.setWorkingMessage?.("Unstaging all changes…");
+  try {
+    const staged = (await execGit(["diff", "--cached", "--name-only", "-z"], ctx.cwd)).split("\0").filter(Boolean);
+    if (!staged.length) {
+      ctx.ui.notify("No staged changes to unstage.", "info");
+      return;
+    }
+    // Path-limited reset only updates the index, preserving merge/rebase metadata.
+    // The root pathspec includes every path even when invoked from a subdirectory.
+    // With an unborn HEAD, Git resets these entries against the empty tree.
+    await execGit(["reset", "--", ":/"], ctx.cwd);
+    ctx.ui.notify("Unstaged all changes. Working-tree files were left unchanged.", "info");
+  } catch (err) {
+    ctx.ui.notify(`Unstage failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+  } finally {
+    ctx.ui.setWorkingMessage?.();
+  }
+}
+
 /**
  * Quick local git helpers that require 0 LLM tokens and run instantly.
  */
@@ -242,6 +272,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       ...(changes.staged.length ? ["Summarize staged changes (/git summary staged)"] : []),
       ...(changes.unstaged.length || changes.untracked.length ? ["Summarize unstaged and untracked changes (/git summary unstaged)"] : []),
       "Commit changes (/git commit)",
+      ...(changes.staged.length ? ["Unstage all changes (/git unstage)"] : []),
       "Sync with remote (/git sync)",
       "Create Pull Request (/git pr)",
       "Smart Branching (/git branch)",
@@ -261,6 +292,8 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     } else if (choice?.includes("Commit")) {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);
+    } else if (choice?.startsWith("Unstage")) {
+      await handleUnstageCommand(ctx);
     } else if (choice?.includes("Sync")) {
       await handleSyncCommand(ctx);
     } else if (choice?.includes("Pull Request")) {

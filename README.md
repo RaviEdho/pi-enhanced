@@ -316,6 +316,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git discard --untracked      # Also delete untracked files and directories (ignored files are kept)
 /git status                   # Interactive status overview
 /git summary [staged|unstaged] # AI summary with selectable topic-based commit proposals
+/git unstage                  # Unstage all changes; keep working-tree files unchanged
 ```
 
 - **Change Summaries**: `/git summary` groups inspected changes into coherent commit proposals with **Commit <topic>** actions. Select a topic with `↑`/`↓` and `Enter` (or click it in fullscreen mode) to forward its detailed instruction to `/git commit <instruction>`, which re-inspects current changes and asks for final approval. `PgUp`/`PgDn` or the mouse wheel scroll the summary independently; `Esc` closes without starting a commit. Press `p` to close the dialog and print the entire summary and proposed commits in the transcript. The printed summary persists with the session but is not added to the model's context.
