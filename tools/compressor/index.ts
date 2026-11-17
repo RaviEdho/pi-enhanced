@@ -48,7 +48,7 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
       }
 
       const rawText = textBlocks.map((c) => c.text).join("\n");
-      const [{ runFilterPipeline }, { RecallStore }, { GainTracker }] = await loadCompressorModules();
+      const [{ runFilterPipeline, formatRecallHint }, { RecallStore }, { GainTracker }] = await loadCompressorModules();
       const tracker = GainTracker.getInstance();
       const recallStore = RecallStore.getInstance();
       const result = runFilterPipeline(command, rawText, event.isError);
@@ -57,9 +57,6 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
         return;
       }
 
-      // Record savings in tracker
-      tracker.record(command, result.filterName, result.originalBytes, result.filteredBytes);
-
       // Save raw output in recall store.
       // ONLY attach /recall hint to LLM context when the compression is LOSSY (content truncated/omitted).
       // For lossless operations, quietly cache in memory (if > 150B) so user can still manually inspect,
@@ -67,14 +64,22 @@ export function registerOutputCompressor(pi: ExtensionAPI): void {
       let recallHint = "";
       if (result.lossy) {
         const recallId = recallStore.save(command, rawText, result.text, result.savedBytes);
-        recallHint = `\n[full output: /recall ${recallId}]`;
+        recallHint = formatRecallHint(recallId);
       } else if (result.savedBytes > 150) {
         recallStore.save(command, rawText, result.text, result.savedBytes);
       }
 
-      // Return compressed content back to Pi
+      const delivered = result.text + recallHint;
+      tracker.record(command, result.filterName, result.originalBytes, Buffer.byteLength(delivered, "utf8"));
+      // Keep non-text blocks (e.g. images) and inherited result metadata intact.
+      let replaced = false;
       return {
-        content: [{ type: "text", text: result.text + recallHint }],
+        content: event.content.flatMap<(typeof event.content)[number]>((block) => {
+          if (block.type !== "text") return [block];
+          if (replaced) return [];
+          replaced = true;
+          return [{ type: "text" as const, text: delivered }];
+        }),
         isError: event.isError,
       };
     } catch (err) {

@@ -22,7 +22,8 @@
     "tools",
     "ux",
     "gateway",
-    "README.md"
+    "README.md",
+    "UPSTREAM.md"
   ],
   "pi": {
     "extensions": [

@@ -41,7 +41,7 @@ export function collapseConsecutiveDuplicates(lines: string[]): string[] {
   let repeatCount = 0;
 
   for (const line of lines) {
-    if (prevLine !== null && line.trim() === prevLine.trim() && line.trim().length > 0) {
+    if (prevLine !== null && line === prevLine && line.trim().length > 0) {
       repeatCount++;
     } else {
       if (repeatCount > 1) {

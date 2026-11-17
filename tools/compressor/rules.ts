@@ -8,7 +8,6 @@ export const DECLARATIVE_RULES: DeclarativeRule[] = [
       /^\s*$/,
       /^(added|readded|removed|changed)\s+\d+\s+packages/i,
       /^\s*audited\s+\d+\s+packages/i,
-      /^\s*found\s+\d+\s+vulnerabilities/i,
       /^\s*Progress:/i,
       /^\s*packages are looking for funding/i,
     ],
@@ -65,7 +64,7 @@ export const DECLARATIVE_RULES: DeclarativeRule[] = [
     name: "system-disk",
     // Standalone `df` only — "df.py", "asdf" etc. must not trigger the rule
     matchCommand: /(?<![\w.\-])df(?:\s+-[a-zA-Z]+)?(?![\w.\-])/,
-    stripLinesMatching: [/^\s*$/, /\/(dev|sys|run|snap|docker|overlay)/],
+    stripLinesMatching: [/^\s*$/, /\s\/(?:dev|sys|run|snap|docker|overlay)(?:\/\S*)?\s*$/],
     maxLines: 20,
   },
 ];

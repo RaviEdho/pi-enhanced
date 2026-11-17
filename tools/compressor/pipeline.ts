@@ -1,3 +1,4 @@
+import { getFilterCommand } from "./command.js";
 import { filterGitCommand } from "./parsers/git.js";
 import { filterLintCommand } from "./parsers/lint.js";
 import { filterSystemCommand } from "./parsers/system.js";
@@ -21,9 +22,11 @@ function normalizeParserResult(res: ParserResult): { text: string; lossy: boolea
   return { text: res.text, lossy: res.lossy ?? false };
 }
 
-/**
- * Runs the complete output-reduction pipeline on a command's raw output.
- */
+export function formatRecallHint(id: string): string {
+  return `\n[full output: /recall ${id}]`;
+}
+
+/** Runs output reduction; the delivered text including recall must never grow. */
 export function runFilterPipeline(
   command: string,
   rawOutput: string,
@@ -33,12 +36,16 @@ export function runFilterPipeline(
 
   // Phase 1: Pre-clean ANSI codes and carriage returns
   const cleaned = preCleanOutput(rawOutput);
+  const filterCommand = getFilterCommand(command);
+  // Unknown, chained, piped, redirected, or script commands only get generic
+  // cleanup: their combined output cannot safely be attributed to one parser.
+  command = filterCommand ?? "";
 
   let parsed: { text: string; lossy: boolean } | null = null;
   let filterName = "generic";
 
   // Phase 2: Specialized ecosystem parsers
-  parsed = normalizeParserResult(filterGitCommand(command, cleaned, isError));
+  parsed = isError ? null : normalizeParserResult(filterGitCommand(command, cleaned, isError));
   if (parsed !== null) {
     filterName = "git";
   }
@@ -65,7 +72,7 @@ export function runFilterPipeline(
   }
 
   // Phase 3: Declarative rules table
-  if (parsed === null) {
+  if (parsed === null && !isError) {
     for (const rule of DECLARATIVE_RULES) {
       if (rule.matchCommand.test(command)) {
         parsed = applyDeclarativeRule(rule, cleaned);
@@ -80,7 +87,7 @@ export function runFilterPipeline(
     const lines = cleaned.split("\n");
     const deduped = collapseConsecutiveDuplicates(lines);
     const compacted = collapseEmptyLines(deduped);
-    if (compacted.length < lines.length) {
+    if (compacted.join("\n") !== rawOutput) {
       parsed = { text: compacted.join("\n"), lossy: false };
       filterName = "dedup";
     }
@@ -92,7 +99,13 @@ export function runFilterPipeline(
   }
 
   const filteredText = parsed.text;
+  // Specialized parsers can discard details even without hitting a line cap.
+  // Conservatively expose recall for every semantic rewrite, not ANSI cleanup.
+  parsed.lossy ||= filterName !== "dedup" && filteredText !== cleaned;
+  const delivered = filteredText + (parsed.lossy ? formatRecallHint("00000000") : "");
   const filteredBytes = Buffer.byteLength(filteredText, "utf8");
+  if (Buffer.byteLength(delivered, "utf8") >= originalBytes ||
+      Math.ceil(delivered.length / 4) > Math.ceil(rawOutput.length / 4)) return null;
   const savedBytes = originalBytes - filteredBytes;
 
   return {
@@ -106,6 +119,11 @@ export function runFilterPipeline(
 }
 
 function applyDeclarativeRule(rule: DeclarativeRule, text: string): { text: string; lossy: boolean } {
+  // A successful exit does not imply there are no security/deprecation reports
+  // or warnings. Never truncate their following explanation or remediation.
+  if (/\b(?:error|warning|warn|err|vulnerability|vulnerabilities|deprecated|security)\b/i.test(text)) {
+    return { text, lossy: false };
+  }
   let lines = text.split("\n");
   let lossy = false;
 
@@ -129,6 +147,7 @@ function applyDeclarativeRule(rule: DeclarativeRule, text: string): { text: stri
   }
 
   const result = lines.join("\n").trim();
+  lossy ||= result !== text.trim();
   if (result.length === 0 && rule.onEmpty) {
     return { text: rule.onEmpty, lossy };
   }

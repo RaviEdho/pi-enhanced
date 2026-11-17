@@ -6,6 +6,8 @@ Guidance for AI agents working in this repository.
 
 `pi-enhanced` is an installable extension suite for the [Pi](https://github.com/earendil-works/pi) coding agent, bundling providers, multi-account management, tools, and workflow enhancements.
 
+Upstream review checkpoints for the RTK-inspired compressor and FFF-inspired Scout are recorded in [`UPSTREAM.md`](UPSTREAM.md). Read it before future upstream sync work and update the full reviewed SHAs after verification.
+
 ### Main subsystems
 
 - **Accounts (`accounts/`)**: `accounts.json` storage, `auth.json` sync, session affinity, token refresh, quota pace balancing, and transparent streaming 429 failover.

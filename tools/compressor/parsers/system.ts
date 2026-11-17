@@ -23,12 +23,14 @@ export function filterSystemCommand(command: string, raw: string, isError: boole
 
 function filterDownloadCommand(raw: string): ParsedOutput {
   const lines = raw.split("\n");
-  // Filter out download progress meters and percentages
+  // Percent signs, ETA text and runs of '=' are valid response data. Only
+  // discard recognizable meter framing/rows, never arbitrary response lines.
   const filtered = lines.filter((line) => {
-    const trimmed = line.trim();
-    if (/%|--:--:--|[#=]{4,}|ETA\b/i.test(trimmed)) return false;
-    if (trimmed.startsWith("curl:") || trimmed.startsWith("wget:")) return true;
-    return true;
+    const t = line.trim();
+    return !(/^% Total\s+% Received\s+% Xferd/.test(t) ||
+      /^Dload\s+Upload\s+Total\s+Spent\s+Left\s+Speed$/.test(t) ||
+      /^\d{1,3}\s+\S+\s+\d{1,3}\s+\S+\s+\d{1,3}\s+\S+\s+\S+\s+\S+\s+(?:\d+:\d+:\d+|--:--:--)\s+(?:\d+:\d+:\d+|--:--:--)\s+(?:\d+:\d+:\d+|--:--:--)\s+\S+$/.test(t) ||
+      /^\d+[KMG]\s+[.=>\s]+\d+%\s+\S+\s+\S+$/.test(t));
   });
 
   return { text: filtered.join("\n").trim(), lossy: false };
