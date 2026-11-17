@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { log, safeErrorName } from "./logging.mjs";
 import { writePrivateJson } from "./persistence.mjs";
 
-const THREAD_TITLE_WAIT_MS = 25_000;
+const THREAD_TITLE_WAIT_MS = 45_000;
 const THREAD_TITLE_POLL_MS = 500;
 
 export function createThreadRegistry({ threadsPath }) {
@@ -19,8 +19,29 @@ export function createThreadRegistry({ threadsPath }) {
       pruneThreadRegistry();
       writeThreadRegistry();
     },
+    initializeThreadTitle,
     watchThreadTitle,
   };
+
+  async function initializeThreadTitle(channel, session, starter) {
+    const registration = threadRegistry[channel.id];
+    if (!registration) return;
+    // Do not let the watcher copy an inherited name if initialization fails.
+    registration.titleInitialized = false;
+    writeThreadRegistry();
+    try {
+      const response = await session.request("prompt", {
+        message: `/discord-thread-title ${JSON.stringify(starter)}`,
+      });
+      if (!response.success || response.data?.disposition !== "handled") {
+        throw new Error("Thread title initialization failed");
+      }
+      registration.titleInitialized = true;
+      writeThreadRegistry();
+    } catch (error) {
+      log(`Could not initialize Discord thread ${channel.id} title: ${safeErrorName(error)}`);
+    }
+  }
 
   function watchThreadTitle(channel, session) {
     if (
@@ -28,6 +49,7 @@ export function createThreadRegistry({ threadsPath }) {
       !channel.isThread() ||
       typeof channel.setName !== "function" ||
       !threadRegistry[channel.id]?.createdAt ||
+      threadRegistry[channel.id]?.titleInitialized === false ||
       threadRegistry[channel.id]?.generatedTitle ||
       pendingThreadTitleRenames.has(channel.id)
     ) {

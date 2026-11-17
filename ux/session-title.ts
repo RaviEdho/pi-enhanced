@@ -13,6 +13,9 @@ Preserve ticket references exactly. Write in the user's language.
 Do not use quotes, markdown, or trailing punctuation. Do not answer the request.`;
 const MAX_SOURCE_BYTES = 960;
 const TITLE_TIMEOUT_MS = 40_000;
+const DISCORD_TITLE_SOURCE = "discord-thread-title-source";
+const DISCORD_TITLE_SYSTEM_PROMPT = `${AUTO_TITLE_SYSTEM_PROMPT}
+Name the new thread's task, prioritizing its starter. Use recent conversation only to resolve references; do not name an older task instead.`;
 
 function extractUserText(message: { role: string; content?: unknown }): string {
   if (message.role !== "user") return "";
@@ -91,7 +94,8 @@ async function generateTitle(
   model: NonNullable<ExtensionContext["model"]>,
   sessionId: string,
   prompt: string,
-  isCurrentSession: (sessionId: string) => boolean
+  isCurrentSession: (sessionId: string) => boolean,
+  systemPrompt = AUTO_TITLE_SYSTEM_PROMPT
 ): Promise<boolean> {
   try {
     // Ollama's OpenAI-compatible endpoint can ignore developer instructions for
@@ -102,7 +106,7 @@ async function generateTitle(
     const result = await ctx.modelRegistry.complete(
       titleModel,
       {
-        systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
+        systemPrompt,
         messages: [
           {
             role: "user",
@@ -162,6 +166,54 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
     activeSessionId = undefined;
   });
 
+  // The gateway initializes a new thread before sending its first agent prompt.
+  // Keep the source out of agent context, but persist it for retries/resumes.
+  if (process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD === "1") {
+    pi.registerCommand("discord-thread-title", {
+      description: "Initialize a new Discord thread's automatic title",
+      handler: async (args, ctx) => {
+        const starter: unknown = JSON.parse(args);
+        if (typeof starter !== "string" || !starter.trim()) throw new Error("Missing thread starter");
+        const sessionId = ctx.sessionManager.getSessionId();
+        if (ctx.sessionManager.getBranch().some((entry) =>
+          entry.type === "custom" && entry.customType === DISCORD_TITLE_SOURCE &&
+          (entry.data as { sessionId?: unknown } | undefined)?.sessionId === sessionId
+        )) return;
+        const recent = ctx.sessionManager.getBranch()
+          .filter((entry) => entry.type === "message" &&
+            (entry.message.role === "user" || entry.message.role === "assistant"))
+          .slice(-6).reverse()
+          .map((entry) => {
+            if (entry.type !== "message") return "";
+            const message = entry.message;
+            const text = extractUserText({ ...message, role: "user" });
+            return `${message.role}: ${truncateUtf8(text.trim(), 160)}`;
+          }).join("\n");
+        const prompt = `Thread starter:\n${truncateUtf8(starter.trim(), 480)}\n\nRecent conversation (newest first):\n${truncateUtf8(recent, 400)}`;
+        pi.appendEntry(DISCORD_TITLE_SOURCE, { sessionId, prompt });
+        // A fork may already carry the channel's title. Clear only this new
+        // thread's copy, never the parent session or a resumed thread's title.
+        pi.setSessionName("");
+        requestTitle(ctx, prompt, DISCORD_TITLE_SYSTEM_PROMPT);
+      },
+    });
+  }
+
+  function requestTitle(ctx: ExtensionContext, prompt: string, systemPrompt = AUTO_TITLE_SYSTEM_PROMPT): void {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!EnhancedSettingsStore.getInstance().get("session.autoTitle") ||
+      !sessionId || sessionId !== activeSessionId || attemptedSessions.has(sessionId) ||
+      pi.getSessionName()?.trim()) return;
+    const model = resolveTitleModel(ctx);
+    if (!prompt || !model) return;
+    attemptedSessions.add(sessionId);
+    void generateTitle(pi, ctx, model, sessionId, prompt, (id) => activeSessionId === id, systemPrompt)
+      .then((success) => {
+        // Retry on a later user message after failures, but never overlap requests.
+        if (!success) attemptedSessions.delete(sessionId);
+      });
+  }
+
   pi.on("message_end", (event, ctx) => {
     if (
       event.message.role !== "user" ||
@@ -180,15 +232,15 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
       return;
     }
 
-    const prompt = firstUserPrompt(ctx, event.message);
-    const model = resolveTitleModel(ctx);
-    if (!prompt || !model) return;
-
-    attemptedSessions.add(sessionId);
-    void generateTitle(pi, ctx, model, sessionId, prompt, (id) => activeSessionId === id)
-      .then((success) => {
-        // Retry on a later user message after failures, but never overlap requests.
-        if (!success) attemptedSessions.delete(sessionId);
-      });
+    const source = ctx.sessionManager.getBranch().findLast((entry) =>
+      entry.type === "custom" && entry.customType === DISCORD_TITLE_SOURCE &&
+      (entry.data as { sessionId?: unknown } | undefined)?.sessionId === sessionId
+    );
+    const data = source?.type === "custom" ? source.data as { prompt?: unknown } : undefined;
+    if (typeof data?.prompt === "string") {
+      requestTitle(ctx, data.prompt, DISCORD_TITLE_SYSTEM_PROMPT);
+    } else {
+      requestTitle(ctx, firstUserPrompt(ctx, event.message));
+    }
   });
 }

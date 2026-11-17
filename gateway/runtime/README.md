@@ -286,6 +286,17 @@ callbacks where commands and lifecycle depend on each other.
 - Track the last authoritative assistant `message_end` for each accepted RPC
   attempt, clearing it before each prompt/workspace continuation. Wait for
   `agent_settled` before treating an error as terminal: a later successful
+- Initialize every new thread's title before its first agent prompt using the child-only
+  `/discord-thread-title` command, including tool-escalated threads (open their fork
+  immediately for naming). Clear only the new fork's inherited session name. The title
+  source prioritizes the actual Discord thread starter (up to 480 UTF-8 bytes), plus
+  a recent user/assistant snapshot (up to 400 bytes, newest first, at most six messages);
+  tools/thinking are excluded. Attached reply/recent Discord context can also fit in
+  the starter budget. Persist the bounded source as session-scoped custom metadata,
+  not an agent message, for retries/resumes. Leave ordinary Pi naming unchanged.
+  Do not rename from an inherited title when initialization fails. Watch for up to
+  45 seconds to cover the title provider's 40-second timeout; generated names remain
+  one-shot and existing registered thread names are not retroactively regenerated.
   assistant message supersedes an earlier error from Pi's native retries. Never
   retrieve stale assistant text or return the empty-response fallback for a
   terminal provider error. Rejected prompt responses also get a safe error.
