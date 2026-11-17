@@ -7,22 +7,24 @@
 const DEF_PATTERNS = [
   // TypeScript / JavaScript
   /^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)/,
-  /^(?:export\s+(?:default\s+)?)?class\s+([A-Za-z0-9_$]+)/,
+  /^(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+([A-Za-z0-9_$]+)/,
+  /^export\s+\*\s+as\s+([A-Za-z0-9_$]+)/,
+  /^(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+([A-Za-z0-9_$]+)/,
   /^(?:export\s+)?interface\s+([A-Za-z0-9_$]+)/,
   /^(?:export\s+)?type\s+([A-Za-z0-9_$]+)\s*=/,
   /^(?:export\s+)?enum\s+([A-Za-z0-9_$]+)/,
   /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*[:=]/,
-  /^\s*(?:(?:public|private|protected|static|readonly|async)\s+)*(?:get|set\s+)?([A-Za-z0-9_$]+)\s*\([^)]*\)\s*[:{]/,
+  /^\s*(?:(?:public|private|protected|static|readonly|async)\s+)*(?:(?:get|set)\s+)?([A-Za-z0-9_$]+)\s*\([^)]*\)\s*[:{]/,
 
   // Python
   /^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\(/,
   /^class\s+([A-Za-z0-9_]+)(?:\s*\([^)]*\))?\s*:/,
 
   // Rust
-  /^(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/,
-  /^(?:pub(?:\([^)]+\))?\s+)?(?:struct|enum|trait|union)\s+([A-Za-z0-9_]+)/,
-  /^(?:pub(?:\([^)]+\))?\s+)?(?:const|static)\s+([A-Za-z0-9_]+)/,
-  /^impl(?:\s+<[^>]+>)?\s+(?:[A-Za-z0-9_:]+\s+for\s+)?([A-Za-z0-9_:]+)/,
+  /^(?:pub(?:\([^)]+\))?\s+)?(?:(?:async|unsafe|const|default|extern(?:\s+"[^"]*")?)\s+)*fn\s+(r#[A-Za-z0-9_]+|[A-Za-z0-9_]+)/,
+  /^(?:pub(?:\([^)]+\))?\s+)?(?:(?:unsafe|auto|const)\s+)*(?:struct|enum|trait|union|mod|type)\s+(r#[A-Za-z0-9_]+|[A-Za-z0-9_]+)/,
+  /^(?:pub(?:\([^)]+\))?\s+)?(?:const|static(?:\s+mut)?)\s+([A-Za-z0-9_]+)\s*[:=]/,
+  /^macro_rules!\s+([A-Za-z0-9_]+)/,
 
   // Go
   /^func\s+(?:\([^)]+\)\s+)?([A-Za-z0-9_]+)\s*\(/,
@@ -60,10 +62,22 @@ export interface LineClassification {
   isDefinition: boolean;
   isImport: boolean;
   definedSymbol?: string;
+  symbolStart?: number;
+  symbolEnd?: number;
 }
 
-export function classifyLine(line: string): LineClassification {
-  const trimmed = line.trim();
+export interface ClassificationMatch {
+  start: number;
+  end: number;
+  /** Fuzzy matches must lie entirely inside the declared symbol. */
+  ranges?: Array<[number, number]>;
+}
+
+export function classifyLine(line: string, matched?: ClassificationMatch): LineClassification {
+  const leading = line.length - line.trimStart().length;
+  const attributes = line.trimStart().match(/^(?:#\[[^\]]*\]\s*)+/)?.[0].length ?? 0;
+  const trimmed = line.trimStart().slice(attributes).trimEnd();
+  const baseOffset = leading + attributes;
   if (
     !trimmed ||
     trimmed.startsWith("//") ||
@@ -89,11 +103,12 @@ export function classifyLine(line: string): LineClassification {
       if (symbol && CONTROL_KEYWORDS.has(symbol)) {
         continue;
       }
-      return {
-        isDefinition: true,
-        isImport: false,
-        definedSymbol: symbol,
-      };
+      const start = baseOffset + match[0].lastIndexOf(symbol);
+      const end = start + symbol.length;
+      const isDefinition = !matched || (matched.ranges
+        ? matched.ranges.length > 0 && matched.ranges.every(([a, b]) => a >= start && b <= end && b > a)
+        : matched.end > matched.start && matched.start < end && matched.end > start);
+      return { isDefinition, isImport: false, definedSymbol: symbol, symbolStart: start, symbolEnd: end };
     }
   }
 

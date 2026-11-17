@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { classifyLine } from "./classifier.js";
 import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
+import { TopK } from "./ranking.js";
 import type { FindResultItem, SearchMatch } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -200,7 +201,7 @@ export async function externalGrep(
   let regex: RegExp | null = null;
   if (!options.literal) {
     try {
-      regex = new RegExp(pattern, options.ignoreCase ? "i" : "");
+      regex = new RegExp(pattern, (options.ignoreCase ?? (pattern.toLowerCase() === pattern)) ? "i" : "");
     } catch {}
   }
 
@@ -244,8 +245,9 @@ export async function externalGrep(
         matchEnd = regMatch.index + regMatch[0].length;
       }
     } else {
-      const haystack = options.ignoreCase ? item.content.toLowerCase() : item.content;
-      const needle = options.ignoreCase ? pattern.toLowerCase() : pattern;
+      const fold = options.ignoreCase ?? (pattern.toLowerCase() === pattern);
+      const haystack = fold ? item.content.toLowerCase() : item.content;
+      const needle = fold ? pattern.toLowerCase() : pattern;
       const idx = haystack.indexOf(needle);
       if (idx >= 0) {
         matchStart = idx;
@@ -253,7 +255,7 @@ export async function externalGrep(
       }
     }
 
-    const { isDefinition, isImport } = classifyLine(item.content);
+    const { isDefinition, isImport } = classifyLine(item.content, { start: matchStart, end: matchEnd });
 
     allMatches.push({
       filePath: item.filePath,
@@ -322,8 +324,10 @@ export async function externalMultiGrep(
     "--max-columns-preview",
   ];
 
-  if (options.ignoreCase) {
+  if (options.ignoreCase === true) {
     rgArgs.push("-i");
+  } else if (options.ignoreCase === false) {
+    rgArgs.push("-s");
   } else {
     rgArgs.push("-S");
   }
@@ -421,13 +425,15 @@ export async function externalMultiGrep(
     }
 
     // Identify which pattern matched
-    const haystack = options.ignoreCase ? item.content.toLowerCase() : item.content;
+    // rg smart-case applies to the whole OR expression, not each alternative.
+    const fold = options.ignoreCase ?? patterns.every((pat) => pat.toLowerCase() === pat);
+    const haystack = fold ? item.content.toLowerCase() : item.content;
     let matchedPattern: string | undefined;
     let matchStart = 0;
     let matchEnd = 0;
 
     for (const pat of patterns) {
-      const needle = options.ignoreCase ? pat.toLowerCase() : pat;
+      const needle = fold ? pat.toLowerCase() : pat;
       const idx = haystack.indexOf(needle);
       if (idx >= 0) {
         matchedPattern = pat;
@@ -437,7 +443,7 @@ export async function externalMultiGrep(
       }
     }
 
-    const { isDefinition, isImport } = classifyLine(item.content);
+    const { isDefinition, isImport } = classifyLine(item.content, { start: matchStart, end: matchEnd });
 
     allMatches.push({
       filePath: item.filePath,
@@ -513,7 +519,8 @@ export async function externalFind(
   }
 
   const rawFiles = rawOutput.split(/\r?\n/).filter(Boolean);
-  const scored: Array<{ relativePath: string; score: number }> = [];
+  const scored = new TopK<{ relativePath: string; score: number }>(Math.max(0, offset + limit), (a, b) => b.score - a.score);
+  let totalMatched = 0;
 
   const constraints = parseQueryConstraints(query);
   const pattern = constraints.pattern;
@@ -528,16 +535,14 @@ export async function externalFind(
     if (pattern) {
       const match = fuzzyMatch(pattern, displayPath);
       if (!match) continue;
-      scored.push({ relativePath: displayPath, score: match.score });
+      scored.add({ relativePath: displayPath, score: match.score });
     } else {
-      scored.push({ relativePath: displayPath, score: 50 });
+      scored.add({ relativePath: displayPath, score: 50 });
     }
+    totalMatched++;
   }
 
-  scored.sort((a, b) => b.score - a.score);
-
-  const totalMatched = scored.length;
-  const paginated = scored.slice(offset, offset + limit).map((s) => ({
+  const paginated = scored.sorted().slice(offset, offset + limit).map((s) => ({
     relativePath: s.relativePath,
     score: s.score,
   }));

@@ -9,6 +9,10 @@ export interface EnhancedSettings {
   "scout.enabled": boolean;
   /** Transparently intercept shell grep/find/rg commands and steer LLM to scout. */
   "scout.interceptShell": boolean;
+  /** Apply Git's ignore rules in workspace searches (fixed exclusions still apply). */
+  "scout.respectGitIgnore": boolean;
+  /** Index hidden directories except fixed exclusions such as .git. */
+  "scout.includeHidden": boolean;
   /** Multi-provider web search and content fetch tools (web_search, web_fetch). */
   "web.enabled": boolean;
   /** Enable autonomous isolated subagent execution (subagent, /subagent, /jobs). */
@@ -69,6 +73,22 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     category: "Agent Tools",
     description: "Intercept shell grep/find/rg commands and steer LLM to fast in-memory scout tools",
     defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "scout.respectGitIgnore": {
+    key: "scout.respectGitIgnore",
+    label: "Scout Git Ignore Rules",
+    category: "Agent Tools",
+    description: "Honor .gitignore, Git exclude files and tracked exceptions in workspace searches",
+    defaultValue: true,
+    options: ["enabled", "disabled"],
+  },
+  "scout.includeHidden": {
+    key: "scout.includeHidden",
+    label: "Scout Hidden Directories",
+    category: "Agent Tools",
+    description: "Include hidden workspace directories; fixed exclusions and Git ignore rules still apply",
+    defaultValue: false,
     options: ["enabled", "disabled"],
   },
   "web.enabled": {
@@ -200,6 +220,8 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
 export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "scout.enabled": SETTING_DEFINITIONS["scout.enabled"].defaultValue,
   "scout.interceptShell": SETTING_DEFINITIONS["scout.interceptShell"].defaultValue,
+  "scout.respectGitIgnore": SETTING_DEFINITIONS["scout.respectGitIgnore"].defaultValue,
+  "scout.includeHidden": SETTING_DEFINITIONS["scout.includeHidden"].defaultValue,
   "web.enabled": SETTING_DEFINITIONS["web.enabled"].defaultValue,
   "subagent.enabled": SETTING_DEFINITIONS["subagent.enabled"].defaultValue,
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,

@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
+import { rankFirstBatch, TopK } from "./ranking.js";
 import { classifyLine } from "./classifier.js";
 import { FileContentCache, type FileContent } from "./content-cache.js";
 import { FrecencyTracker } from "./frecency.js";
@@ -108,6 +110,9 @@ export class FileIndexer {
   private contentCache = new FileContentCache();
   private scanPromise?: Promise<void>;
   private lastGitRefreshTime = -Infinity;
+  private visibleGitPaths?: Set<string>;
+  private visibleGitDirectories?: Set<string>;
+  private includeHidden = false;
 
   private constructor(cwd?: string) {
     this.cwd = cwd || process.cwd();
@@ -231,6 +236,27 @@ export class FileIndexer {
     if (force || performance.now() - this.lastGitRefreshTime >= GIT_REFRESH_INTERVAL_MS) {
       await this.refreshGitStatus();
     }
+    const settings = EnhancedSettingsStore.getInstance();
+    this.includeHidden = settings.get("scout.includeHidden");
+    this.visibleGitPaths = undefined;
+    this.visibleGitDirectories = undefined;
+    if (settings.get("scout.respectGitIgnore")) {
+      try {
+        // Git evaluates nested .gitignore, info/exclude, global excludes,
+        // negations and tracked exceptions. Refresh each search so ignore-file
+        // edits, index changes and new files are visible immediately.
+        const { stdout } = await execFileAsync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+          cwd: this.cwd, timeout: 5000, maxBuffer: 20 * 1024 * 1024,
+        });
+        this.visibleGitPaths = new Set(stdout.split("\0").filter(Boolean));
+        this.visibleGitDirectories = new Set<string>();
+        for (const file of this.visibleGitPaths) {
+          for (let slash = file.indexOf("/"); slash !== -1; slash = file.indexOf("/", slash + 1)) {
+            this.visibleGitDirectories.add(file.slice(0, slash));
+          }
+        }
+      } catch { /* Non-Git workspace or unavailable Git: retain fixed exclusions. */ }
+    }
     const directoryStats = new Map<string, fs.Stats | undefined>();
     if (!force) {
       const known = [...this.directories.keys()];
@@ -290,10 +316,12 @@ export class FileIndexer {
     for (const entry of snapshot.entries) {
       const name = entry.name;
       if (DEFAULT_IGNORED_DIRS.has(name)) continue;
-      if (entry.isDirectory() && name.startsWith(".") && name !== ".github") continue;
+      if (!this.includeHidden && entry.isDirectory() && name.startsWith(".") && name !== ".github") continue;
       if (entry.isFile() && name === ".DS_Store") continue;
       const relPath = relDir ? `${relDir}/${name}` : name;
       const fullPath = path.join(currentDir, name);
+      if (entry.isDirectory() && this.visibleGitDirectories && !this.visibleGitDirectories.has(relPath)) continue;
+      if (entry.isFile() && this.visibleGitPaths && !this.visibleGitPaths.has(relPath)) continue;
       if (entry.isDirectory()) {
         await this.walkDir(fullPath, relPath, collector, visited, directoryStats, force, depth + 1);
       } else if (entry.isFile()) {
@@ -317,11 +345,17 @@ export class FileIndexer {
     }
   }
 
-  private async *readCandidates(files: readonly IndexedFile[]): AsyncGenerator<{ file: IndexedFile; content: FileContent }> {
-    // Bounded I/O, but consume in the original rank order so limits/pagination
-    // and definition-first matching remain deterministic.
-    for (let offset = 0; offset < files.length; offset += READ_CONCURRENCY) {
-      const batch = files.slice(offset, offset + READ_CONCURRENCY);
+  private async *readCandidates(files: Iterable<IndexedFile>): AsyncGenerator<{ file: IndexedFile; content: FileContent }> {
+    // Bounded I/O; lazy ranking does not sort the suffix unless we reach it.
+    const iterator = files[Symbol.iterator]();
+    while (true) {
+      const batch: IndexedFile[] = [];
+      while (batch.length < READ_CONCURRENCY) {
+        const next = iterator.next();
+        if (next.done) break;
+        batch.push(next.value);
+      }
+      if (!batch.length) break;
       const contents = await Promise.all(batch.map((file) => this.contentCache.read(file.absolutePath)));
       for (let i = 0; i < batch.length; i++) {
         const file = batch[i];
@@ -393,7 +427,8 @@ export class FileIndexer {
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
 
-    const scored: Array<{ file: IndexedFile; score: number }> = [];
+    const scored = new TopK<{ file: IndexedFile; score: number }>(Math.max(0, offset + limit), (a, b) => b.score - a.score);
+    let totalMatched = 0;
 
     const considerFile = (file: IndexedFile) => {
       if (!matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
@@ -411,7 +446,8 @@ export class FileIndexer {
 
       // Combine fuzzy match score with frecency score
       const totalScore = matchScore + file.frecencyScore;
-      scored.push({ file, score: totalScore });
+      totalMatched++;
+      scored.add({ file, score: totalScore });
     };
 
     for (const file of this.files.values()) {
@@ -434,11 +470,7 @@ export class FileIndexer {
       }
     }
 
-    // Sort by descending score
-    scored.sort((a, b) => b.score - a.score);
-
-    const totalMatched = scored.length;
-    const paginated = scored.slice(offset, offset + limit).map((s) => s.file);
+    const paginated = scored.sorted().slice(offset, offset + limit).map((s) => s.file);
     // Only returned paths need fresh metadata; do not stat every indexed file.
     for (let i = 0; i < paginated.length; i += READ_CONCURRENCY) {
       await Promise.all(paginated.slice(i, i + READ_CONCURRENCY).map(async (file) => {
@@ -507,10 +539,8 @@ export class FileIndexer {
       }
     }
 
-    // Sort candidates so frecent and git-modified files are searched first
-    candidateFiles.sort((a, b) => b.frecencyScore - a.frecencyScore);
-
-    for await (const { file, content } of this.readCandidates(candidateFiles)) {
+    const ranked = rankFirstBatch(candidateFiles, (a, b) => b.frecencyScore - a.frecencyScore);
+    for await (const { file, content } of this.readCandidates(ranked)) {
       if (content.searched) filesSearched++;
       const lines = content.lines;
       if (!lines) continue;
@@ -539,7 +569,7 @@ export class FileIndexer {
         }
 
         if (isMatch) {
-          const { isDefinition, isImport } = classifyLine(line);
+          const { isDefinition, isImport } = classifyLine(line, { start: matchStart, end: matchEnd });
 
           // Collect context lines
           let contextBefore: string[] | undefined;
@@ -573,14 +603,27 @@ export class FileIndexer {
 
     // Fuzzy fallback: if exact/regex search produced zero hits, try fuzzy match on lines
     if (matches.length === 0 && options?.enableFuzzyFallback !== false && pattern.length >= 3) {
-      for await (const { file, content } of this.readCandidates(candidateFiles.slice(0, 50))) {
+      const first = new TopK<IndexedFile>(50, (a, b) => b.frecencyScore - a.frecencyScore);
+      for (const file of candidateFiles) first.add(file);
+      for await (const { file, content } of this.readCandidates(first.sorted())) {
         const lines = content.lines;
         if (!lines) continue;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const fuzzyRes = fuzzyMatch(pattern, line);
+          const declaration = classifyLine(line);
+          const symbolMatch = declaration.definedSymbol ? fuzzyMatch(pattern, declaration.definedSymbol) : null;
+          // A greedy whole-line alignment can consume keyword characters
+          // before reaching the name (e.g. the 'n' in `function Needle`). Give
+          // declared names their own alignment, without promoting initializer
+          // or return-type usages on the same declaration line.
+          const fuzzyRes = symbolMatch && symbolMatch.score >= 50 && declaration.symbolStart !== undefined
+            ? { ...symbolMatch, matchRanges: symbolMatch.matchRanges.map(([a, b]): [number, number] =>
+              [a + declaration.symbolStart!, b + declaration.symbolStart!]) }
+            : fuzzyMatch(pattern, line);
           if (fuzzyRes && fuzzyRes.score >= 50 && fuzzyRes.matchRanges.length > 0) {
-            const { isDefinition, isImport } = classifyLine(line);
+            const { isDefinition, isImport } = classifyLine(line, {
+              start: fuzzyRes.matchRanges[0][0], end: fuzzyRes.matchRanges[0][1], ranges: fuzzyRes.matchRanges,
+            });
             matches.push({
               filePath: file.relativePath,
               lineNumber: i + 1,
@@ -644,12 +687,12 @@ export class FileIndexer {
         candidateFiles.push(file);
       }
     }
-    candidateFiles.sort((a, b) => b.frecencyScore - a.frecencyScore);
+    const ranked = rankFirstBatch(candidateFiles, (a, b) => b.frecencyScore - a.frecencyScore);
 
     const matches: SearchMatch[] = [];
     let filesSearched = 0;
 
-    for await (const { file, content } of this.readCandidates(candidateFiles)) {
+    for await (const { file, content } of this.readCandidates(ranked)) {
       if (content.searched) filesSearched++;
       const lines = content.lines;
       if (!lines) continue;
@@ -660,7 +703,7 @@ export class FileIndexer {
           const haystack = ignoreCase ? (folded ??= line.toLowerCase()) : line;
           const idx = haystack.indexOf(needle);
           if (idx !== -1) {
-            const { isDefinition, isImport } = classifyLine(line);
+            const { isDefinition, isImport } = classifyLine(line, { start: idx, end: idx + pattern.length });
             let contextBefore: string[] | undefined;
             let contextAfter: string[] | undefined;
             if (contextLines > 0) {
