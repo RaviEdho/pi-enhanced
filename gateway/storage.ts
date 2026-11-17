@@ -25,7 +25,7 @@ export interface DiscordChannelSessions {
 }
 
 export const DEFAULT_DISCORD_CHANNEL_SESSIONS: DiscordChannelSessions = {
-  enabled: true, timezone: "Asia/Jakarta", resetHour: 4, idleHours: 6,
+  enabled: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", resetHour: 4, idleHours: 6,
 };
 
 export interface DiscordToolCallVisibility {

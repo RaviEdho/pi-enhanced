@@ -243,7 +243,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         {
           label: "Channel sessions",
           currentValue: config.channelSessions?.enabled !== false
-            ? `${config.channelSessions?.resetHour ?? 4}:00 · ${config.channelSessions?.timezone ?? "Asia/Jakarta"} · ${config.channelSessions?.idleHours ?? 6}h quiet`
+            ? `${config.channelSessions?.resetHour ?? 4}:00 · ${config.channelSessions?.timezone ?? DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone} · ${config.channelSessions?.idleHours ?? 6}h quiet`
             : "overnight rollover off",
           description: "Configure overnight context rollover. Busy nights are skipped; replying to a bot message always continues its linked session without changing the default.",
         },
@@ -771,7 +771,7 @@ async function configureChannelSessions(ctx: ExtensionCommandContext, config: Di
     description: "At the daily boundary, roll over only after the inactivity window and with no running/queued work. Otherwise skip until the next day. Old replies keep their linked sessions; plain mentions use the newest default. Restart the gateway to apply changes.",
     options: [
       { label: "Overnight rollover", currentValue: current.enabled ? "on" : "off", description: "Enable daily context rotation without deleting older reply-linked sessions." },
-      { label: "Timezone", currentValue: current.timezone, description: "Use an explicit IANA timezone, independent of the server's clock settings." },
+      { label: "Timezone", currentValue: current.timezone, description: `Use an explicit IANA timezone. The default is the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}); saved choices are preserved.` },
       { label: "Reset hour", currentValue: `${String(current.resetHour).padStart(2, "0")}:00`, description: "Local hour at which each day's rollover eligibility is evaluated." },
       { label: "Inactivity window", currentValue: `${current.idleHours} hours`, description: "Required quiet time before the daily boundary. Busy nights skip the entire day." },
     ],
@@ -794,7 +794,7 @@ async function configureChannelSessions(ctx: ExtensionCommandContext, config: Di
         : hour ? "Whole hour in the selected timezone (0–23)."
         : "Whole hours without accepted requests in the default session (1–168). A request exactly at the cutoff skips that day's rollover.",
       initialValue: timezone ? current.timezone : String(hour ? current.resetHour : current.idleHours),
-      placeholder: timezone ? "Asia/Jakarta" : hour ? "4" : "6",
+      placeholder: timezone ? DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone : hour ? "4" : "6",
     });
     if (value === undefined) return;
     if (timezone) next.timezone = value.trim();

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { writePrivateJson } from "./persistence.mjs";
 
 export const DEFAULT_CHANNEL_SESSIONS = Object.freeze({
-  enabled: true, timezone: "Asia/Jakarta", resetHour: 4, idleHours: 6,
+  enabled: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", resetHour: 4, idleHours: 6,
 });
 const HOUR_MS = 60 * 60 * 1000;
 const SNOWFLAKE = /^\d{17,20}$/;

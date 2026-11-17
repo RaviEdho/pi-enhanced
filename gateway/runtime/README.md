@@ -250,8 +250,10 @@ callbacks where commands and lifecycle depend on each other.
   tokens independent. Plain text answers must match the default session; explicit
   reply answers must match both the linked session and the exact prompt message.
   Preserve this scoped answer path during restart drain.
-- `channelSessions` settings default to `{ enabled: true, timezone: "Asia/Jakarta",
-  resetHour: 4, idleHours: 6 }`, including legacy config. Validate optional fields
+- `channelSessions` settings default to `{ enabled: true, timezone: <machine timezone>,
+  resetHour: 4, idleHours: 6 }`, including omitted legacy fields. Detect the timezone
+  with `Intl.DateTimeFormat().resolvedOptions().timeZone` (UTC if unavailable);
+  preserve explicitly saved timezones. Validate optional fields
   in both TS storage and the daemon; keep defaults/validation synchronized. Native
   `/discord` Settings → Channel sessions edits all four fields; restart to apply.
   Each local daily boundary is evaluated lazily on the next accepted mention.
