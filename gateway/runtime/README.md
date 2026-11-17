@@ -266,6 +266,33 @@ callbacks where commands and lifecycle depend on each other.
   history authorization scope. `toolCallVerbosity` still controls the detail level where
   visible. Visibility must not alter tool tracking/escalation, final replies, interactive
   prompts, workspace notices, or the dedicated commit/usage workflows.
+- Track the last authoritative assistant `message_end` for each accepted RPC
+  attempt, clearing it before each prompt/workspace continuation. Wait for
+  `agent_settled` before treating an error as terminal: a later successful
+  assistant message supersedes an earlier error from Pi's native retries. Never
+  retrieve stale assistant text or return the empty-response fallback for a
+  terminal provider error. Rejected prompt responses also get a safe error.
+- `model-failures.mjs` publishes only recognized reason categories, never raw
+  provider bodies, account/email lists, tokens or echoed prompt text. Include
+  model identity as inert bounded inline code. Unknown failures get an explicit
+  generic provider-error reason; raw details remain in Pi's own session history,
+  not gateway logs or Discord notices.
+- An unavailable-model/plan/authentication failure may switch once per accepted
+  request to the exact current `config.model`, only before tool work/public
+  output and outside command workflows. Never invent a fallback model, switch
+  for quota/balance/context/transient failures, or change global config. Compare
+  `get_state` with the configured target, post the original safe failure, call
+  native `set_model`, verify via `get_state`, persist workspace metadata, then
+  announce the confirmed old → new selection through ordered native notification
+  delivery. These notices ignore tool-visibility/verbosity toggles. Only after
+  the announcement succeeds send one gateway continuation prompt, not another
+  copy of an already accepted request/images. A rejected prompt was never
+  accepted into history: retry its original message/images instead.
+  Retain accepted-request tool/image/no-reply
+  tracking and a separate workspace-switch counter across this fallback.
+  If the setter, verification, or announcement fails, do not retry; report what
+  could be confirmed. A replacement model's failure is terminal. Cancellation
+  must never trigger model switching or another inference request.
 - Existing server-thread message turns can end with `discord_no_reply`. The model-only,
   sequential tool must be called alone before any other tool or public output. It uses
   the authenticated per-child IPC endpoint to approve its exact active tool-call ID;
@@ -308,33 +335,6 @@ callbacks where commands and lifecycle depend on each other.
   stable ID, but keep the active run's interaction and UI ownership unchanged.
   Pi delivers steering after the current turn's tool calls, before the next model
   call. The existing prompt waiter owns settlement and the final Discord reply;
-- Track the last authoritative assistant `message_end` for each accepted RPC
-  attempt, clearing it before each prompt/workspace continuation. Wait for
-  `agent_settled` before treating an error as terminal: a later successful
-  assistant message supersedes an earlier error from Pi's native retries. Never
-  retrieve stale assistant text or return the empty-response fallback for a
-  terminal provider error. Rejected prompt responses also get a safe error.
-- `model-failures.mjs` publishes only recognized reason categories, never raw
-  provider bodies, account/email lists, tokens or echoed prompt text. Include
-  model identity as inert bounded inline code. Unknown failures get an explicit
-  generic provider-error reason; raw details remain in Pi's own session history,
-  not gateway logs or Discord notices.
-- An unavailable-model/plan/authentication failure may switch once per accepted
-  request to the exact current `config.model`, only before tool work/public
-  output and outside command workflows. Never invent a fallback model, switch
-  for quota/balance/context/transient failures, or change global config. Compare
-  `get_state` with the configured target, post the original safe failure, call
-  native `set_model`, verify via `get_state`, persist workspace metadata, then
-  announce the confirmed old → new selection through ordered native notification
-  delivery. These notices ignore tool-visibility/verbosity toggles. Only after
-  the announcement succeeds send one gateway continuation prompt, not another
-  copy of an already accepted request/images. A rejected prompt was never
-  accepted into history: retry its original message/images instead.
-  Retain accepted-request tool/image/no-reply
-  tracking and a separate workspace-switch counter across this fallback.
-  If the setter, verification, or announcement fails, do not retry; report what
-  could be confirmed. A replacement model's failure is terminal. Cancellation
-  must never trigger model switching or another inference request.
   steering must not create a second waiter, reset UI, or duplicate the reply.
   Normal Discord messages keep their existing queued behavior.
 - `/stop` requires the same user and conversation-route authorization as other
@@ -350,6 +350,26 @@ callbacks where commands and lifecycle depend on each other.
   failures or successful commits. Existing queued requests remain queued;
   completed filesystem/Git operations are not rolled back.
 - `/usage` queues the private `discord-usage` extension command in the conversation's Pi session and captures its UI notifications without posting them to the channel. It also accepts allowlisted server channels and their threads outside gateway conversations, using a separate shared usage session without active-session identity. Respect user and channel allowlists and DM/server access settings. Deliver every report chunk ephemerally to the requesting user; never log report contents or fall back to an agent prompt. The shared report collector supplies session-specific identity and quota semantics.
+- `/git unstage` sends the literal extension command using the same authorized
+  conversation queue, run slot, lifecycle tracking, and dequeued workspace as
+  other Git commands. It accepts no arguments and uses `workflow: "git-unstage"`:
+  ordinary notifications report the result without commit-review controls or a
+  model turn. The extension performs an index-only, root-scoped path reset,
+  preserving working-tree files, HEAD, and merge/rebase metadata, including in
+  repositories with no commits. Never substitute a discard or hard reset.
+- `/git summary` (optional `scope: staged|unstaged`) and `/git commit` (optional
+  `args`) share `/commit`'s authorized conversation queue, run slot, lifecycle,
+  workspace resolution, and reusable commit card. Send literal `/git` extension
+  commands after checking `get_commands`; never substitute an agent prompt.
+  Summary selectors use the title prefix `Git Changes Summary (` and carry the
+  full summary plus proposed commit instructions in the title, paginated without
+  truncation. Render every `Commit <topic>` option as a button, preserving its
+  original option index, requester/channel ownership, expiry, and dismissal.
+  Selection returns to the same locked `/git` handler, which invokes the normal
+  selective commit runner with that topic's instruction. It re-inspects current
+  changes and still requires final commit approval; summary selection alone
+  never stages or commits. Do not route these choices as new Discord messages
+  or nested RPC commands, which would deadlock the active conversation queue.
 - `/commit` sends the literal extension command through RPC after checking
   `get_commands`; never fall back to a natural-language prompt if it is missing.
   Use the conversation queue, a global run slot, and lifecycle task tracking.
@@ -392,26 +412,6 @@ callbacks where commands and lifecycle depend on each other.
   are blocked until the handoff. It refuses to interrupt running background jobs.
   Do not mutate `process.cwd()`, tool factories, or `ctx.cwd` as a partial override;
   move `process.cwd()` only as part of a full in-process session rebind.
-- `/git unstage` sends the literal extension command using the same authorized
-  conversation queue, run slot, lifecycle tracking, and dequeued workspace as
-  other Git commands. It accepts no arguments and uses `workflow: "git-unstage"`:
-  ordinary notifications report the result without commit-review controls or a
-  model turn. The extension performs an index-only, root-scoped path reset,
-  preserving working-tree files, HEAD, and merge/rebase metadata, including in
-  repositories with no commits. Never substitute a discard or hard reset.
-- `/git summary` (optional `scope: staged|unstaged`) and `/git commit` (optional
-  `args`) share `/commit`'s authorized conversation queue, run slot, lifecycle,
-  workspace resolution, and reusable commit card. Send literal `/git` extension
-  commands after checking `get_commands`; never substitute an agent prompt.
-  Summary selectors use the title prefix `Git Changes Summary (` and carry the
-  full summary plus proposed commit instructions in the title, paginated without
-  truncation. Render every `Commit <topic>` option as a button, preserving its
-  original option index, requester/channel ownership, expiry, and dismissal.
-  Selection returns to the same locked `/git` handler, which invokes the normal
-  selective commit runner with that topic's instruction. It re-inspects current
-  changes and still requires final commit approval; summary selection alone
-  never stages or commits. Do not route these choices as new Discord messages
-  or nested RPC commands, which would deadlock the active conversation queue.
 - After `agent_settled`, validate the request against the active token, cwd, and
   session file. Prefer an in-process handoff: write a forked session file whose
   header points at the target cwd, then send the `switch_session` RPC. Pi tears
