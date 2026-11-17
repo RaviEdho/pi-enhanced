@@ -42,8 +42,8 @@ export interface DiscordTableRendering {
 
 export interface DiscordGatewayConfig {
   token: string;
-  allowedUserIds: string[];
   /** Optional on disk; omitted/empty lists are normalized to [] (deny all). */
+  allowedUserIds: string[];
   allowedChannelIds: string[];
   allowDirectMessages: boolean;
   allowServerMessages: boolean;

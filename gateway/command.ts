@@ -1142,6 +1142,7 @@ async function validateBotToken(token: string): Promise<{ id: string; username: 
 }
 
 function parseAllowlist(input: string): string[] {
+  if (input.trim().toLowerCase() === "off") return [];
   const tokens = input.split(/[\s,]+/).filter(Boolean);
   if (tokens.includes("*")) {
     if (tokens.length !== 1) throw new Error("Use * by itself; do not combine it with individual Discord IDs.");
@@ -1164,7 +1165,6 @@ async function startGateway(ctx: ExtensionCommandContext, startReason: "start" |
     return;
   }
 
-  if (input.trim().toLowerCase() === "off") return [];
   const paths = getDiscordGatewayPaths();
   ensurePrivateDirectory(paths.directory);
   ensurePrivateDirectory(paths.sessions);
