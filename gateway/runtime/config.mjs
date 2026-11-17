@@ -29,8 +29,8 @@ export function loadGatewayConfig(env = process.env) {
   if (
     typeof config.token !== "string" ||
     !config.token ||
-    !isValidAllowlist(config.allowedUserIds) ||
-    !isValidAllowlist(config.allowedChannelIds) ||
+    (config.allowedUserIds !== undefined && !isValidAllowlist(config.allowedUserIds)) ||
+    (config.allowedChannelIds !== undefined && !isValidAllowlist(config.allowedChannelIds)) ||
     (config.allowDirectMessages !== undefined && typeof config.allowDirectMessages !== "boolean") ||
     (config.allowServerMessages !== undefined && typeof config.allowServerMessages !== "boolean") ||
     (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
@@ -45,6 +45,9 @@ export function loadGatewayConfig(env = process.env) {
     throw new Error("Discord gateway configuration is invalid");
   }
 
+  // Missing/empty allowlists are a valid deferred setup, never wildcard access.
+  config.allowedUserIds = [...new Set(config.allowedUserIds ?? [])];
+  config.allowedChannelIds = [...new Set(config.allowedChannelIds ?? [])];
   config.tableRendering = { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
   config.channelSessions = { ...DEFAULT_CHANNEL_SESSIONS, ...config.channelSessions };
 
@@ -58,7 +61,7 @@ export function loadGatewayConfig(env = process.env) {
 }
 
 export function isValidAllowlist(value) {
-  return Array.isArray(value) && value.length > 0 && (
+  return Array.isArray(value) && (
     (value.length === 1 && value[0] === "*") ||
     value.every((entry) => typeof entry === "string" && /^\d{17,20}$/.test(entry))
   );

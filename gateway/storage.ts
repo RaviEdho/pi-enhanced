@@ -42,6 +42,7 @@ export interface DiscordTableRendering {
 export interface DiscordGatewayConfig {
   token: string;
   allowedUserIds: string[];
+  /** Optional on disk; omitted/empty lists are normalized to [] (deny all). */
   allowedChannelIds: string[];
   allowDirectMessages: boolean;
   allowServerMessages: boolean;
@@ -129,8 +130,8 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
   if (
     typeof value.token !== "string" ||
     !value.token.trim() ||
-    !isDiscordAllowlist(value.allowedUserIds) ||
-    !isDiscordAllowlist(value.allowedChannelIds) ||
+    (value.allowedUserIds !== undefined && !isDiscordAllowlist(value.allowedUserIds)) ||
+    (value.allowedChannelIds !== undefined && !isDiscordAllowlist(value.allowedChannelIds)) ||
     (value.allowDirectMessages !== undefined && typeof value.allowDirectMessages !== "boolean") ||
     (value.allowServerMessages !== undefined && typeof value.allowServerMessages !== "boolean") ||
     (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
@@ -157,8 +158,8 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
 
   return {
     token: value.token,
-    allowedUserIds: [...new Set(value.allowedUserIds)],
-    allowedChannelIds: [...new Set(value.allowedChannelIds)],
+    allowedUserIds: [...new Set(value.allowedUserIds ?? [])],
+    allowedChannelIds: [...new Set(value.allowedChannelIds ?? [])],
     allowDirectMessages: value.allowDirectMessages !== false,
     allowServerMessages: value.allowServerMessages !== false,
     ...(typeof value.homeChannelId === "string" ? { homeChannelId: value.homeChannelId } : {}),
@@ -230,7 +231,7 @@ function readChannelReplies(value: unknown): DiscordChannelReplies {
 }
 
 function isDiscordAllowlist(value: unknown): value is string[] {
-  return Array.isArray(value) && value.length > 0 && (
+  return Array.isArray(value) && (
     (value.length === 1 && value[0] === "*") || value.every(isDiscordSnowflake)
   );
 }

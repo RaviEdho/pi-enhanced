@@ -192,13 +192,13 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         },
         {
           label: "Allowed users",
-          currentValue: config.allowedUserIds.includes("*") ? "everyone" : `${config.allowedUserIds.length} allowed`,
-          description: 'Choose which Discord users can interact with the bot in DMs and servers. Use "*" for everyone.',
+          currentValue: config.allowedUserIds.includes("*") ? "everyone" : config.allowedUserIds.length ? `${config.allowedUserIds.length} allowed` : "none (blocked)",
+          description: 'Choose which Discord users can interact in DMs and servers. Use "*" for everyone or "off" to block all users.',
         },
         {
           label: "Allowed channels",
-          currentValue: config.allowedChannelIds.includes("*") ? "all channels" : `${config.allowedChannelIds.length} allowed`,
-          description: 'Choose allowed server or DM channels, or "*" for all. Also authorizes history sources; shared-thread participants may see history results.',
+          currentValue: config.allowedChannelIds.includes("*") ? "all channels" : config.allowedChannelIds.length ? `${config.allowedChannelIds.length} allowed` : "none (servers/history blocked)",
+          description: 'Choose allowed channels, "*" for all, or "off" to block server messages/history. DM messaging uses only the user whitelist; shared-thread participants may see history results.',
         },
         {
           label: "Notification channel",
@@ -366,30 +366,20 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
 
   const userIdsInput = await promptDiscordInput(ctx, {
     title: "Allowed Users",
-    instruction: 'Comma-separated user IDs, or "*" for everyone. Applies to DMs and servers.',
+    instruction: 'Comma-separated user IDs, or "*" for everyone. Leave blank to block all DMs and server messages until users are added.',
     initialValue: existing?.allowedUserIds.join(", ") || "",
     placeholder: "Comma-separated user IDs or *",
   });
   if (userIdsInput === undefined) return;
   const allowedUserIds = parseAllowlist(userIdsInput);
-  if (allowedUserIds.length === 0) {
-    notify(ctx, "Add at least one allowed Discord user ID.", "error");
-    return;
-  }
-
   const channelIdsInput = await promptDiscordInput(ctx, {
     title: "Allowed Channels",
-    instruction: 'Comma-separated server or DM channel IDs, or "*" for all channels. This also authorizes history sources.',
+    instruction: 'Comma-separated channel IDs, or "*" for all. Leave blank to block server messages and history; DM messaging uses only the user whitelist.',
     initialValue: existing?.allowedChannelIds.join(", ") || "",
     placeholder: "Comma-separated channel IDs or *",
   });
   if (channelIdsInput === undefined) return;
   const allowedChannelIds = parseAllowlist(channelIdsInput);
-  if (allowedChannelIds.length === 0) {
-    notify(ctx, "Add at least one allowed channel ID.", "error");
-    return;
-  }
-
   const homeChannelInput = await promptDiscordInput(ctx, {
     title: "Notification Channel",
     instruction: "Text channel ID for start, restart, stop, and failure notices. Leave blank to disable.",
@@ -449,8 +439,8 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
 
   const usersAreWildcard = allowedUserIds.includes("*");
   const channelsAreWildcard = allowedChannelIds.includes("*");
-  const userAccessLine = `Users (DMs + servers): ${usersAreWildcard ? "everyone (*)" : `${allowedUserIds.length} allowed`}`;
-  const channelAccessLine = `Channels (server routing + history/discovery): ${channelsAreWildcard ? "all channels (*)" : `${allowedChannelIds.length} allowed`}`;
+  const userAccessLine = `Users (DMs + servers): ${usersAreWildcard ? "everyone (*)" : allowedUserIds.length ? `${allowedUserIds.length} allowed` : "none — all incoming messages blocked"}`;
+  const channelAccessLine = `Channels (server routing + history/discovery): ${channelsAreWildcard ? "all channels (*)" : allowedChannelIds.length ? `${allowedChannelIds.length} allowed` : "none — server messages and history blocked"}`;
   const dmAccessLine = `DM access: ${existing?.allowDirectMessages === false ? "Off" : "On"}`;
   const serverAccessLine = `Server access: ${existing?.allowServerMessages === false ? "Off" : "On"}`;
   const highlightedAccessLines = [
@@ -563,26 +553,21 @@ async function configureWhitelist(
   const currentValues = isUsers ? config.allowedUserIds : config.allowedChannelIds;
   const title = isUsers ? "Allowed Users" : "Allowed Channels";
   const instruction = isUsers
-    ? 'Comma-separated user IDs, or "*" for everyone (DMs and servers). Leave blank to keep current.'
-    : 'Comma-separated server or DM channel IDs, or "*" for all channels. Also authorizes history sources; leave blank to keep current.';
+    ? 'Comma-separated user IDs, "*" for everyone, or "off" to block all DMs and servers. Leave blank to keep current.'
+    : 'Comma-separated channel IDs, "*" for all, or "off" to block servers/history. DMs use only the user whitelist; blank keeps current.';
   const value = await promptDiscordInput(ctx, {
     title,
     instruction,
     initialValue: "",
-    placeholder: currentValues.join(", "),
+    placeholder: currentValues.join(", ") || "No entries (blocked)",
   });
   if (value === undefined || !value.trim()) return;
 
   const allowlist = parseAllowlist(value);
-  if (allowlist.length === 0) {
-    notify(ctx, `Add at least one ${isUsers ? "user" : "channel"} ID, or enter * by itself.`, "error");
-    return;
-  }
-
   const isWildcard = allowlist.includes("*");
   const summary = isUsers
-    ? `Allowed users: ${isWildcard ? "everyone (*)" : `${allowlist.length} user ID(s)`}`
-    : `Allowed channels: ${isWildcard ? "all channels (*)" : `${allowlist.length} channel ID(s)`}`;
+    ? `Allowed users: ${isWildcard ? "everyone (*)" : allowlist.length ? `${allowlist.length} user ID(s)` : "none — all incoming messages blocked"}`
+    : `Allowed channels: ${isWildcard ? "all channels (*)" : allowlist.length ? `${allowlist.length} channel ID(s)` : "none — server messages and history blocked"}`;
   const approved = await confirmDiscordAction(ctx, {
     title: isUsers ? "Save Allowed Users?" : "Save Allowed Channels?",
     content: isUsers ? [summary] : [summary, "This list also authorizes history sources, including the current requester’s DM. Shared-thread participants may see history results."],
@@ -1157,6 +1142,7 @@ async function startGateway(ctx: ExtensionCommandContext, startReason: "start" |
     return;
   }
 
+  if (input.trim().toLowerCase() === "off") return [];
   const paths = getDiscordGatewayPaths();
   ensurePrivateDirectory(paths.directory);
   ensurePrivateDirectory(paths.sessions);

@@ -38,6 +38,14 @@ callbacks where commands and lifecycle depend on each other.
 
 ## Coordination contracts
 
+- `allowedUserIds` and `allowedChannelIds` may be omitted or empty. Both loaders
+  normalize missing lists to `[]`, never `*`; reject malformed lists and mixed
+  wildcard/ID lists. An empty user list blocks all incoming messages. An empty
+  channel list blocks server routing and explicit history/discovery; ordinary DM
+  messaging still requires only the user whitelist and DM access toggle. Setup
+  accepts blank lists; Settings accepts `off` to clear them while blank keeps
+  current values. Existing nonempty lists keep their authorization semantics.
+
 - Create Discord REST with its own explicitly supplied Undici 6 `Agent`, not the
   process-wide dispatcher. Importing Pi's SDK loads Undici 8 and replaces the
   legacy global dispatcher with a compatibility wrapper; real multipart Discord
