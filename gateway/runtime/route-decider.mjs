@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { log, safeErrorName } from "./logging.mjs";
 
-const DECISION_TIMEOUT_MS = 6_000;
+export const DECISION_TIMEOUT_MS = 6_000;
 const MAX_MESSAGE_CHARS = 2_000;
 const MAX_AUTHOR_CHARS = 40;
 const MAX_EMBED_CONTEXT_CHARS = 1_000;
@@ -154,18 +154,20 @@ export function createRouteDecider({ config, loadModels = loadPiModels, now = Da
     }
   }
 
-  async function decide({ content, author, isReply, imageCount, embedContext, loadContext }) {
+  async function decide({ content, author, isReply, imageCount, embedContext, loadContext, startedAt }) {
     if (unavailableAt !== undefined && now() - unavailableAt < UNAVAILABLE_RETRY_MS) {
       return { target: "thread", reason: "router-unavailable" };
     }
-    const started = now();
+    const started = startedAt ?? now();
+    const remaining = Math.max(0, DECISION_TIMEOUT_MS - (now() - started));
+    if (remaining === 0) return { target: "thread", reason: "router-timeout", latencyMs: now() - started };
     const controller = new AbortController();
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
         reject(new DOMException("Routing decision timed out", "TimeoutError"));
-      }, DECISION_TIMEOUT_MS);
+      }, remaining);
       timer.unref?.();
     });
     try {
@@ -177,7 +179,7 @@ export function createRouteDecider({ config, loadModels = loadPiModels, now = Da
       ]);
       const response = await Promise.race([runtime.completeSimple(model, {
         messages: [{ role: "user", content: [{ type: "text", text: buildRoutingPrompt({ ...routingContext, content, author, isReply, imageCount, embedContext }) }] }],
-      }, { maxTokens: MAX_OUTPUT_TOKENS, signal: controller.signal, timeoutMs: DECISION_TIMEOUT_MS }), deadline]);
+      }, { maxTokens: MAX_OUTPUT_TOKENS, signal: controller.signal, timeoutMs: Math.max(1, DECISION_TIMEOUT_MS - (now() - started)) }), deadline]);
       const latencyMs = now() - started;
       // Providers that reject the request still return a message; never trust it.
       if (response.stopReason === "error" || response.stopReason === "aborted") {

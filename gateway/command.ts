@@ -23,8 +23,10 @@ import { DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-d
 import { DiscordToggleDialog, type DiscordAccessPaths } from "./toggle-dialog.js";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+  DEFAULT_DISCORD_CHANNEL_SESSIONS,
   ensurePrivateDirectory,
   getDiscordGatewayPaths,
+  isValidDiscordChannelSessions,
   isDiscordSnowflake,
   readDiscordGatewayConfig,
   writePrivateJson,
@@ -239,6 +241,13 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
           description: "Choose where new server conversations answer: a thread, the channel, or a routing model's choice. Existing threads and DMs are unchanged.",
         },
         {
+          label: "Channel sessions",
+          currentValue: config.channelSessions?.enabled !== false
+            ? `${config.channelSessions?.resetHour ?? 4}:00 · ${config.channelSessions?.timezone ?? "Asia/Jakarta"} · ${config.channelSessions?.idleHours ?? 6}h quiet`
+            : "overnight rollover off",
+          description: "Configure overnight context rollover. Busy nights are skipped; replying to a bot message always continues its linked session without changing the default.",
+        },
+        {
           label: "Recent context",
           currentValue: contextMessagesLabel(config.contextMessages),
           description: "Set surrounding messages added for context: before the reply target when replying, or before your new message otherwise. Non-replies skip already-delivered context; off disables history.",
@@ -303,6 +312,9 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         break;
       case "Channel replies":
         await configureChannelReplies(ctx, config);
+        break;
+      case "Channel sessions":
+        await configureChannelSessions(ctx, config);
         break;
       case "Recent context":
         await configureContextMessages(ctx, config);
@@ -492,6 +504,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     toolCallVisibility: existing?.toolCallVisibility ?? { channels: false, threads: true, dms: true },
     tableRendering: existing?.tableRendering ?? { enabled: false, showTitleFooter: false, attachMarkdown: false },
     channelReplies: existing?.channelReplies ?? { mode: "always-thread", escalate: true, followUp: true, contextMessages: 5 },
+    channelSessions: existing?.channelSessions ?? { ...DEFAULT_DISCORD_CHANNEL_SESSIONS },
     contextMessages: existing?.contextMessages ?? 5,
     configuredAt: new Date().toISOString(),
   };
@@ -764,6 +777,50 @@ async function configureTableRendering(ctx: ExtensionCommandContext, config: Dis
   saveGatewayConfig(ctx, config, {
     tableRendering: { ...current, [setting.key]: value },
   }, `Table ${setting.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
+}
+
+async function configureChannelSessions(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const current = { ...DEFAULT_DISCORD_CHANNEL_SESSIONS, ...config.channelSessions };
+  const selected = await selectDiscordOption(ctx, {
+    title: "Channel sessions",
+    description: "At the daily boundary, roll over only after the inactivity window and with no running/queued work. Otherwise skip until the next day. Old replies keep their linked sessions; plain mentions use the newest default. Restart the gateway to apply changes.",
+    options: [
+      { label: "Overnight rollover", currentValue: current.enabled ? "on" : "off", description: "Enable daily context rotation without deleting older reply-linked sessions." },
+      { label: "Timezone", currentValue: current.timezone, description: "Use an explicit IANA timezone, independent of the server's clock settings." },
+      { label: "Reset hour", currentValue: `${String(current.resetHour).padStart(2, "0")}:00`, description: "Local hour at which each day's rollover eligibility is evaluated." },
+      { label: "Inactivity window", currentValue: `${current.idleHours} hours`, description: "Required quiet time before the daily boundary. Busy nights skip the entire day." },
+    ],
+  });
+  if (!selected) return;
+  const next = { ...current };
+  if (selected === "Overnight rollover") {
+    const choice = await selectDiscordOption(ctx, {
+      title: "Overnight rollover",
+      options: [current.enabled ? "On (current)" : "On", current.enabled ? "Off" : "Off (current)"],
+    });
+    if (!choice) return;
+    next.enabled = choice.startsWith("On");
+  } else {
+    const timezone = selected === "Timezone";
+    const hour = selected === "Reset hour";
+    const value = await promptDiscordInput(ctx, {
+      title: selected,
+      instruction: timezone ? "IANA timezone, e.g. Asia/Jakarta or UTC."
+        : hour ? "Whole hour in the selected timezone (0–23)."
+        : "Whole hours without accepted requests in the default session (1–168). A request exactly at the cutoff skips that day's rollover.",
+      initialValue: timezone ? current.timezone : String(hour ? current.resetHour : current.idleHours),
+      placeholder: timezone ? "Asia/Jakarta" : hour ? "4" : "6",
+    });
+    if (value === undefined) return;
+    if (timezone) next.timezone = value.trim();
+    else if (hour) next.resetHour = value.trim() ? Number(value) : Number.NaN;
+    else next.idleHours = value.trim() ? Number(value) : Number.NaN;
+  }
+  if (!isValidDiscordChannelSessions(next)) {
+    notify(ctx, "Use a valid IANA timezone, reset hour 0–23, and inactivity window 1–168 whole hours.", "error");
+    return;
+  }
+  saveGatewayConfig(ctx, config, { channelSessions: next }, "Channel session settings saved.");
 }
 
 async function configureContextMessages(ctx: ExtensionCommandContext, config: DiscordGatewayConfig, routing = false): Promise<void> {

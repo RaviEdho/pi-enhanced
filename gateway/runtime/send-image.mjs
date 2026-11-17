@@ -216,6 +216,7 @@ export async function sendImage({ client, configPath, session, request, signal }
           ...(active.replyToMessageId ? { reply: { messageReference: active.replyToMessageId, failIfNotExists: false } } : {}),
         });
       } catch { fail("Discord image upload failed; delivery may be uncertain. Check the conversation and bot Attach Files permission before retrying."); }
+      active.onMessageSent?.(message);
       // A forced stop may finish while Discord's upload is already in flight.
       // Do not let its late completion affect a newer accepted turn.
       if (session.interaction === active && session.runWaiter === context.waiter) {

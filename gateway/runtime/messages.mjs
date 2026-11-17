@@ -125,13 +125,14 @@ export function formatDiscordEmbedContext(message, maxChars = EMBED_CONTEXT_CHAR
   }
 }
 
-export async function loadDiscordReplyContext(message) {
+export async function loadDiscordReplyContext(message, { onResolved } = {}) {
   if (!hasDiscordReply(message)) return "";
   try {
     const referenced = await message.fetchReference();
     if (referenced.id !== message.reference.messageId || referenced.channelId !== message.channelId) {
       throw new Error("Discord reply reference did not match the source channel/message");
     }
+    onResolved?.(referenced);
     const attachments = referenced.attachments && typeof referenced.attachments.values === "function"
       ? Array.from(referenced.attachments.values(), (attachment) => ({
         name: attachment.name,

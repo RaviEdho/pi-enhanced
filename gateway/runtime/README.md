@@ -13,8 +13,10 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `discord-rest.mjs` | Own an isolated Undici 6 dispatcher for Discord REST, with automatic retries disabled. |
 | `router.mjs` | Authorize messages, choose DM/thread/channel conversations, deduplicate, and schedule replies. |
 | `route-decider.mjs` | Ask a chat model whether a new server conversation needs a thread or a direct channel reply, with timeouts and thread fallback. |
-| `sessions.mjs` | Own the session pool, conversation queues, one-shot fork seeds, global run slots, and idle eviction. |
-| `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, workspace handoffs, and history IPC lifecycle. |
+| `sessions.mjs` | Own the session pool, conversation queues, fresh-session preparation, one-shot fork seeds, global run slots, and idle eviction. |
+| `channel-sessions.mjs` | Persist channel defaults, overnight rollover/activity, and bot-message-to-session affinity; wrap channel sends for durable reply tracking. |
+| `pi-rpc.mjs` | Own one conversation's Pi child, RPC framing, settlement, bounded default-model fallback/notices, workspace handoffs, and history IPC lifecycle. |
+| `model-failures.mjs` | Classify terminal provider failures into safe display reasons and availability categories; format inert model labels without publishing raw error bodies. |
 | `history.mjs` | Authenticate session IPC for bounded history reads, channel discovery, silence decisions, and image uploads. |
 | `send-image.mjs` | Authorize the active upload destination, bound workspace-file/public-HTTPS image loading, and upload validated image buffers. |
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
@@ -83,7 +85,11 @@ callbacks where commands and lifecycle depend on each other.
   missing native renderer cannot prevent gateway startup or ordinary replies.
 
 - Resolve reply context only for authorized, accepted messages. In auto routing, load
-  it before the routing decision; other routes load it inside the queued run. Memoize
+  it before the routing decision; other routes normally load it inside the queued
+  run. Top-level server replies without a saved link first use Discord's received
+  reply-author metadata; only missing author metadata requires an early quote read
+  to identify legacy bot replies. Bound that read and classification together to
+  six seconds (`startedAt` carries the remaining budget into the decider). Memoize
   the read per accepted message and reuse it for the agent, including thread fallback.
   Fetch only the directly referenced same-channel message via Discord's message API;
   never traverse reply chains. Treat its text/author and attachment links as quoted
@@ -203,11 +209,47 @@ callbacks where commands and lifecycle depend on each other.
   earlier complex work. Unreadable history degrades to no history; an unreadable quote
   is explicit. Context reads must not run for unauthorized/rejected messages, and routing
   reads are skipped for forced modes, follow-up escalation, DMs, and existing threads.
-- Channel conversations use one shared session per channel
-  (`getChannelSessionKey`), separate from thread sessions, and reply to the triggering
-  message. They are exempt from thread title generation but keep normal queueing, run slots,
-  author labels, and history scopes (the channel is its own history parent).
-- Every new server thread forks the parent channel's shared Pi history when available,
+- Channel conversations use a shared default session per channel, separate from
+  thread sessions. Preserve the legacy `getChannelSessionKey` for the initial
+  default; subsequent defaults and standalone recoveries append `:session:<uuid>`.
+  `channel-sessions.mjs` owns private `channel-routes/<channel-key-hash>/state.json`
+  and individual `replies/<snowflake>.json` records under the session root. Scope
+  reply lookup to the authorized guild/channel and validate saved logical keys;
+  never accept a session path/key from Discord message text. Track every successful
+  send through the per-turn wrapped channel, including split text, tables, UI,
+  narration and errors. Image-tool uploads re-fetch the destination: invoke the
+  captured active interaction's `onMessageSent` hook after sending too. Mapping
+  failures must be logged without retrying an already-delivered message. Do not
+  expire reply records automatically or load the entire index to find a message.
+- A direct reply to a tracked bot response resumes its original logical session's
+  latest history, not a rewind/fork, and bypasses classifier/follow-up routing.
+  A reply to an untracked bot response or unavailable original session explicitly
+  warns and starts a separate fresh session. Plain mentions still route normally
+  and, when answered in-channel, use the newest default; reviving an old session
+  does not change that default or its follow-up escalation memory. Serialize
+  pre-run channel selection on a separate `:routing` queue, then enqueue agent
+  work by the selected logical key. Never hold a run slot during routing. Channel
+  runs retain author labels, normal queueing/run slots and history scopes (the
+  channel is its own history parent), without thread title generation. Multiple
+  sessions may have prompts for the same participant/channel: keep their prompt
+  tokens independent. Plain text answers must match the default session; explicit
+  reply answers must match both the linked session and the exact prompt message.
+  Preserve this scoped answer path during restart drain.
+- `channelSessions` settings default to `{ enabled: true, timezone: "Asia/Jakarta",
+  resetHour: 4, idleHours: 6 }`, including legacy config. Validate optional fields
+  in both TS storage and the daemon; keep defaults/validation synchronized. Native
+  `/discord` Settings → Channel sessions edits all four fields; restart to apply.
+  Each local daily boundary is evaluated lazily on the next accepted mention.
+  Activity within the inactivity window (inclusive cutoff), pending/running work,
+  or work finishing across the boundary skips that whole day—not merely until
+  later the same day. Persist boundary, activity and pending markers; recover a
+  crash conservatively. Only work in the default session updates its activity.
+  First use preserves legacy history until the next daily boundary. Rollover
+  prepares a different hashed session directory and a fresh Pi file containing
+  only workspace/model/thinking settings, never old messages or summaries. Keep
+  old sessions/files intact so reply links remain resumable across evictions,
+  restarts, and workspace handoffs. Disabling rollover does not disable affinity.
+- Every new server thread forks the parent channel's current default Pi history when available,
   regardless of routing mode, classifier fallback, or follow-up escalation. Look up
   the exact saved source from the live session or persisted workspace metadata without
   opening a source child. Wait behind earlier channel work and hold its queue until

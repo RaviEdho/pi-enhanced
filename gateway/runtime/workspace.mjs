@@ -63,6 +63,41 @@ export function forkConversationForWorkspace(sourceFile, targetCwd, directory) {
   return { file, id };
 }
 
+/** Keep workspace/model/thinking, but no conversation, when rotating a channel. */
+export function createFreshConversation(sourceFile, sourceDirectory, targetDirectory, cwd) {
+  const source = validateConversationFile(sourceFile, sourceDirectory);
+  if (statSync(source).size > 64 * 1024 * 1024) throw new Error("Conversation is too large to inspect");
+  validateWorkspaceDirectory(cwd);
+  const records = readFileSync(source, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+  if (records[0]?.type !== "session") throw new Error("Conversation header is invalid");
+  const entries = records.slice(1).filter((entry) => typeof entry.id === "string");
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  let entry = entries.at(-1);
+  let model;
+  let thinking;
+  const visited = new Set();
+  while (entry && !visited.has(entry.id)) {
+    visited.add(entry.id);
+    if (!model && entry.type === "model_change") model = { provider: entry.provider, modelId: entry.modelId };
+    if (!thinking && entry.type === "thinking_level_change") thinking = { thinkingLevel: entry.thinkingLevel };
+    entry = byId.get(entry.parentId);
+  }
+  const id = randomUUID();
+  const timestamp = new Date().toISOString();
+  const file = join(targetDirectory, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
+  const fresh = [{ type: "session", version: 3, id, timestamp, cwd }];
+  let parentId = null;
+  for (const [type, selection] of [["model_change", model], ["thinking_level_change", thinking]]) {
+    if (!selection) continue;
+    const entryId = randomUUID();
+    fresh.push({ type, id: entryId, parentId, timestamp, ...selection });
+    parentId = entryId;
+  }
+  writeFileSync(file, `${fresh.map((record) => JSON.stringify(record)).join("\n")}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  saveWorkspace(targetDirectory, { cwd, sessionFile: file });
+  return file;
+}
+
 export function loadWorkspace(directory) {
   const state = readOptionalJson(join(directory, "workspace.json"));
   if (!state) return undefined;

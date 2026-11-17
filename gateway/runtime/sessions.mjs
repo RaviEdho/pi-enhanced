@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { loadWorkspace, validateForkSource } from "./workspace.mjs";
+import { createFreshConversation, loadWorkspace, validateConversationFile, validateForkSource } from "./workspace.mjs";
 
 /** Owns session affinity, per-conversation ordering, and global run slots. */
 export function createSessionManager({
@@ -46,6 +46,28 @@ export function createSessionManager({
       // Missing or invalid history must not prevent a new thread from starting.
       return undefined;
     }
+  }
+
+  /** Prepare a different logical session without copying the old chat history. */
+  function prepareFresh(key, sourceKey) {
+    assertOpen();
+    const sourceDirectory = sessionDirectoryFor(sourceKey);
+    const saved = loadWorkspace(sourceDirectory);
+    const live = sessions.get(sourceKey);
+    const sourceFile = saved?.sessionFile ?? live?.sessionFile;
+    if (!sourceFile) return;
+    const directory = sessionDirectoryFor(key);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    createFreshConversation(sourceFile, sourceDirectory, directory, saved?.cwd ?? live.cwd);
+  }
+
+  function canResume(key) {
+    try {
+      if (openingSessions.has(key) || sessionQueues.has(key)) return true;
+      const live = sessions.get(key);
+      if (live && !live.closed && live.sessionFile) return Boolean(validateConversationFile(live.sessionFile, sessionDirectoryFor(key)));
+      return Boolean(loadWorkspace(sessionDirectoryFor(key)));
+    } catch { return false; }
   }
 
   function enqueue(key, task) {
@@ -171,6 +193,9 @@ export function createSessionManager({
     get,
     seed,
     getForkSource,
+    prepareFresh,
+    canResume,
+    hasWorkFor: (key) => openingSessions.has(key) || sessionQueues.has(key) || Boolean(sessions.get(key)?.running),
     peek: (key) => sessions.get(key),
     enqueue,
     withRunSlot,

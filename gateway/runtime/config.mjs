@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { DEFAULT_CHANNEL_SESSIONS, isValidChannelSessions } from "./channel-sessions.mjs";
 
 export function loadGatewayConfig(env = process.env) {
   const configPath = env.PI_ENHANCED_DISCORD_CONFIG_PATH;
@@ -37,6 +38,7 @@ export function loadGatewayConfig(env = process.env) {
     (config.toolCallVisibility !== undefined && !isValidToolCallVisibility(config.toolCallVisibility)) ||
     (config.tableRendering !== undefined && !isValidTableRendering(config.tableRendering)) ||
     (config.channelReplies !== undefined && !isValidChannelReplies(config.channelReplies)) ||
+    (config.channelSessions !== undefined && !isValidChannelSessions(config.channelSessions)) ||
     (config.contextMessages !== undefined && (!Number.isInteger(config.contextMessages) || config.contextMessages < 0 || config.contextMessages > 25)) ||
     typeof config.cwd !== "string"
   ) {
@@ -44,6 +46,7 @@ export function loadGatewayConfig(env = process.env) {
   }
 
   config.tableRendering = { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
+  config.channelSessions = { ...DEFAULT_CHANNEL_SESSIONS, ...config.channelSessions };
 
   return {
     config,

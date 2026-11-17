@@ -11,6 +11,7 @@ import { PiRpcSession } from "./runtime/pi-rpc.mjs";
 import { createMessageRouter } from "./runtime/router.mjs";
 import { createRouteDecider } from "./runtime/route-decider.mjs";
 import { createSessionManager } from "./runtime/sessions.mjs";
+import { createChannelSessionRegistry } from "./runtime/channel-sessions.mjs";
 import { createThreadRegistry } from "./runtime/threads.mjs";
 
 // This remains the standalone Node entry point used by /discord and restarts.
@@ -54,9 +55,12 @@ const commands = createCommandHandlers({
   allowedUsers, allowedChannels, threads, sessions, lifecycle,
 });
 const routeDecider = createRouteDecider({ config });
+const channelSessions = createChannelSessionRegistry({
+  sessionRoot: paths.sessionRoot, sessions, settings: config.channelSessions,
+});
 const router = createMessageRouter({
   client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle,
-  routeDecider,
+  routeDecider, channelSessions,
 });
 
 client.on("clientReady", (readyClient) => {

@@ -16,6 +16,17 @@ export interface DiscordChannelReplies {
 
 export type DiscordChannelReplyMode = "always-thread" | "channel" | "auto";
 
+export interface DiscordChannelSessions {
+  enabled: boolean;
+  timezone: string;
+  resetHour: number;
+  idleHours: number;
+}
+
+export const DEFAULT_DISCORD_CHANNEL_SESSIONS: DiscordChannelSessions = {
+  enabled: true, timezone: "Asia/Jakarta", resetHour: 4, idleHours: 6,
+};
+
 export interface DiscordToolCallVisibility {
   channels: boolean;
   threads: boolean;
@@ -42,6 +53,7 @@ export interface DiscordGatewayConfig {
   toolCallVisibility?: DiscordToolCallVisibility;
   tableRendering?: DiscordTableRendering;
   channelReplies: DiscordChannelReplies;
+  channelSessions?: DiscordChannelSessions;
   /** Automatically included recent messages per conversation turn (0–25; defaults to 5). */
   contextMessages: number;
   configuredAt: string;
@@ -126,6 +138,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     (value.toolCallVisibility !== undefined && !isValidToolCallVisibility(value.toolCallVisibility)) ||
     (value.tableRendering !== undefined && !isValidTableRendering(value.tableRendering)) ||
     (value.channelReplies !== undefined && !isValidChannelReplies(value.channelReplies)) ||
+    (value.channelSessions !== undefined && !isValidDiscordChannelSessions(value.channelSessions)) ||
     (value.contextMessages !== undefined &&
       (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) ||
     typeof value.cwd !== "string" ||
@@ -156,6 +169,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     toolCallVisibility: { channels: false, threads: true, dms: true, ...value.toolCallVisibility },
     tableRendering: { enabled: false, showTitleFooter: false, attachMarkdown: false, ...value.tableRendering },
     channelReplies: readChannelReplies(value.channelReplies),
+    channelSessions: { ...DEFAULT_DISCORD_CHANNEL_SESSIONS, ...value.channelSessions },
     contextMessages: value.contextMessages ?? 5,
     configuredAt: typeof value.configuredAt === "string" ? value.configuredAt : new Date(0).toISOString(),
   };
@@ -171,6 +185,19 @@ function isValidTableRendering(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<DiscordTableRendering>;
   return [entry.enabled, entry.showTitleFooter, entry.attachMarkdown].every((setting) => setting === undefined || typeof setting === "boolean");
+}
+
+export function isValidDiscordChannelSessions(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<DiscordChannelSessions>;
+  if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") return false;
+  if (entry.resetHour !== undefined && (!Number.isInteger(entry.resetHour) || entry.resetHour < 0 || entry.resetHour > 23)) return false;
+  if (entry.idleHours !== undefined && (!Number.isInteger(entry.idleHours) || entry.idleHours < 1 || entry.idleHours > 168)) return false;
+  if (entry.timezone !== undefined) {
+    if (typeof entry.timezone !== "string" || !entry.timezone.trim()) return false;
+    try { new Intl.DateTimeFormat("en", { timeZone: entry.timezone }); } catch { return false; }
+  }
+  return true;
 }
 
 function isValidChannelReplies(value: unknown): boolean {

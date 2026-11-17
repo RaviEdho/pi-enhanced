@@ -6,6 +6,9 @@ import {
 import { sendAgentReply } from "./agent-replies.mjs";
 import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
+import { getChannelSessionKey, trackChannelReplies } from "./channel-sessions.mjs";
+import { DECISION_TIMEOUT_MS } from "./route-decider.mjs";
+export { getChannelSessionKey } from "./channel-sessions.mjs";
 
 /** Tools that mean a channel reply did real work, so the topic needs a thread. */
 const ESCALATING_TOOLS = new Set([
@@ -19,11 +22,6 @@ const DELIVERED_MESSAGE_MEMORY = 2000;
 const CONTEXT_MESSAGE_LIMIT = 25;
 const DEFAULT_CONTEXT_MESSAGES = 5;
 
-/** One shared session per channel, separate from every thread session. */
-export function getChannelSessionKey(guildId, channelId) {
-  return `guild:${guildId}:channel:${channelId}`;
-}
-
 export function usesEscalatingTool(toolNames) {
   if (!toolNames) return false;
   for (const name of toolNames) {
@@ -33,7 +31,7 @@ export function usesEscalatingTool(toolNames) {
 }
 
 /** Authorization and Discord-to-Pi conversation routing. */
-export function createMessageRouter({ client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle, routeDecider }) {
+export function createMessageRouter({ client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle, routeDecider, channelSessions }) {
   const seenMessages = new Set();
   const allowDirectMessages = config.allowDirectMessages !== false;
   const allowServerMessages = config.allowServerMessages !== false;
@@ -68,18 +66,18 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     return { kind: "new-thread" };
   }
 
-  function rememberChannelReply(channelId, userId) {
+  function rememberChannelReply(sessionKey, userId) {
     if (!escalateFollowUps) return;
-    const key = `${channelId}:${userId}`;
+    const key = `${sessionKey}:${userId}`;
     lastChannelReplyAt.delete(key);
     lastChannelReplyAt.set(key, Date.now());
     while (lastChannelReplyAt.size > CHANNEL_REPLY_MEMORY) lastChannelReplyAt.delete(lastChannelReplyAt.keys().next().value);
   }
 
   /** Consume a pending follow-up so one topic escalates at most once. */
-  function continuePreviousChannelReply(channelId, userId) {
+  function continuePreviousChannelReply(sessionKey, userId) {
     if (!escalateFollowUps) return false;
-    const key = `${channelId}:${userId}`;
+    const key = `${sessionKey}:${userId}`;
     const at = lastChannelReplyAt.get(key);
     if (at === undefined) return false;
     lastChannelReplyAt.delete(key);
@@ -107,11 +105,11 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     return { afterId: last.messageId, skip: false };
   }
 
-  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext }) {
+  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext, defaultSessionKey, startedAt }) {
     if (!decidePerMessage) {
       return { target: channelReplies.mode === "channel" ? "channel" : "thread", reason: "mode" };
     }
-    if (escalateFollowUps && continuePreviousChannelReply(message.channelId, message.author.id)) {
+    if (escalateFollowUps && continuePreviousChannelReply(defaultSessionKey, message.author.id)) {
       return { target: "thread", reason: "follow-up" };
     }
     if (!routeDecider) return { target: "thread", reason: "router-unavailable" };
@@ -121,7 +119,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       author: message.author.username,
       isReply,
       imageCount: imageAttachments.length,
-      loadContext,
+      loadContext, startedAt,
     });
     return { target: decision.target === "channel" ? "channel" : "thread", reason: decision.reason };
   }
@@ -156,7 +154,24 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     if (!route) return;
     lifecycle.recordEvent();
     const content = stripBotMention(message.content || "", client.user?.id);
-    if (interactions.acceptReply(`${message.channelId}:${message.author.id}`, content)) return;
+    // Keep pending answers usable during restart drain, but an old session's
+    // prompt must not intercept mentions/replies belonging to another session.
+    let answerScope;
+    let answerKey;
+    if (route.kind === "new-thread" && channelSessions) {
+      const reply = hasDiscordReply(message);
+      answerKey = reply
+        ? channelSessions.replySession(message.guildId, message.channelId, message.reference.messageId)
+        : channelSessions.peekCurrent(message.guildId, message.channelId);
+      answerScope = {
+        session: answerKey ? sessions.peek(answerKey) : undefined,
+        ...(reply ? { replyToMessageId: message.reference.messageId } : {}),
+      };
+    }
+    if (interactions.acceptReply(`${message.channelId}:${message.author.id}`, content, answerScope)) {
+      if (answerKey) channelSessions.begin(message.guildId, message.channelId, answerKey)();
+      return;
+    }
     if (lifecycle.isStopping()) {
       await sendText(message.channel, "The gateway is restarting after the current work finishes. Please send this again once the bot reconnects.", message.id);
       return;
@@ -175,12 +190,28 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         : "Please send a text message or attach an image.", message.id);
       return;
     }
+    const acceptedAt = Date.now();
+    const run = () => prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt);
+    // Serialize target selection, not agent execution. Concurrent classifier
+    // reads must not assign later mentions before earlier activity is recorded.
+    if (route.kind === "new-thread") {
+      await sessions.enqueue(`${getChannelSessionKey(message.guildId, message.channelId)}:routing`, run);
+    } else {
+      await run();
+    }
+  }
+
+  async function prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt) {
+    const startedAt = Date.now();
     const embedContext = formatDiscordEmbedContext(message);
     // Lazily read only after authorization. Routing and the queued agent turn
     // share the same snapshot, but format independent windows/watermarks.
     let replyContextPromise;
+    let repliedMessage;
     let recentMessagesPromise;
-    const getReplyContext = () => replyContextPromise ??= loadDiscordReplyContext(message);
+    const getReplyContext = () => replyContextPromise ??= loadDiscordReplyContext(message, {
+      onResolved: (referenced) => { repliedMessage = referenced; },
+    });
     const getRecentMessages = (routingCount = 0) => recentMessagesPromise ??= fetchRecentContextMessages(message.channel, {
       beforeId: contextBeforeId,
       limit: Math.max(contextMessageCount, routingCount),
@@ -200,6 +231,38 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       });
       return { replyContext, recentContext };
     };
+    const defaultSessionKey = route.kind === "new-thread"
+      ? channelSessions?.current(message.guildId, message.channelId, acceptedAt) ?? getChannelSessionKey(message.guildId, message.channelId)
+      : undefined;
+    let linkedSessionKey;
+    let missingSessionNotice;
+    if (route.kind === "new-thread" && isReply && channelSessions) {
+      linkedSessionKey = channelSessions.replySession(message.guildId, message.channelId, message.reference.messageId);
+      if (linkedSessionKey && !sessions.canResume(linkedSessionKey)) {
+        linkedSessionKey = channelSessions.standalone(message.guildId, message.channelId);
+        missingSessionNotice = "The original conversation is unavailable. Starting a separate fresh session using the quoted message; the channel's default conversation is unchanged.";
+      } else if (!linkedSessionKey) {
+        // Discord usually supplies the reply author's identity in the event.
+        // Fall back to the memoized quote read only when that metadata is absent;
+        // session selection and classification still share the six-second budget.
+        let authorId = message.mentions?.repliedUser?.id
+          ?? message.channel.messages?.cache?.get(message.reference.messageId)?.author?.id;
+        if (!authorId) {
+          let timer;
+          try {
+            await Promise.race([getReplyContext(), new Promise((resolve) => {
+              timer = setTimeout(resolve, Math.max(0, DECISION_TIMEOUT_MS - (Date.now() - startedAt)));
+              timer.unref?.();
+            })]);
+          } finally { clearTimeout(timer); }
+          authorId = repliedMessage?.author?.id;
+        }
+        if (authorId === client.user?.id) {
+          linkedSessionKey = channelSessions.standalone(message.guildId, message.channelId);
+          missingSessionNotice = "This bot message has no saved conversation link (it may predate reply tracking). Starting a separate fresh session using the quoted message; the channel's default conversation is unchanged.";
+        }
+      }
+    }
     let target = message.channel;
     let sessionKey;
     let conversationLabel;
@@ -213,10 +276,13 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       sessionKey = route.sessionKey;
       conversationLabel = `Discord thread ${message.channelId}`;
     } else {
-      const decision = await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext });
+      // An explicit bot reply has stronger affinity than classifier/follow-up
+      // routing, including when the saved mode would normally start a thread.
+      const decision = linkedSessionKey ? { target: "channel", reason: "reply-session" }
+        : await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext, defaultSessionKey, startedAt });
       if (decision.target === "channel" || typeof message.startThread !== "function") {
         if (decision.target !== "channel") log(`Cannot start a thread in channel ${message.channelId}; replying in the channel instead`);
-        sessionKey = getChannelSessionKey(message.guildId, message.channelId);
+        sessionKey = linkedSessionKey ?? defaultSessionKey;
         conversationLabel = `Discord channel ${message.channelId}`;
         channelConversation = true;
         log(`Replying in channel ${message.channelId} (${decision.reason})`);
@@ -231,7 +297,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           threads.register(thread.id, registration);
           target = thread;
           sessionKey = getThreadSessionKey(thread.id, registration);
-          forkSourceKey = getChannelSessionKey(message.guildId, message.channelId);
+          forkSourceKey = defaultSessionKey;
           conversationLabel = `Discord thread ${thread.id}`;
           replyToMessageId = undefined;
           log(`Created thread ${thread.id} in allowlisted channel ${message.channelId} (${decision.reason})`);
@@ -242,6 +308,16 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         }
       }
     }
+    const onMessageSent = channelConversation && channelSessions
+      ? (sent) => {
+        try { channelSessions.rememberReply(message.guildId, message.channelId, sessionKey, sent); }
+        catch (error) { log(`Could not save channel reply affinity: ${safeErrorName(error)}`); }
+      }
+      : undefined;
+    if (onMessageSent) target = trackChannelReplies(target, onMessageSent);
+    const finishChannelRun = channelConversation
+      ? channelSessions?.begin(message.guildId, message.channelId, sessionKey, acceptedAt) ?? (() => {})
+      : () => {};
     // The thread starter belongs to the parent channel, so it cannot be a reply target inside the new thread.
     // Explicit replies deliberately revisit the target's older context, even
     // if the agent has already seen newer messages in this conversation.
@@ -250,6 +326,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     const queuedRun = sessions.enqueue(sessionKey, async () => {
       const typing = startTyping(target);
       try {
+        if (missingSessionNotice) await sendText(target, missingSessionNotice, replyToMessageId);
         if (forkSourceKey) {
           // Wait for earlier channel turns, and hold its queue until Pi has
           // copied the source. Never hold a run slot while waiting on that queue.
@@ -288,7 +365,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           // Observe background title generation during the run, not just after it.
           if (!channelConversation) threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
-            channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing,
+            channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing, onMessageSent,
             allowNoReply: route.kind === "thread",
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images);
@@ -305,7 +382,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         if (result.text === undefined) return;
         if (result.text.trim()) await sendAgentReply(target, result.text, replyToMessageId, { tableRendering: config.tableRendering });
         else await sendText(target, "The agent finished without a text response.", replyToMessageId);
-        if (channelConversation) rememberChannelReply(message.channelId, message.author.id);
+        if (channelConversation) rememberChannelReply(sessionKey, message.author.id);
         if (result.escalate) await escalateToThread({ message, content, session: result.session });
       } catch (error) {
         log(`Pi run failed: ${safeErrorName(error)}`);
@@ -313,7 +390,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       } finally {
         typing.stop();
       }
-    });
+    }).finally(finishChannelRun);
     void lifecycle.trackTask(queuedRun.catch((error) => {
       log(`Queued Pi run failed: ${safeErrorName(error)}`);
     }));

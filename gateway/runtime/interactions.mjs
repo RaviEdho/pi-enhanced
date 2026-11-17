@@ -12,7 +12,7 @@ export function createInteractionManager() {
 
   function waitForDiscordAnswer(key, channel, promptText, parseAnswer, timeoutMs, session, uiRequest) {
     return new Promise((resolve) => {
-      const existing = pendingUiAnswers.get(key);
+      const existing = [...pendingUiAnswers.values()].find((pending) => pending.key === key && pending.session === session);
       if (existing) existing.finish(undefined);
       const token = randomUUID();
       const commitView = uiRequest.isCommit ? session.beginCommitView() : undefined;
@@ -73,7 +73,7 @@ export function createInteractionManager() {
           pending.result = value;
           pending.completionStatus = statusText || (value === undefined ? "Prompt dismissed or expired." : "Response received.");
           clearTimeout(timer);
-          if (pendingUiAnswers.get(key) === pending) pendingUiAnswers.delete(key);
+          pendingUiAnswers.delete(token);
           if (pendingDiscordUi.get(token) === pending) pendingDiscordUi.delete(token);
           if (session.cancelCommitPrompt === pending.cancel) session.cancelCommitPrompt = undefined;
           const deferAskUserCompletion = pending.isAskUser && value !== undefined;
@@ -89,7 +89,7 @@ export function createInteractionManager() {
       };
       const timer = setTimeout(() => pending.finish(undefined, { statusText: "This prompt expired." }), timeoutMs);
       timer.unref?.();
-      pendingUiAnswers.set(key, pending);
+      pendingUiAnswers.set(token, pending);
       pendingDiscordUi.set(token, pending);
       if (pending.isCommit) {
         pending.cancel = () => pending.finish(undefined, { updatePrompt: false });
@@ -320,8 +320,10 @@ export function createInteractionManager() {
   return {
     createSessionUi(session) { return new SessionUi(session, { waitForDiscordAnswer, cancelSession, showCommitNotice }); },
     handleInteraction,
-    acceptReply(key, content) {
-      const pending = pendingUiAnswers.get(key);
+    acceptReply(key, content, scope = {}) {
+      const pending = [...pendingUiAnswers.values()].find((candidate) => candidate.key === key &&
+        (!("session" in scope) || (candidate.session.session ?? candidate.session) === scope.session) &&
+        (!scope.replyToMessageId || candidate.promptMessage?.id === scope.replyToMessageId));
       if (!pending) return false;
       pending.accept(content);
       return true;
