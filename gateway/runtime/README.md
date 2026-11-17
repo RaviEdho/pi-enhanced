@@ -19,6 +19,7 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `model-failures.mjs` | Classify terminal provider failures into safe display reasons and availability categories; format inert model labels without publishing raw error bodies. |
 | `history.mjs` | Authenticate session IPC for bounded history reads, channel discovery, silence decisions, and image uploads. |
 | `send-image.mjs` | Authorize the active upload destination, bound workspace-file/public-HTTPS image loading, and upload validated image buffers. |
+| `fetch-image.mjs` | Reuse the public-HTTPS loader inside the Pi child to return signature-validated visual input, without uploads or history IPC. |
 | `workspace.mjs` | Validate and persist per-conversation cwd, exact session file, and switch requests. |
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
@@ -140,6 +141,15 @@ callbacks where commands and lifecycle depend on each other.
   thread sources and cross-server access. Different-participant
   steering revokes history for that run. Shared results can reach participants
   without source access and persist in sessions. Discovery uses the same IPC and active scope, only in server threads: fresh guild, roles, members and channels, current whitelist and both parties' channel permissions using the same channel types and voice Connect requirement; voice results have type `voice`. Names are untrusted, results are capped at 50 with explicit truncation. Channel names and IDs can also persist and be seen by all shared-thread participants. IPC is not an OS sandbox.
+- `discord_fetch_image` is a Discord-only, model-only read tool. Download directly
+  inside the Pi child using `downloadPublicImage`, with the same public DNS pinning,
+  HTTPS/port/credential restrictions, ten-second deadline, and three-redirect limit
+  as image uploads. Cap each image at 10 MiB and validate PNG/JPEG/GIF/WebP magic
+  bytes. Return native base64 image content plus a short untrusted-content note,
+  never just a link or text/base64 dump. Refuse text-only models before downloading.
+  No Discord API call, public message, workspace file, or history IPC is needed;
+  the result persists in Pi history and is sent to the selected model. Sanitize
+  errors and activity labels: do not disclose raw network errors or URL queries.
 - `discord_send_image` is a Discord-only sequential, model-only tool. Send immediately
   through authenticated session IPC, only for an active tracked image tool call and
   settlement waiter, never a command workflow or caller-selected destination. Recheck
@@ -276,16 +286,6 @@ callbacks where commands and lifecycle depend on each other.
   Discord context. Existing threads resume their own history and are never reseeded;
   later channel/thread turns remain independent. This copies shared channel history,
   not just the requesting participant's turns, and does not reuse previous threads.
-- `toolCallVisibility` independently gates tool activity/failure reports and assistant
-  narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
-  values default to channels off, threads and DMs on, including legacy configurations.
-  Do not classify by `historyScope`: direct server-channel replies also use a thread-shaped
-  history authorization scope. `toolCallVerbosity` still controls the detail level where
-  visible. Visibility must not alter tool tracking/escalation, final replies, interactive
-  prompts, workspace notices, or the dedicated commit/usage workflows.
-- Track the last authoritative assistant `message_end` for each accepted RPC
-  attempt, clearing it before each prompt/workspace continuation. Wait for
-  `agent_settled` before treating an error as terminal: a later successful
 - Initialize every new thread's title before its first agent prompt using the child-only
   `/discord-thread-title` command, including tool-escalated threads (open their fork
   immediately for naming). Clear only the new fork's inherited session name. The title
@@ -297,6 +297,16 @@ callbacks where commands and lifecycle depend on each other.
   Do not rename from an inherited title when initialization fails. Watch for up to
   45 seconds to cover the title provider's 40-second timeout; generated names remain
   one-shot and existing registered thread names are not retroactively regenerated.
+- `toolCallVisibility` independently gates tool activity/failure reports and assistant
+  narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
+  values default to channels off, threads and DMs on, including legacy configurations.
+  Do not classify by `historyScope`: direct server-channel replies also use a thread-shaped
+  history authorization scope. `toolCallVerbosity` still controls the detail level where
+  visible. Visibility must not alter tool tracking/escalation, final replies, interactive
+  prompts, workspace notices, or the dedicated commit/usage workflows.
+- Track the last authoritative assistant `message_end` for each accepted RPC
+  attempt, clearing it before each prompt/workspace continuation. Wait for
+  `agent_settled` before treating an error as terminal: a later successful
   assistant message supersedes an earlier error from Pi's native retries. Never
   retrieve stale assistant text or return the empty-response fallback for a
   terminal provider error. Rejected prompt responses also get a safe error.
