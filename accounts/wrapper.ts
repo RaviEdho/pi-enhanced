@@ -18,6 +18,8 @@ import { QuotaManager } from "./quota.js";
 import { AccountStore } from "./store.js";
 import type { ResolvedAccountAuth } from "./types.js";
 import { EnhancedSettingsStore } from "../ux/settings/store.js";
+import { OPENCODE_GO_ID } from "../providers/opencode-go/credentials.js";
+import { usageAccountIdentity } from "../ux/usage/identity.js";
 
 export type StreamSimpleExecutor = (
   model: Model<Api>,
@@ -45,6 +47,8 @@ export function executeWithMultiAccountFailover(
   const canFailover = (error: unknown) =>
     EnhancedSettingsStore.getInstance().get("balancer.failoverOn429") &&
     isRateLimitError(error) && (accountFailoverPolicy?.(error) ?? true);
+  const isGo = providerId === OPENCODE_GO_ID;
+  const cooldownReason = (error: unknown) => isGo ? "OpenCode Go rate limit" : String(error);
 
   const pushAborted = () => {
     const errorMsg: AssistantMessage = {
@@ -166,7 +170,7 @@ export function executeWithMultiAccountFailover(
       } catch (initErr) {
         if (hasConfiguredAccounts && canFailover(initErr)) {
           const cooldown = extractCooldownMs(initErr);
-          balancer.markRateLimited(account.id, cooldown, String(initErr));
+          balancer.markRateLimited(account.id, cooldown, cooldownReason(initErr));
           continue; // Try next account
         }
         // Non-retryable setup error
@@ -222,8 +226,8 @@ export function executeWithMultiAccountFailover(
               // Rate limit error before any tokens: discard buffered start event and fail over
               bufferedEvents.length = 0;
               const cooldown = extractCooldownMs(errorText);
-              balancer.markRateLimited(account.id, cooldown, errorText);
-              lastError = event.error;
+              balancer.markRateLimited(account.id, cooldown, cooldownReason(errorText));
+              lastError = isGo ? { ...event.error, errorMessage: errorText.replaceAll(resolvedAuth.token, "[redacted]") } : event.error;
               shouldFailover = true;
               break;
             }
@@ -248,7 +252,7 @@ export function executeWithMultiAccountFailover(
         if (!emittedTokens && hasConfiguredAccounts && canFailover(streamErr)) {
           bufferedEvents.length = 0;
           const cooldown = extractCooldownMs(streamErr);
-          balancer.markRateLimited(account.id, cooldown, String(streamErr));
+          balancer.markRateLimited(account.id, cooldown, cooldownReason(streamErr));
           shouldFailover = true;
         } else {
           flushBuffered();
@@ -294,7 +298,7 @@ export function executeWithMultiAccountFailover(
 
         const cooldownList = remainingAccounts
           .map((a) => {
-            const name = a.email || a.accountId || a.id;
+            const name = isGo ? usageAccountIdentity(a) : a.email || a.accountId || a.id;
             const isEligible = isAccountEligibleForModel(a, model.id);
             const health = quotaManager.evaluateAccountHealth(a, model.id);
             const resetMs = a.blockedUntil || health.resetTimeMs;

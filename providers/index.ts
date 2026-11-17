@@ -6,6 +6,7 @@ import { registerKenariProvider } from "./kenari/register.js";
 import { registerTokenHarborProvider } from "./tokenharbor/register.js";
 import { registerInferHubProvider } from "./inferhub/register.js";
 import { registerOllamaProvider } from "./ollama/index.js";
+import { registerOpenCodeGoProvider } from "./opencode-go/register.js";
 
 /**
  * Registers all custom inference providers and dynamic plan filters:
@@ -15,6 +16,7 @@ import { registerOllamaProvider } from "./ollama/index.js";
  * - Token Harbor (tokenharbor.ai)
  * - InferHub consumer marketplace (inferhub.dev)
  * - OpenAI Codex dynamic plan filter
+ * - OpenCode Go native-provider account support
  */
 export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerAntigravityProvider(pi);
@@ -22,6 +24,7 @@ export async function registerProviders(pi: ExtensionAPI): Promise<void> {
   await registerKenariProvider(pi);
   registerTokenHarborProvider(pi);
   registerInferHubProvider(pi);
+  registerOpenCodeGoProvider(pi);
   await registerOllamaProvider(pi);
   await registerCodexFilter(pi);
   // Pi refreshes providers in the background after initializing its TUI/RPC

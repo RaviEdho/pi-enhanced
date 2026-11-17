@@ -243,7 +243,8 @@ function formatBucketEntry(
         : dim(pctStr);
 
   let detailStr = "";
-  if (bucket.usedFraction <= 0 && !bucket.windowStartedAt && bucket.bucketId !== "ollama-cloud-included") {
+  if (bucket.usedFraction <= 0 && !bucket.windowStartedAt && bucket.bucketId !== "ollama-cloud-included"
+    && !(bucket.bucketId === "opencode-go-monthly" && hasValidReset(bucket))) {
     detailStr = "ready";
   } else if (hasValidReset(bucket)) {
     detailStr = formatRelativeTime(bucket.resetTime, now);

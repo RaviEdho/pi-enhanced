@@ -6,6 +6,7 @@ import type { ProviderUsageReport, QuotaBucket } from "../ux/usage/types.js";
 import { usageAccountIdentity } from "../ux/usage/identity.js";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
+import { OPENCODE_GO_ID } from "../providers/opencode-go/credentials.js";
 
 export const DEFAULT_CACHE_TTL_MS = 30 * 1000; // 30 seconds cache TTL
 
@@ -197,7 +198,7 @@ export class QuotaManager {
     maxAgeMs: number = DEFAULT_CACHE_TTL_MS
   ): Promise<ProviderUsageReport | null> {
     const entry = this.cache.get(account.id);
-    const age = account.provider === "ollama-cloud" || account.provider === "tokenharbor" || account.provider === "inferhub"
+    const age = account.provider === "ollama-cloud" || account.provider === "tokenharbor" || account.provider === "inferhub" || account.provider === OPENCODE_GO_ID
       ? Math.max(maxAgeMs, 60_000) : maxAgeMs;
     try {
       const report = await this.refreshReport(account.id, async (): Promise<ProviderUsageReport> => {
@@ -231,6 +232,9 @@ export class QuotaManager {
             signal,
             account.planType
           );
+        } else if (account.provider === OPENCODE_GO_ID) {
+          const { fetchOpenCodeGoUsage } = await import("../ux/usage/opencode-go.js");
+          report = await fetchOpenCodeGoUsage(token, usageAccountIdentity(account), signal);
         } else if (account.provider === "inferhub") {
           const { fetchInferHubUsage } = await import("../ux/usage/inferhub.js");
           report = await fetchInferHubUsage(token, usageAccountIdentity(account), signal);
@@ -282,9 +286,9 @@ export class QuotaManager {
     }
 
     const entry = this.getReportEntry(account.id);
-    // OpenAI SIWC quota is unknown. Only actual inference cooldowns above
-    // should affect its health, never stale legacy quota reports.
-    const report = account.provider === "openai" ? undefined : entry?.report;
+    // OpenAI SIWC quota is unknown. Go reports only the included allowance,
+    // not Extra Usage or free-route availability. Use actual cooldowns only.
+    const report = account.provider === "openai" || account.provider === OPENCODE_GO_ID ? undefined : entry?.report;
     if (report?.error) {
       const isAuthErr = /unauthorized|401|invalid_key|forbidden|403|authentication failed|revoked|token_revoked|invalidated|credits check failed/i.test(report.error);
       if (isAuthErr) {

@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AccountStore } from "./store.js";
 import type { AccountCredential } from "./types.js";
+import { OPENCODE_GO_ID, OPENCODE_GO_NAME } from "../providers/opencode-go/credentials.js";
+import { usageAccountIdentity } from "../ux/usage/identity.js";
 
 const PROVIDER_NAMES: Record<string, string> = {
   "google-antigravity": "Google Antigravity",
@@ -9,6 +11,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   tokenharbor: "Token Harbor",
   inferhub: "InferHub",
   "openai-codex": "OpenAI Codex",
+  [OPENCODE_GO_ID]: OPENCODE_GO_NAME,
 };
 
 /**
@@ -59,10 +62,14 @@ export function installLogoutHook(ctx: ExtensionContext): void {
     const optionsList: string[] = [];
     const accountMap = new Map<string, AccountCredential>();
 
-    for (const acc of accounts) {
+    const accountIdentity = (acc: AccountCredential) => providerId === OPENCODE_GO_ID
+      ? usageAccountIdentity(acc) : acc.email || acc.orgName || acc.id;
+    const identities = accounts.map(accountIdentity);
+    for (const [index, acc] of accounts.entries()) {
       const isActive = activeAccount?.id === acc.id;
-      const identity = acc.email || acc.orgName || acc.id;
-      const label = `${identity}${isActive ? " (active)" : ""}`;
+      const identity = identities[index];
+      const disambiguator = identities.indexOf(identity) === identities.lastIndexOf(identity) ? "" : ` #${index + 1}`;
+      const label = `${identity}${disambiguator}${isActive ? " (active)" : ""}`;
       optionsList.push(label);
       accountMap.set(label, acc);
     }
@@ -96,10 +103,10 @@ export function installLogoutHook(ctx: ExtensionContext): void {
 
     store.remove(chosenAccount.id);
     const newActive = store.getActive(providerId);
-    const chosenIdentity = chosenAccount.email || chosenAccount.orgName || chosenAccount.id;
+    const chosenIdentity = accountIdentity(chosenAccount);
 
     if (newActive) {
-      const newActiveIdentity = newActive.email || newActive.orgName || newActive.id;
+      const newActiveIdentity = accountIdentity(newActive);
       ctx.ui.notify(
         `Logged out ${chosenIdentity}. Active account is now ${newActiveIdentity}.`,
         "info"

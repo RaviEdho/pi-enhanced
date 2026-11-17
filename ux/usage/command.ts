@@ -23,6 +23,8 @@ import { fetchCommandCodeUsage } from "./commandcode.js";
 import { fetchKenariUsage } from "./kenari.js";
 import { fetchTokenHarborUsage } from "./tokenharbor.js";
 import { fetchInferHubUsage } from "./inferhub.js";
+import { getOpenCodeGoEnvAccount, OPENCODE_GO_ID, OPENCODE_GO_NAME } from "../../providers/opencode-go/credentials.js";
+import { fetchOpenCodeGoUsage } from "./opencode-go.js";
 import { USAGE_TTL_MS as INFERHUB_USAGE_TTL_MS } from "../../providers/inferhub/constants.js";
 import { ALLOWANCE_TTL_MS } from "../../providers/tokenharbor/constants.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
@@ -536,6 +538,30 @@ export async function collectUsageReports(
     })());
   }
 
+  const openCodeGoAccounts = store.list(OPENCODE_GO_ID);
+  const openCodeGoActive = store.getActive(OPENCODE_GO_ID) ?? getOpenCodeGoEnvAccount();
+  if (openCodeGoAccounts.length === 0 && openCodeGoActive) openCodeGoAccounts.push(openCodeGoActive);
+  const openCodeGoSession = options?.currentProvider === OPENCODE_GO_ID
+    ? balancer.getSessionAccount(OPENCODE_GO_ID, options.sessionId, options.currentModelId) ?? openCodeGoActive
+    : undefined;
+  const openCodeGoPromises = signal?.aborted ? [] : openCodeGoAccounts.map(async (account): Promise<ProviderUsageReport> => {
+    const accountEmail = usageAccountIdentity(account);
+    const status = {
+      accountEmail, accountId: account.id,
+      isSessionAccount: account.id === openCodeGoSession?.id,
+      isActiveAccount: account.id === openCodeGoActive?.id,
+      cooldownMinutes: account.blockedUntil && account.blockedUntil > Date.now()
+        ? Math.ceil((account.blockedUntil - Date.now()) / 60_000) : undefined,
+    };
+    if (!account.apiKey || account.disabledCause) return {
+      ...status, providerId: OPENCODE_GO_ID, providerName: OPENCODE_GO_NAME,
+      fetchedAt: Date.now(), groups: [], error: account.disabledCause ?? "No API key configured.",
+    };
+    const report = await QuotaManager.getInstance().refreshReport(account.id,
+      () => fetchOpenCodeGoUsage(account.apiKey!, accountEmail, signal), 0);
+    return { ...report, ...status };
+  });
+
   // Ollama's balance endpoint recommends polling no more often than once a minute.
   const ollamaAccounts = store.list("ollama-cloud");
   const isOllamaActive = options?.currentProvider === "ollama-cloud";
@@ -576,6 +602,7 @@ export async function collectUsageReports(
     ...kenariPromises,
     ...tokenHarborPromises,
     ...inferHubPromises,
+    ...openCodeGoPromises,
     ...ollamaPromises,
   ]);
   for (const s of settled) {
@@ -597,7 +624,7 @@ export async function collectUsageReports(
       providerId: options.currentProvider,
       modelId: options.currentModelId,
       accountEmail: reports.find((report) => report.isSessionAccount && report.providerId === options.currentProvider)?.accountEmail || (account ? usageAccountIdentity(account) : undefined),
-      accountId: account?.id,
+      accountId: (options.currentProvider === OPENCODE_GO_ID ? openCodeGoSession : account)?.id,
     };
   }
 

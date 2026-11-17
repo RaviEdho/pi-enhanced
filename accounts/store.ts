@@ -4,10 +4,11 @@ import { dirname, join } from "node:path";
 import type { AccountCredential, AccountStoreData } from "./types.js";
 import { tokenHarborAccountId } from "../providers/tokenharbor/credentials.js";
 import { inferHubAccountId } from "../providers/inferhub/credentials.js";
+import { OPENCODE_GO_ID, openCodeGoAccountId } from "../providers/opencode-go/credentials.js";
 
 const STORE_VERSION = 2;
 const FILE_CHECK_INTERVAL_MS = 250;
-export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari", "tokenharbor", "inferhub"]);
+export const SUPPORTED_PROVIDERS = new Set(["google-antigravity", "openai-codex", "commandcode", "kenari", "tokenharbor", "inferhub", OPENCODE_GO_ID]);
 
 /**
  * Providers whose login mints a long-lived API key and returns it as `access`.
@@ -385,16 +386,38 @@ export class AccountStore {
     // Check ~/.pi/agent/auth.json
     const piAuthPath = this.piAuthPath;
     const authProviders = new Set<string>();
-    if (existsSync(piAuthPath)) {
+    const authExists = existsSync(piAuthPath);
+    let canDetectGoLogout = !authExists;
+    if (authExists) {
       try {
         const raw = readFileSync(piAuthPath, "utf-8");
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") {
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          canDetectGoLogout = true;
           for (const [provider, entry] of Object.entries(parsed)) {
             if (!SUPPORTED_PROVIDERS.has(provider)) continue;
             if (!entry || typeof entry !== "object") continue;
             authProviders.add(provider);
             const cred = entry as Record<string, unknown>;
+            if (provider === OPENCODE_GO_ID) {
+              const key = cred.type === "api_key" && typeof cred.key === "string" ? cred.key.trim() : "";
+              if (!key) continue;
+              const id = openCodeGoAccountId(key);
+              const previous = this.data.activeAccounts[provider];
+              if (previous && previous !== id) {
+                // An external key replacement supersedes the prior mirror, not standby logins.
+                this.data.accounts = this.data.accounts.filter((account) => account.id !== previous);
+              }
+              if (!findExisting(provider, undefined, undefined, id, undefined, key)) {
+                this.data.accounts.push({ id, provider, type: "api_key", apiKey: key, createdAt: Date.now(), updatedAt: Date.now() });
+                modified = true;
+              }
+              if (previous !== id) {
+                this.data.activeAccounts[provider] = id;
+                modified = true;
+              }
+              continue;
+            }
             const access = typeof cred.access === "string" ? cred.access : undefined;
             const refresh = typeof cred.refresh === "string" ? cred.refresh : undefined;
             const teamName = typeof cred.teamName === "string" ? cred.teamName : undefined;
@@ -629,6 +652,16 @@ export class AccountStore {
     // it was logged out externally or never configured:
     for (const provider of SUPPORTED_PROVIDERS) {
       if (!authProviders.has(provider)) {
+        if (provider === OPENCODE_GO_ID) {
+          // Don't revive a standby after native/external logout, or clear the pool
+          // if another process left auth.json temporarily unreadable.
+          if (!canDetectGoLogout) continue;
+          const count = this.data.accounts.length;
+          this.data.accounts = this.data.accounts.filter((a) => a.provider !== provider);
+          modified ||= count !== this.data.accounts.length || !!this.data.activeAccounts[provider];
+          delete this.data.activeAccounts[provider];
+          continue;
+        }
         const activeId = this.data.activeAccounts[provider];
         if (activeId) {
           // Only prune the active account that was mirrored into auth.json

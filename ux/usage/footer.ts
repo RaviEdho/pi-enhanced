@@ -11,6 +11,8 @@ import { AccountStore } from "../../accounts/store.js";
 import { isProviderNetworkEnabled } from "../../providers/network.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { getInferHubUsageFailure } from "./inferhub.js";
+import { getOpenCodeGoEnvAccount, isOpenCodeGoEndpoint, OPENCODE_GO_ID } from "../../providers/opencode-go/credentials.js";
+import { getOpenCodeGoUsageFailure } from "./opencode-go.js";
 import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
@@ -254,9 +256,12 @@ function buildUsageBar(ctx: ExtensionContext): string {
   const model = ctx.model;
   if (!model) return "";
 
+  const isGo = model.provider === OPENCODE_GO_ID;
+  if (isGo && !isOpenCodeGoEndpoint(model.baseUrl)) return "";
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
-  const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
+  const account = balancer.getSessionAccount(model.provider, sessionId, model.id)
+    ?? (isGo ? getOpenCodeGoEnvAccount() : undefined);
 
   if (!account) {
     if (model.provider !== "ollama-cloud") return "";
@@ -282,7 +287,8 @@ function buildUsageBar(ctx: ExtensionContext): string {
   }
 
   const report = QuotaManager.getInstance().getReport(account.id)
-    ?? (account.provider === "inferhub" && account.apiKey ? getInferHubUsageFailure(account.apiKey) : undefined);
+    ?? (account.provider === "inferhub" && account.apiKey ? getInferHubUsageFailure(account.apiKey) : undefined)
+    ?? (isGo && account.apiKey ? getOpenCodeGoUsageFailure(account.apiKey) : undefined);
   if (!report) {
     return `${prefix}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
   }
@@ -479,6 +485,11 @@ async function refreshCandidateAccounts(
   const store = AccountStore.getInstance();
   const balancer = AccountBalancer.getInstance();
   const allAccounts = store.list(model.provider);
+  if (model.provider === OPENCODE_GO_ID) {
+    if (!isOpenCodeGoEndpoint(model.baseUrl)) return;
+    const envAccount = allAccounts.length === 0 ? getOpenCodeGoEnvAccount() : undefined;
+    if (envAccount) allAccounts.push(envAccount);
+  }
   const candidates = allAccounts.filter(
     (acc) => !acc.disabledCause && isAccountEligibleForModel(acc, model.id)
   );
@@ -497,7 +508,7 @@ async function refreshCandidateAccounts(
         await quotaManager.ensureFreshQuota(
           account,
           token,
-          AbortSignal.timeout(5000),
+          account.provider === OPENCODE_GO_ID ? undefined : AbortSignal.timeout(5000),
           maxAgeMs
         );
       } catch {
@@ -525,7 +536,10 @@ async function refreshSessionAccountQuota(
 
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
-  const account = balancer.getSessionAccount(model.provider, sessionId, model.id);
+  const isGo = model.provider === OPENCODE_GO_ID;
+  if (isGo && !isOpenCodeGoEndpoint(model.baseUrl)) return;
+  const account = balancer.getSessionAccount(model.provider, sessionId, model.id)
+    ?? (isGo ? getOpenCodeGoEnvAccount() : undefined);
   if (!account) {
     if (model.provider === "ollama-cloud") await refreshOllamaFallback();
     return;
@@ -537,7 +551,7 @@ async function refreshSessionAccountQuota(
     await quotaManager.ensureFreshQuota(
       account,
       token,
-      AbortSignal.timeout(5000),
+      isGo ? undefined : AbortSignal.timeout(5000),
       maxAgeMs
     );
   } catch {
@@ -582,6 +596,13 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
   const unsubscribeMode = PlanModeManager.getInstance().onModeChange(() => {
     activeTui?.requestRender();
   });
+
+  function refreshQuota(ctx: ExtensionContext, refresh: Promise<void>): void {
+    void refresh.then(() => {
+      // A failed first Go lookup doesn't publish a successful cache update.
+      if (currentCtx === ctx && ctx.model?.provider === OPENCODE_GO_ID) activeTui?.requestRender();
+    }).catch(() => {});
+  }
 
   function applyFooter(ctx: ExtensionContext): void {
     if (ctx.mode !== "tui") return;
@@ -648,13 +669,13 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     applyFooter(ctx);
 
     // Non-blocking fresh parallel check for all candidate accounts on startup
-    void refreshCandidateAccounts(ctx, true);
+    refreshQuota(ctx, refreshCandidateAccounts(ctx, true));
 
     // Periodic idle background check every 2 minutes
     if (idleTimer) clearInterval(idleTimer);
     idleTimer = setInterval(() => {
       if (currentCtx && currentCtx.isIdle()) {
-        void refreshCandidateAccounts(currentCtx, false);
+        refreshQuota(currentCtx, refreshCandidateAccounts(currentCtx, false));
       }
     }, IDLE_POLL_INTERVAL_MS);
     idleTimer.unref?.();
@@ -670,7 +691,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     const now = Date.now();
     if (now - lastToolCheckAt >= TOOL_CALL_THROTTLE_MS) {
       lastToolCheckAt = now;
-      void refreshSessionAccountQuota(ctx, RUNNING_CACHE_TTL_MS);
+      refreshQuota(ctx, refreshSessionAccountQuota(ctx, RUNNING_CACHE_TTL_MS));
     }
     return undefined;
   });
@@ -682,14 +703,14 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     statsCache.invalidate();
     currentCtx = ctx;
     // Turn completed: always trigger fresh quota fetch to capture latest token consumption
-    void refreshSessionAccountQuota(ctx, 0);
+    refreshQuota(ctx, refreshSessionAccountQuota(ctx, 0));
   });
 
   pi.on("model_select", (_event, ctx) => {
     statsCache.invalidate();
     currentCtx = ctx;
     // Non-blocking fresh parallel check for new model's candidate accounts
-    void refreshCandidateAccounts(ctx, true);
+    refreshQuota(ctx, refreshCandidateAccounts(ctx, true));
   });
 
   pi.on("session_shutdown", () => {

@@ -3,6 +3,7 @@ import { DEFAULT_FALLBACK_FREE_MODELS, loadCachedCatalog } from "../providers/co
 import { getCodexPlanType } from "../providers/codex/plan.js";
 import { isModelAllowedForBilling } from "../providers/commandcode/plan.js";
 import { isTokenHarborModelAllowed } from "../providers/tokenharbor/access.js";
+import { OPENCODE_GO_ID } from "../providers/opencode-go/credentials.js";
 import type { ProviderUsageReport } from "../ux/usage/types.js";
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "./quota.js";
 import { getHighestTierAccounts } from "./priority.js";
@@ -207,6 +208,12 @@ export class AccountBalancer {
     modelId?: string
   ): AccountCredential | undefined {
     const allAccounts = this.store.list(provider);
+    if (provider === OPENCODE_GO_ID) {
+      // Go quotas are observational (Extra Usage or free routes can still work).
+      const boundId = this.getBoundAccountId(sessionId, provider);
+      return allAccounts.find((account) => account.id === boundId && !account.disabledCause)
+        ?? this.store.getActive(provider);
+    }
     if (provider === "inferhub") {
       // InferHub never balances or rotates keys; display the actual request binding,
       // falling back to the configured active credential before the first request.
@@ -405,9 +412,11 @@ export class AccountBalancer {
     }
 
     const quotaManager = QuotaManager.getInstance();
+    // Go allowance data is for display only. Don't fetch it on the inference path.
+    const quotaCandidates = provider === OPENCODE_GO_ID ? [] : candidates;
 
     // If candidate accounts have in-flight background checks, await them with a 1.5s race limit
-    const inFlightPromises = candidates
+    const inFlightPromises = quotaCandidates
       .map((acc) => quotaManager.getInFlight(acc.id))
       .filter((p): p is Promise<ProviderUsageReport | null> => p != null);
 
@@ -421,7 +430,7 @@ export class AccountBalancer {
     // Preemptive quota check: fetch live quota for candidates lacking cached reports
     // (or carrying stale error reports, which must not permanently exclude the account)
     await Promise.allSettled(
-      candidates.map(async (acc) => {
+      quotaCandidates.map(async (acc) => {
         const cached = quotaManager.getReportEntry(acc.id);
         const cachedReport = cached?.report;
         const cachedErrorIsStale =
@@ -491,7 +500,7 @@ export class AccountBalancer {
     const token = await this.ensureFreshToken(chosen);
 
     // Keep quota fresh in background for chosen account
-    void quotaManager.ensureFreshQuota(chosen, token).catch(() => {});
+    if (provider !== OPENCODE_GO_ID) void quotaManager.ensureFreshQuota(chosen, token).catch(() => {});
 
     return {
       account: chosen,
