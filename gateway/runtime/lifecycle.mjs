@@ -184,11 +184,21 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     }
   }
 
-  async function sendHomeNotification(text) {
+  function recordConfigReload(result, notice) {
+    updateStatus(gatewayStatus.state, { configReload: result });
+    if (canSendReloadNotice()) void sendHomeNotification(notice, canSendReloadNotice);
+  }
+
+  function canSendReloadNotice() {
+    return !shuttingDown && config.notifyConfigReloads === true && client.isReady();
+  }
+
+  async function sendHomeNotification(text, canSend = () => true) {
     const homeChannelId = config.homeChannelId;
     if (!homeChannelId) return;
     try {
       const channel = await client.channels.fetch(homeChannelId);
+      if (config.homeChannelId !== homeChannelId || !canSend()) return;
       if (!channel || typeof channel.send !== "function") throw new Error("configured home channel is unavailable or cannot receive messages");
       await channel.send({ content: text, allowedMentions: { parse: [] } });
       log(`Sent home-channel notification: ${text}`);
@@ -218,7 +228,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
   }
 
   return {
-    start, updateStatus, shutdown, sendHomeNotification, trackTask, handleMessage,
+    start, updateStatus, shutdown, sendHomeNotification, recordConfigReload, trackTask, handleMessage,
     isStopping: () => restartRequested || shuttingDown,
     isShuttingDown: () => shuttingDown,
     recordEvent: () => updateStatus(gatewayStatus.state, { lastEventAt: new Date().toISOString() }),

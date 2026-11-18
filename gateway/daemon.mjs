@@ -20,7 +20,6 @@ const extensionRoot = realpathSync(fileURLToPath(new URL("../", import.meta.url)
 const { config, paths, piExecutable, piArgs, startReason } = loadGatewayConfig();
 const allowedUsers = new Set(config.allowedUserIds);
 const allowedChannels = new Set(config.allowedChannelIds);
-const closeConfigWatch = watchGatewayConfig({ configPath: paths.configPath, config, allowedUsers, allowedChannels });
 const discordTransport = createDiscordRestTransport();
 const client = new Client({
   rest: discordTransport.options,
@@ -50,11 +49,14 @@ const lifecycle = createLifecycle({
   sessions, interactions,
   closeTransport: discordTransport.close,
   closeCommands: () => commands.close(),
-  closeConfigWatch,
+  closeConfigWatch: () => configWatch.close(),
+});
+const configWatch = watchGatewayConfig({
+  configPath: paths.configPath, config, allowedUsers, allowedChannels, onReload: lifecycle.recordConfigReload,
 });
 const commands = createCommandHandlers({
   client, config, configPath: paths.configPath,
-  allowedUsers, allowedChannels, threads, sessions, lifecycle,
+  allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig: configWatch.reload,
 });
 const routeDecider = createRouteDecider({ config });
 const channelSessions = createChannelSessionRegistry({

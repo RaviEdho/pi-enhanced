@@ -48,6 +48,8 @@ export interface DiscordGatewayConfig {
   allowDirectMessages: boolean;
   allowServerMessages: boolean;
   homeChannelId?: string;
+  /** Send config reload outcomes to the home channel. Defaults to off. */
+  notifyConfigReloads?: boolean;
   cwd: string;
   model?: { provider: string; id: string };
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -69,6 +71,11 @@ export interface DiscordGatewayStatus {
   botTag?: string;
   lastEventAt?: string;
   lastError?: string;
+  configReload?: {
+    outcome: "applied" | "rejected" | "valid";
+    at: string;
+    tokenRestartPending: boolean;
+  };
 }
 
 export interface DiscordGatewayPaths {
@@ -136,6 +143,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     (value.allowDirectMessages !== undefined && typeof value.allowDirectMessages !== "boolean") ||
     (value.allowServerMessages !== undefined && typeof value.allowServerMessages !== "boolean") ||
     (value.homeChannelId !== undefined && !isDiscordSnowflake(value.homeChannelId)) ||
+    (value.notifyConfigReloads !== undefined && typeof value.notifyConfigReloads !== "boolean") ||
     (value.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(value.toolCallVerbosity)) ||
     (value.toolCallVisibility !== undefined && !isValidToolCallVisibility(value.toolCallVisibility)) ||
     (value.tableRendering !== undefined && !isValidTableRendering(value.tableRendering)) ||
@@ -164,6 +172,7 @@ export function readDiscordGatewayConfig(): DiscordGatewayConfig | undefined {
     allowDirectMessages: value.allowDirectMessages !== false,
     allowServerMessages: value.allowServerMessages !== false,
     ...(typeof value.homeChannelId === "string" ? { homeChannelId: value.homeChannelId } : {}),
+    notifyConfigReloads: value.notifyConfigReloads === true,
     cwd: value.cwd,
     ...(value.model ? { model: value.model } : {}),
     ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel as DiscordGatewayConfig["thinkingLevel"] } : {}),

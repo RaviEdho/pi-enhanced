@@ -203,7 +203,12 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         {
           label: "Notification channel",
           currentValue: config.homeChannelId ?? "off",
-          description: "Set the text channel for gateway start, restart, stop, and failure notices, or turn notifications off.",
+          description: "Set the home channel for lifecycle and optional config reload notices, or turn notifications off.",
+        },
+        {
+          label: "Config reload notices",
+          currentValue: config.notifyConfigReloads ? (config.homeChannelId ? "on" : "on (no notification channel)") : "off",
+          description: "Send config reload outcomes to the notification channel. Off by default; /discord status always shows the latest outcome.",
         },
         {
           label: "Workspace",
@@ -291,6 +296,9 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         break;
       case "Notification channel":
         await configureHomeChannel(ctx, config);
+        break;
+      case "Config reload notices":
+        await configureReloadNotices(ctx, config);
         break;
       case "Workspace":
         await configureWorkspace(ctx, config);
@@ -487,6 +495,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     allowDirectMessages: existing?.allowDirectMessages ?? true,
     allowServerMessages: existing?.allowServerMessages ?? true,
     ...(homeChannelId ? { homeChannelId } : {}),
+    notifyConfigReloads: existing?.notifyConfigReloads ?? false,
     cwd,
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
@@ -618,6 +627,22 @@ async function configureHomeChannel(ctx: ExtensionCommandContext, config: Discor
     { homeChannelId },
     homeChannelId ? `Home notification channel set to ${homeChannelId}.` : "Home channel notifications disabled."
   );
+}
+
+async function configureReloadNotices(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
+  const on = config.notifyConfigReloads === true;
+  const selected = await selectDiscordOption(ctx, {
+    title: "Config Reload Notices",
+    description: "Send a brief notice to the notification channel when settings are applied, rejected, or need a restart. No config values are included.",
+    options: [on ? "On (current)" : "On", on ? "Off" : "Off (current)"],
+  });
+  if (!selected) return;
+  const enabled = selected.startsWith("On");
+  if (enabled === on) return;
+  const message = !enabled ? "Config reload notices disabled."
+    : config.homeChannelId ? "Config reload notices enabled."
+      : "Config reload notices enabled. Set a notification channel to receive them in Discord.";
+  saveGatewayConfig(ctx, config, { notifyConfigReloads: enabled }, message);
 }
 
 async function configureWorkspace(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
@@ -1364,11 +1389,11 @@ function stopGateway(ctx: ExtensionCommandContext): void {
 
 function showStatus(ctx: ExtensionCommandContext): void {
   const paths = getDiscordGatewayPaths();
-  const configured = Boolean(readDiscordGatewayConfig());
   const pid = readPid(paths.pid);
   if (!pid || !isProcessAlive(pid)) {
     if (existsSync(paths.pid)) unlinkSync(paths.pid);
     const status = readJson<DiscordGatewayStatus>(paths.status);
+    const configured = existsSync(paths.config);
     const lines = [configured ? "Discord gateway is stopped." : "Discord gateway is not configured. Run /discord setup."];
     if (status?.state === "failed" && status.lastError) lines.push(`Last error: ${status.lastError}`);
     if (configured) lines.push(`Config: ${paths.config}`);
@@ -1382,8 +1407,15 @@ function showStatus(ctx: ExtensionCommandContext): void {
   if (status?.botTag) lines.push(`Bot: ${status.botTag}`);
   if (status?.lastEventAt) lines.push(`Last authorized message: ${status.lastEventAt}`);
   if (status?.lastError) lines.push(`Last error: ${status.lastError}`);
+  const reload = status?.pid === pid ? status.configReload : undefined;
+  if (reload) {
+    const result = reload.outcome === "applied" ? "settings applied"
+      : reload.outcome === "rejected" ? "edit rejected; previous settings still active" : "saved config valid; no live settings changed";
+    lines.push(`Last config reload: ${result} (${reload.at})`);
+    if (reload.tokenRestartPending) lines.push("Bot token: restart pending (/discord restart)");
+  }
   lines.push(`Logs: ${paths.log}`);
-  notify(ctx, lines.join("\n"), status?.state === "failed" ? "error" : "info");
+  notify(ctx, lines.join("\n"), status?.state === "failed" ? "error" : reload?.outcome === "rejected" ? "warning" : "info");
 }
 
 function showLogs(ctx: ExtensionCommandContext): void {

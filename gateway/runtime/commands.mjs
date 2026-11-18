@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { buildCommitCardPayload, buildConversationSettingPayload } from "./components.mjs";
 import { readGatewayConfig } from "./config.mjs";
@@ -12,7 +11,7 @@ import { getThreadSessionKey } from "./threads.mjs";
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_MODEL_SESSION_KEY = "gateway:default-model-catalog";
 
-export function createCommandHandlers({ client, config, configPath, allowedUsers, allowedChannels, threads, sessions, lifecycle }) {
+export function createCommandHandlers({ client, config, configPath, allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig }) {
   const pendingDiscordCommands = new Map();
 
   async function registerSlashCommands(readyClient) {
@@ -264,11 +263,14 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
 
     latestConfig.homeChannelId = targetChannelId;
     latestConfig.configuredAt = new Date().toISOString();
-    const addChannel = !latestConfig.allowedChannelIds.includes("*") && !latestConfig.allowedChannelIds.includes(targetChannelId);
-    if (addChannel) latestConfig.allowedChannelIds.push(targetChannelId);
+    if (!latestConfig.allowedChannelIds.includes("*") && !latestConfig.allowedChannelIds.includes(targetChannelId)) {
+      latestConfig.allowedChannelIds.push(targetChannelId);
+    }
     writePrivateJson(configPath, latestConfig);
-    if (addChannel) allowedChannels.add(targetChannelId);
-    config.homeChannelId = targetChannelId;
+    if (!reloadConfig()) {
+      await replyEphemeral(interaction, "The home channel was saved, but the gateway could not apply the settings. Check the gateway logs.");
+      return;
+    }
     log(`Home channel set to ${targetChannelId} by ${interaction.user?.tag || interaction.user?.id}`);
 
     const confirmationText = isThread
@@ -618,9 +620,9 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     latest.model = { provider: selected.provider, id: selected.id };
     latest.configuredAt = new Date().toISOString();
     writePrivateJson(configPath, latest);
-    const saved = JSON.parse(readFileSync(configPath, "utf8"));
-    if (saved.model?.provider !== selected.provider || saved.model?.id !== selected.id) throw new Error("Could not save default model");
-    config.model = latest.model;
+    if (!reloadConfig() || config.model?.provider !== selected.provider || config.model?.id !== selected.id) {
+      throw new Error("Could not apply default model");
+    }
   }
 
   function getConversationSessionKey(interaction) {

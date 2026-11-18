@@ -50,6 +50,7 @@ export function readGatewayConfig(configPath) {
     (config.allowDirectMessages !== undefined && typeof config.allowDirectMessages !== "boolean") ||
     (config.allowServerMessages !== undefined && typeof config.allowServerMessages !== "boolean") ||
     (config.homeChannelId !== undefined && (typeof config.homeChannelId !== "string" || !/^\d{17,20}$/.test(config.homeChannelId))) ||
+    (config.notifyConfigReloads !== undefined && typeof config.notifyConfigReloads !== "boolean") ||
     (config.toolCallVerbosity !== undefined && !["none", "tool-only", "full"].includes(config.toolCallVerbosity)) ||
     (config.toolCallVisibility !== undefined && !isValidToolCallVisibility(config.toolCallVisibility)) ||
     (config.tableRendering !== undefined && !isValidTableRendering(config.tableRendering)) ||
@@ -71,55 +72,81 @@ export function readGatewayConfig(configPath) {
     allowDirectMessages: config.allowDirectMessages !== false,
     allowServerMessages: config.allowServerMessages !== false,
     homeChannelId: config.homeChannelId,
+    notifyConfigReloads: config.notifyConfigReloads === true,
     cwd: config.cwd,
     model: config.model && { provider: config.model.provider, id: config.model.id },
     thinkingLevel: config.thinkingLevel,
     toolCallVerbosity: config.toolCallVerbosity ?? "full",
-    toolCallVisibility: { channels: false, threads: true, dms: true, ...config.toolCallVisibility },
-    tableRendering: { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering },
-    channelReplies: { mode: "always-thread", escalate: true, followUp: true, contextMessages: 5, ...config.channelReplies },
-    channelSessions: { ...DEFAULT_CHANNEL_SESSIONS, ...config.channelSessions },
+    toolCallVisibility: withDefaults({ channels: false, threads: true, dms: true }, config.toolCallVisibility),
+    tableRendering: withDefaults({ enabled: false, showTitleFooter: false, attachMarkdown: false }, config.tableRendering),
+    channelReplies: {
+      ...withDefaults({ mode: "always-thread", escalate: true, followUp: true, contextMessages: 5 }, config.channelReplies),
+      routerModel: isModelChoice(config.channelReplies?.routerModel)
+        ? { provider: config.channelReplies.routerModel.provider, id: config.channelReplies.routerModel.id }
+        : config.channelReplies?.routerModel,
+    },
+    channelSessions: withDefaults(DEFAULT_CHANNEL_SESSIONS, config.channelSessions),
     contextMessages: config.contextMessages ?? 5,
     configuredAt: typeof config.configuredAt === "string" ? config.configuredAt : undefined,
   };
 }
 
+function withDefaults(defaults, settings) {
+  return Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, settings?.[key] ?? value]));
+}
+
+function liveSettings({ configuredAt, token, allowedUserIds, allowedChannelIds, ...settings }) {
+  // Allowlist order and save timestamps do not affect gateway behavior.
+  return { ...settings, allowedUserIds: new Set(allowedUserIds), allowedChannelIds: new Set(allowedChannelIds) };
+}
+
 /** Keep shared references for runtime consumers; commit only after validating the whole file. */
-export function watchGatewayConfig({ configPath, config, allowedUsers, allowedChannels, logger = log }) {
+export function watchGatewayConfig({ configPath, config, allowedUsers, allowedChannels, onReload = () => {}, logger = log }) {
   const filename = basename(configPath);
   let watcher;
   let timer;
   let closed = false;
-  let invalidReported = false;
-  let tokenChangeReported = false;
+  let rejected = false;
+  let savedToken = config.token;
+
+  function report(outcome) {
+    const tokenRestartPending = savedToken !== config.token;
+    const text = outcome === "applied" ? "Discord gateway settings reloaded."
+      : outcome === "rejected" ? "Discord gateway config reload rejected: config.json is invalid or unavailable. Last valid settings are still active."
+        : "Discord gateway config is valid; no live settings changed.";
+    const notice = tokenRestartPending ? `${text} Run /discord restart to use the new bot token.` : text;
+    logger(notice);
+    onReload({ outcome, at: new Date().toISOString(), tokenRestartPending }, notice);
+  }
 
   function reload() {
+    if (closed) return false;
     let next;
     try {
       next = readGatewayConfig(configPath);
       if (next.cwd !== config.cwd) validateWorkspaceDirectory(next.cwd);
     } catch {
       // Never log raw parse/validation errors; they can include config contents.
-      if (!invalidReported) logger("Discord gateway config reload skipped: config.json is invalid or unavailable; keeping the last valid settings.");
-      invalidReported = true;
-      return;
+      if (!rejected) {
+        rejected = true;
+        report("rejected");
+      }
+      return false;
     }
-    const recovered = invalidReported;
-    invalidReported = false;
-    const tokenChanged = next.token !== config.token;
-    if (tokenChanged && !tokenChangeReported) logger("Discord bot token changed on disk; run /discord restart to reconnect with it.");
-    tokenChangeReported = tokenChanged;
-    next.token = config.token;
-    if (isDeepStrictEqual(next, config)) {
-      if (recovered) logger("Discord gateway config.json is valid again.");
-      return;
+    const recovered = rejected;
+    rejected = false;
+    const tokenChanged = next.token !== savedToken;
+    savedToken = next.token;
+    const applied = !isDeepStrictEqual(liveSettings(next), liveSettings(config));
+    if (applied) {
+      Object.assign(config, next, { token: config.token });
+      allowedUsers.clear();
+      allowedChannels.clear();
+      for (const id of next.allowedUserIds) allowedUsers.add(id);
+      for (const id of next.allowedChannelIds) allowedChannels.add(id);
     }
-    Object.assign(config, next);
-    allowedUsers.clear();
-    allowedChannels.clear();
-    for (const id of next.allowedUserIds) allowedUsers.add(id);
-    for (const id of next.allowedChannelIds) allowedChannels.add(id);
-    logger("Discord gateway settings reloaded.");
+    if (applied || tokenChanged || recovered) report(applied ? "applied" : "valid");
+    return true;
   }
 
   function schedule() {
@@ -143,11 +170,14 @@ export function watchGatewayConfig({ configPath, config, allowedUsers, allowedCh
   }
   watchFile(configPath, { persistent: false, interval: 2000 }, schedule);
   reload(); // Reconcile a save that happened between startup and watcher registration.
-  return () => {
-    closed = true;
-    clearTimeout(timer);
-    watcher?.close();
-    unwatchFile(configPath, schedule);
+  return {
+    reload,
+    close() {
+      closed = true;
+      clearTimeout(timer);
+      watcher?.close();
+      unwatchFile(configPath, schedule);
+    },
   };
 }
 

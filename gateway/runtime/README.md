@@ -56,6 +56,13 @@ callbacks where commands and lifecycle depend on each other.
   captures routing, rollover, context and display settings at acceptance,
   whereas fresh Pi sessions use current defaults when opening. Protected tools
   still recheck authorization directly from disk. Close the watcher at shutdown.
+  Config-writing Discord commands use the same reload path immediately, so the
+  subsequent file event is a no-op. Ignore timestamp-only saves and allowlist
+  reordering; report one sanitized outcome for a meaningful change, the first
+  rejection, or recovery. Lifecycle records the latest outcome and token pending
+  flag in `status.json` independently of Discord delivery. Post only to the
+  current home channel when `notifyConfigReloads` is enabled and the client is
+  ready. Do not include changed values or parse errors in status or notices.
 
 - Create Discord REST with its own explicitly supplied Undici 6 `Agent`, not the
   process-wide dispatcher. Importing Pi's SDK loads Undici 8 and replaces the
