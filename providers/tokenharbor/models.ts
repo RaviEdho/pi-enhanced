@@ -105,7 +105,7 @@ export function loadTokenHarborCatalog(key: string): TokenHarborCatalog | undefi
   return normalized;
 }
 
-/** Call only from an accepted refresh publication, or the explicit login flow. */
+/** Call only from an accepted refresh publication. */
 export function saveTokenHarborCatalog(catalog: TokenHarborCatalog): void {
   catalogs.set(catalog.credentialHash, catalog);
   saveJson(join(cacheRoot(), `${catalog.credentialHash}.json`), catalog);
@@ -278,8 +278,8 @@ export async function discoverTokenHarborModels(key: string, signal?: AbortSigna
       signal?.throwIfAborted();
       const item = raw[cursor++];
       const id = item.id as string;
-      const page = await pageMetadata(id, signal, force);
-      const model = buildTokenHarborModel(item, page);
+      // A public page cannot override the listing's required tool support.
+      const model = item.tool_call === true ? buildTokenHarborModel(item, await pageMetadata(id, signal, force)) : undefined;
       if (model) models.push(model);
       else skipped.push({ id, reason: "Missing verified chat/tool metadata, limits, modalities, or input/output/cache-read prices" });
     }

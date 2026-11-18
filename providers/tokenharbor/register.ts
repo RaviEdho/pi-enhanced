@@ -6,7 +6,7 @@ import { lazyStream } from "../lazy-stream.js";
 import { isProviderNetworkEnabled } from "../network.js";
 import { PROVIDER_ID, PROVIDER_NAME, TOKENHARBOR_BASE_URL } from "./constants.js";
 import { tokenHarborAccountId } from "./credentials.js";
-import { discoverTokenHarborModels, loadTokenHarborCatalog, saveTokenHarborCatalog } from "./models.js";
+import { discoverTokenHarborModels, fetchTokenHarborCatalog, loadTokenHarborCatalog, saveTokenHarborCatalog } from "./models.js";
 import { invalidateTokenHarborAccess, isTokenHarborModelAllowed, publishTokenHarborAccess, readTokenHarborAccess, refreshTokenHarborAccess } from "./access.js";
 import type { OpenAICompletionsOptions } from "@earendil-works/pi-ai/api/openai-completions";
 
@@ -41,20 +41,18 @@ export function registerTokenHarborProvider(pi: ExtensionAPI): void {
       const key = (await interaction.prompt({ type: "secret", message: "Enter your Token Harbor Universal Key:", placeholder: "thk_live_…", signal: interaction.signal })).trim();
       if (!key) throw new Error("No Token Harbor API key provided");
       interaction.signal.throwIfAborted();
-      interaction.notify({ type: "progress", message: "Validating Token Harbor key and loading verified model metadata…" });
-      const access = await readTokenHarborAccess(key, interaction.signal);
-      const catalog = await discoverTokenHarborModels(key, interaction.signal, true, access.listing);
+      interaction.notify({ type: "progress", message: "Validating Token Harbor key…" });
+      // Pi refreshes the model catalog after saving the credential. Don't block login on allowances or public pages.
+      await fetchTokenHarborCatalog(key, interaction.signal);
       interaction.signal.throwIfAborted();
-      saveTokenHarborCatalog(catalog);
-      publishTokenHarborAccess(key, access);
       const existing = store.list(PROVIDER_ID).find(account => account.apiKey === key || account.access === key);
       const id = existing?.id ?? tokenHarborAccountId(key);
       store.upsert({ ...existing, id, provider: PROVIDER_ID, type: "api_key", apiKey: key,
-        label: existing?.label ?? maskedKeyIdentity(key), planType: access.error ? existing?.planType : access.planName, createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+        label: existing?.label ?? maskedKeyIdentity(key), createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
         disabledCause: undefined, blockedUntil: null, blockedReason: null, requiresAuthRefresh: false });
       store.setActive(PROVIDER_ID, id);
       resolvedKey = key;
-      interaction.notify({ type: "progress", message: `${catalog.models.filter(model => isTokenHarborModelAllowed(key, model.id)).length} Pass-covered or explicit free models available; ${catalog.skipped.length} omitted because metadata is incomplete. Unknown and wallet-only coverage is hidden. Use /usage for allowances.` });
+      models = loadTokenHarborCatalog(key)?.models ?? [];
       return { type: "api_key", key };
     },
     async check({ ctx, credential }) {
