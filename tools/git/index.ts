@@ -1,5 +1,6 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { GIT_COMMAND_FINISHED } from "./events.js";
 
 /**
  * Registers both /git and /commit commands.
@@ -32,6 +33,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
         await handleCommitCommand(args, ctx);
       } finally {
         isGitBusy = false;
+        pi.events.emit(GIT_COMMAND_FINISHED, undefined);
       }
     },
   });
@@ -136,6 +138,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
         }
       } finally {
         isGitBusy = false;
+        pi.events.emit(GIT_COMMAND_FINISHED, undefined);
       }
     },
   });

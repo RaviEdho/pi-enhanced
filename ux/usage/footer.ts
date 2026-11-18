@@ -9,6 +9,7 @@ import { AccountBalancer, isAccountEligibleForModel } from "../../accounts/balan
 import { DEFAULT_CACHE_TTL_MS, QuotaManager } from "../../accounts/quota.js";
 import { AccountStore } from "../../accounts/store.js";
 import { isProviderNetworkEnabled } from "../../providers/network.js";
+import { GIT_COMMAND_FINISHED } from "../../tools/git/events.js";
 import { fetchOllamaCloudUsage, getOllamaCredentialId, getOllamaFallbackAuth } from "./ollama-cloud.js";
 import { getInferHubUsageFailure } from "./inferhub.js";
 import { getOpenCodeGoEnvAccount, isOpenCodeGoEndpoint, OPENCODE_GO_ID } from "../../providers/opencode-go/credentials.js";
@@ -696,6 +697,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     return undefined;
   });
 
+  const unsubscribeGitCommand = pi.events.on(GIT_COMMAND_FINISHED, () => { gitMonitor?.scheduleRefresh(); });
   pi.on("tool_execution_end", () => { gitMonitor?.scheduleRefresh(); });
 
   pi.on("agent_settled", (_event, ctx) => {
@@ -720,6 +722,7 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
     unsubscribeQuota();
     unsubscribeSettings();
     unsubscribeMode();
+    unsubscribeGitCommand();
     if (idleTimer) {
       clearInterval(idleTimer);
       idleTimer = undefined;
