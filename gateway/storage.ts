@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface DiscordChannelReplies {
   mode: DiscordChannelReplyMode;
@@ -69,6 +69,7 @@ export interface DiscordGatewayStatus {
   startedAt: string;
   updatedAt: string;
   botTag?: string;
+  supervision?: "detached" | "systemd";
   lastEventAt?: string;
   lastError?: string;
   configReload?: {
@@ -91,7 +92,7 @@ export interface DiscordGatewayPaths {
 
 export function getDiscordGatewayPaths(): DiscordGatewayPaths {
   const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-  const directory = join(agentDir, "discord-gateway");
+  const directory = resolve(agentDir, "discord-gateway");
   return {
     directory,
     config: join(directory, "config.json"),

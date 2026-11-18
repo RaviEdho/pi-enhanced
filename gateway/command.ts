@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { refreshProviderCatalogs } from "../providers/refresh.js";
 import { getAvailablePickerModels } from "../ux/available-models.js";
@@ -19,8 +19,10 @@ import { DiscordConfirmationDialog, type DiscordConfirmationDialogOptions } from
 import { DiscordInputDialog } from "./input-dialog.js";
 import { withDiscordDialogSession } from "./dialog-session.js";
 import { selectDiscordModel } from "./model-dialog.js";
-import { DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
-import { DiscordToggleDialog, type DiscordAccessPaths } from "./toggle-dialog.js";
+import { gatewayPidRecord, readGatewayPid } from "./runtime/process.js";
+import { createGatewayBootService } from "./systemd.js";
+import { discordSelectItems, DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
+import { runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_DISCORD_CHANNEL_SESSIONS,
@@ -32,12 +34,42 @@ import {
   writePrivateJson,
   type DiscordChannelReplyMode,
   type DiscordGatewayConfig,
+  type DiscordGatewayPaths,
   type DiscordGatewayStatus,
   type DiscordToolCallVisibility,
   type DiscordTableRendering,
 } from "./storage.js";
 
 const TOKEN_ENV_VAR = "PI_ENHANCED_DISCORD_BOT_TOKEN";
+const onOff = (value: boolean) => value ? "on" : "off";
+
+function openSetting(
+  kind: "group" | "picker" | "input" | "action", id: string, label: string, currentValue: string,
+  description: string, open: () => void | Promise<void>,
+): DiscordSettingRow {
+  return { kind, id, label, currentValue, description, open };
+}
+
+function cycleSetting<T>(
+  id: string, label: string, current: T, description: string, choices: readonly T[],
+  format: (value: T) => string, change: (value: T) => void,
+): DiscordSettingRow {
+  const values = choices.map(format);
+  const currentValue = format(current);
+  return {
+    kind: "inline", id, label, description, currentValue, values,
+    change: (value) => {
+      const index = values.indexOf(value);
+      if (index >= 0 && value !== currentValue) change(choices[index]!);
+    },
+  };
+}
+
+function toggleSetting(
+  id: string, label: string, current: boolean, description: string, change: (value: boolean) => void,
+): DiscordSettingRow {
+  return cycleSetting(id, label, current, description, [false, true], onOff, change);
+}
 
 export async function handleDiscordCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
   const trimmed = args.trim();
@@ -74,13 +106,13 @@ async function executeDiscordCommand(action: string, ctx: ExtensionCommandContex
       await restartGateway(ctx);
       return;
     case "stop":
-      stopGateway(ctx);
+      await stopGateway(ctx);
       return;
     case "teardown":
       await teardownGateway(ctx);
       return;
     case "status":
-      showStatus(ctx);
+      await showStatus(ctx);
       return;
     case "logs":
       showLogs(ctx);
@@ -117,24 +149,23 @@ async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
       return;
     }
 
-    const paths = getDiscordGatewayPaths();
-    const pid = readPid(paths.pid);
-    const running = pid !== undefined && isProcessAlive(pid);
-    if (!running && existsSync(paths.pid)) unlinkSync(paths.pid);
-    const status = readJson<DiscordGatewayStatus>(paths.status);
-    const statusLabel = running
-      ? status?.botTag ? `running as ${status.botTag}` : `running (${status?.state || "connecting"})`
-      : status?.state === "failed" && status.lastError ? `stopped — ${status.lastError}` : "stopped";
-
     if (!ctx.hasUI) {
-      showStatus(ctx);
+      await showStatus(ctx);
       notify(ctx, "Use /discord start, /discord restart, /discord stop, /discord setup, /discord configure, or /discord logs.", "info");
       return;
     }
 
-    const actions = running
-      ? ["Restart", "Stop", "Settings", "View logs", "Remove configuration"]
-      : ["Start", "Settings", "View logs", "Remove configuration"];
+    const { pid, status, boot } = await inspectGateway(getDiscordGatewayPaths());
+    const statusLabel = pid
+      ? status?.state === "restarting" ? "draining for restart"
+        : status?.botTag ? `running as ${status.botTag}` : `running (${status?.state || "connecting"})`
+      : boot.active ? "starting under systemd"
+        : status?.state === "failed" && status.lastError ? `stopped — ${status.lastError}`
+          : boot.failed ? "systemd service failed — see logs" : "stopped";
+    const actions = [
+      ...(pid || boot.active ? ["Restart", "Stop"] : ["Start"]),
+      "Settings", "View logs", "Remove configuration",
+    ];
     const selected = await selectDiscordOption(ctx, {
       title: "Discord Gateway",
       description: `Status: ${statusLabel}`,
@@ -150,7 +181,7 @@ async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
         await restartGateway(ctx);
         return;
       case "Stop":
-        stopGateway(ctx);
+        await stopGateway(ctx);
         return;
       case "Settings":
         await showConfigureMenu(ctx);
@@ -167,182 +198,138 @@ async function showDiscordMenu(ctx: ExtensionCommandContext): Promise<void> {
   }
 }
 
+async function configureBootService(ctx: ExtensionCommandContext, paths: DiscordGatewayPaths): Promise<void> {
+  const service = createGatewayBootService(paths);
+  if (!service.supported) throw new Error("This setting requires Linux with a systemd user manager.");
+  const { boot, pid, status } = await inspectGateway(paths);
+  if (boot.unavailable) throw new Error("The systemd user manager is unavailable.");
+  const selected = await selectDiscordOption(ctx, {
+    title: "Start at boot",
+    description: "Enabling starts the systemd service after any accepted work finishes. Disabling leaves the gateway running until you stop it or reboot.",
+    options: [
+      { label: "Enable", current: boot.enabled, description: "Start the gateway now and at boot." },
+      { label: "Disable", current: !boot.enabled, description: "Do not start the gateway automatically at boot." },
+    ],
+    selectedOption: boot.enabled ? "Enable" : "Disable",
+  });
+  if (!selected || (selected === "Enable") === boot.enabled) return;
+  if (selected === "Disable") {
+    await service.disable();
+    notify(ctx, "Start at boot is off. A running gateway stays online until stopped or rebooted.", "info");
+    return;
+  }
+
+  if (pid && !status?.supervision) {
+    throw new Error("Restart the gateway once with /discord restart to load support for systemd handoff, then try again.");
+  }
+  const config = readDiscordGatewayConfig();
+  if (!config) throw new Error("A valid gateway configuration is required.");
+  if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) {
+    throw new Error(`Configured workspace is unavailable: ${config.cwd}`);
+  }
+  const argv = resolvePiInvocation();
+  if (!argv) throw new Error("Could not locate the running Pi CLI.");
+  prepareGatewayDirectory(paths);
+  const launcher = fileURLToPath(new URL("./systemd-launch.mjs", import.meta.url));
+  await service.enable(process.execPath, launcher, gatewayLaunchEnv(paths, argv, "start"));
+  notify(ctx, pid && !boot.active
+    ? "Start at boot is on. The running gateway will finish accepted work before systemd takes over."
+    : "Start at boot is on. The systemd service is started; use /discord status to check the connection.", "info");
+}
+
 async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
   if (!ctx.hasUI) {
     notify(ctx, "Run /discord configure in an interactive Pi session to change gateway settings.", "error");
     return;
   }
 
-  let selectedOption: string | undefined;
-  while (true) {
-    const config = readDiscordGatewayConfig();
-    if (!config) {
-      await setupGateway(ctx);
-      return;
-    }
-
-    const selected = await selectDiscordOption(ctx, {
-      title: "Discord Settings",
-      selectedOption,
-      options: [
-        {
-          label: "Bot token",
-          currentValue: "configured",
-          description: "Replace the saved Discord bot token. Input is visible; the token is stored in private local config. Restart the gateway to reconnect with it.",
-        },
-        {
-          label: "Allowed users",
-          currentValue: config.allowedUserIds.includes("*") ? "everyone" : config.allowedUserIds.length ? `${config.allowedUserIds.length} allowed` : "none (blocked)",
-          description: 'Choose which Discord users can interact in DMs and servers. Use "*" for everyone or "off" to block all users.',
-        },
-        {
-          label: "Allowed channels",
-          currentValue: config.allowedChannelIds.includes("*") ? "all channels" : config.allowedChannelIds.length ? `${config.allowedChannelIds.length} allowed` : "none (servers/history blocked)",
-          description: 'Choose allowed channels, "*" for all, or "off" to block server messages/history. DM messaging uses only the user whitelist; shared-thread participants may see history results.',
-        },
-        {
-          label: "Notification channel",
-          currentValue: config.homeChannelId ?? "off",
-          description: "Set the home channel for lifecycle and optional config reload notices, or turn notifications off.",
-        },
-        {
-          label: "Config reload notices",
-          currentValue: config.notifyConfigReloads ? (config.homeChannelId ? "on" : "on (no notification channel)") : "off",
-          description: "Send config reload outcomes to the notification channel. Off by default; /discord status always shows the latest outcome.",
-        },
-        {
-          label: "Workspace",
-          currentValue: config.cwd,
-          description: "Set the starting directory for gateway Pi sessions. This is not a filesystem sandbox; tools may access other files.",
-        },
-        {
-          label: "Default model",
-          currentValue: config.model ? `${config.model.provider}/${config.model.id}` : "Pi default",
-          description: "Choose the model used when gateway Pi sessions start, or follow Pi's configured default.",
-        },
-        {
-          label: "Message access",
-          currentValue: `DMs ${config.allowDirectMessages ? "on" : "off"} · Servers ${config.allowServerMessages ? "on" : "off"}`,
-          description: "Enable or disable direct messages and server messages independently. User and channel allowlists still apply.",
-        },
-        {
-          label: "Tool call verbosity",
-          currentValue: config.toolCallVerbosity ?? "full",
-          description: "Control tool activity shown in Discord: none, tool only, or full (including intermediate assistant text). Workspace change notices stay visible.",
-        },
-        {
-          label: "Tool call visibility",
-          currentValue: `Channels ${config.toolCallVisibility?.channels ? "on" : "off"} · Threads ${config.toolCallVisibility?.threads !== false ? "on" : "off"} · DMs ${config.toolCallVisibility?.dms !== false ? "on" : "off"}`,
-          description: "Show or hide tool activity and intermediate assistant text separately in server channels, threads, and DMs. Prompts and workspace notices stay visible.",
-        },
-        {
-          label: "Tables",
-          currentValue: config.tableRendering?.enabled === true ? `On · Title/footer ${config.tableRendering?.showTitleFooter ? "on" : "off"} · Markdown ${config.tableRendering?.attachMarkdown ? "on" : "off"}` : "rendering off",
-          description: "Enable or disable table images (off by default). Title/footer and Markdown attachment are independent options and also default to off.",
-        },
-        {
-          label: "Channel replies",
-          currentValue: channelReplyModeLabel(config.channelReplies.mode),
-          description: "Choose where new server conversations answer: a thread, the channel, or a routing model's choice. Existing threads and DMs are unchanged.",
-        },
-        {
-          label: "Channel sessions",
-          currentValue: config.channelSessions?.enabled !== false
-            ? `${config.channelSessions?.resetHour ?? 4}:00 · ${config.channelSessions?.timezone ?? DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone} · ${config.channelSessions?.idleHours ?? 6}h quiet`
-            : "overnight rollover off",
-          description: "Configure overnight context rollover. Busy nights are skipped; replying to a bot message always continues its linked session without changing the default.",
-        },
-        {
-          label: "Recent context",
-          currentValue: contextMessagesLabel(config.contextMessages),
-          description: "Set surrounding messages added for context: before the reply target when replying, or before your new message otherwise. Non-replies skip already-delivered context; off disables history.",
-        },
-        ...(config.channelReplies.mode === "auto"
-          ? [
-            {
-              label: "Routing model",
-              currentValue: routingModelLabel(config.channelReplies.routerModel),
-              description: "Use the cheapest authenticated model, Pi's global default, the gateway's default, or a specific model. Each routing decision costs one model call; failures start a thread.",
-            },
-            {
-              label: "Routing context",
-              currentValue: contextMessagesLabel(config.channelReplies.contextMessages ?? 5),
-              description: "Set channel messages sent to the router, independently of the agent: before the reply target when replying, otherwise before your new message. The direct quote is always included; off disables only history.",
-            },
-            {
-              label: "Tool escalation",
-              currentValue: config.channelReplies.escalate ? "on" : "off",
-              description: "Open a thread when a channel reply uses editing, shell, or delegation tools. Read-only replies stay in the channel; the thread inherits the conversation.",
-            },
-            {
-              label: "Follow-up escalation",
-              currentValue: config.channelReplies.followUp ? "on" : "off",
-              description: "Open a thread when the same user mentions the bot again in the same channel within ten minutes of a channel reply. When off, the routing model decides.",
-            },
-          ]
-          : []),
-      ],
-    });
-    selectedOption = selected;
-    switch (selected) {
-      case "Bot token":
-        await configureBotToken(ctx, config);
-        break;
-      case "Allowed users":
-        await configureWhitelist(ctx, config, "users");
-        break;
-      case "Allowed channels":
-        await configureWhitelist(ctx, config, "channels");
-        break;
-      case "Notification channel":
-        await configureHomeChannel(ctx, config);
-        break;
-      case "Config reload notices":
-        await configureReloadNotices(ctx, config);
-        break;
-      case "Workspace":
-        await configureWorkspace(ctx, config);
-        break;
-      case "Default model":
-        await configureDefaultModel(ctx, config);
-        break;
-      case "Message access":
-        await configureAccessPaths(ctx, config);
-        break;
-      case "Tool call verbosity":
-        await configureToolCallVerbosity(ctx, config);
-        break;
-      case "Tool call visibility":
-        await configureToolCallVisibility(ctx, config);
-        break;
-      case "Tables":
-        await configureTableRendering(ctx, config);
-        break;
-      case "Channel replies":
-        await configureChannelReplies(ctx, config);
-        break;
-      case "Channel sessions":
-        await configureChannelSessions(ctx, config);
-        break;
-      case "Recent context":
-        await configureContextMessages(ctx, config);
-        break;
-      case "Routing model":
-        await configureRoutingModel(ctx, config);
-        break;
-      case "Routing context":
-        await configureContextMessages(ctx, config, true);
-        break;
-      case "Tool escalation":
-        await configureToolEscalation(ctx, config);
-        break;
-      case "Follow-up escalation":
-        await configureFollowUpEscalation(ctx, config);
-        break;
-      default:
-        return;
-    }
+  if (!readDiscordGatewayConfig()) {
+    await setupGateway(ctx);
+    return;
   }
+
+  const paths = getDiscordGatewayPaths();
+  let { bootLabel } = await inspectGateway(paths);
+  await runDiscordSettingsPage(ctx, { title: "Discord Settings", searchable: true }, () => {
+    const config = readDiscordGatewayConfig();
+    if (!config) return undefined;
+    const { channelReplies: replies, channelSessions: sessions } = config;
+    const visibility = toolVisibility(config);
+    const tables = tableSettings(config);
+    return [
+      openSetting("action", "boot", "Start at boot", bootLabel,
+        "Run the gateway as a systemd user service when this machine boots. Off by default.", async () => {
+          try {
+            await configureBootService(ctx, paths);
+          } finally {
+            ({ bootLabel } = await inspectGateway(paths));
+          }
+        }),
+      openSetting("input", "token", "Bot token", "configured",
+        "Replace the saved Discord bot token. Input is visible; the token is stored in private local config. Restart the gateway to reconnect with it.",
+        () => configureBotToken(ctx, config)),
+      openSetting("input", "users", "Allowed users",
+        config.allowedUserIds.includes("*") ? "everyone" : config.allowedUserIds.length ? `${config.allowedUserIds.length} allowed` : "none (blocked)",
+        'Choose which Discord users can interact in DMs and servers. Use "*" for everyone or "off" to block all users.',
+        () => configureWhitelist(ctx, config, "users")),
+      openSetting("input", "channels", "Allowed channels",
+        config.allowedChannelIds.includes("*") ? "all channels" : config.allowedChannelIds.length ? `${config.allowedChannelIds.length} allowed` : "none (servers/history blocked)",
+        'Choose allowed channels, "*" for all, or "off" to block server messages/history. DM messaging uses only the user whitelist; shared-thread participants may see history results.',
+        () => configureWhitelist(ctx, config, "channels")),
+      openSetting("input", "notifications", "Notification channel", config.homeChannelId ?? "off",
+        "Set the channel for lifecycle and optional config reload notices, or turn notifications off.",
+        () => configureHomeChannel(ctx, config)),
+      toggleSetting("reload-notices", "Config reload notices", config.notifyConfigReloads === true,
+        "Send config reload outcomes to the notification channel without sharing config values. /discord status always shows the latest outcome."
+          + (config.homeChannelId ? "" : " Set a notification channel to receive notices in Discord."),
+        (enabled) => saveGatewayConfig(ctx, config, { notifyConfigReloads: enabled },
+          `Config reload notices ${enabled ? "enabled" : "disabled"}.`
+            + (enabled && !config.homeChannelId ? " Set a notification channel to receive them in Discord." : ""))),
+      openSetting("input", "workspace", "Workspace", config.cwd,
+        "Set the starting directory for gateway Pi sessions. This is not a filesystem sandbox; tools may access other files.",
+        () => configureWorkspace(ctx, config)),
+      openSetting("picker", "default-model", "Default model", config.model ? `${config.model.provider}/${config.model.id}` : "Pi default",
+        "Choose the model used when gateway Pi sessions start, or follow Pi's configured default.",
+        () => configureDefaultModel(ctx, config)),
+      openSetting("group", "access", "Message access", `DMs ${onOff(config.allowDirectMessages)} · Servers ${onOff(config.allowServerMessages)}`,
+        "Enable or disable direct messages and server messages independently. User and channel allowlists still apply.",
+        () => configureAccessPaths(ctx, config)),
+      cycleSetting<NonNullable<DiscordGatewayConfig["toolCallVerbosity"]>>("verbosity", "Tool call verbosity", config.toolCallVerbosity ?? "full",
+        "Control tool activity shown in Discord: none, tool only, or full (including intermediate assistant text). Workspace change notices stay visible.",
+        ["none", "tool-only", "full"], (value) => value === "tool-only" ? "tool only" : value,
+        (value) => saveGatewayConfig(ctx, config, { toolCallVerbosity: value }, `Tool call verbosity set to ${value}.`)),
+      openSetting("group", "visibility", "Tool call visibility",
+        `Channels ${onOff(visibility.channels)} · Threads ${onOff(visibility.threads)} · DMs ${onOff(visibility.dms)}`,
+        "Show or hide tool activity and intermediate assistant text separately in server channels, threads, and DMs.",
+        () => configureToolCallVisibility(ctx)),
+      openSetting("group", "tables", "Tables",
+        tables.enabled ? `on · Title/footer ${onOff(tables.showTitleFooter)} · Markdown ${onOff(tables.attachMarkdown)}` : "off",
+        "Configure Markdown table images, with independent options for title/footer and Markdown attachments.",
+        () => configureTableRendering(ctx)),
+      cycleSetting<DiscordChannelReplyMode>("replies", "Channel replies", replies.mode,
+        "Choose where new server conversations answer: a thread, the channel, or a routing model's choice. Routing settings appear in model-decides mode. Existing threads and DMs are unchanged.",
+        ["always-thread", "channel", "auto"], channelReplyModeLabel,
+        (mode) => saveGatewayConfig(ctx, config, { channelReplies: { ...replies, mode } }, `Channel replies set to ${channelReplyModeLabel(mode)}.`)),
+      openSetting("group", "sessions", "Channel sessions", sessions?.enabled !== false
+        ? `${resetHourLabel(sessions?.resetHour ?? DEFAULT_DISCORD_CHANNEL_SESSIONS.resetHour)} · ${sessions?.timezone ?? DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone} · ${sessions?.idleHours ?? DEFAULT_DISCORD_CHANNEL_SESSIONS.idleHours}h quiet`
+        : "overnight rollover off",
+        "Configure overnight context rollover. Busy nights are skipped; replying to a bot message always continues its linked session without changing the default.",
+        () => configureChannelSessions(ctx)),
+      contextSetting(ctx, config),
+      ...(replies.mode === "auto" ? [
+        openSetting("picker", "routing-model", "Routing model", routingModelLabel(replies.routerModel),
+          "Use the cheapest authenticated model, Pi's default, the gateway's default, or a specific model. Each routing decision costs one model call; failures start a thread.",
+          () => configureRoutingModel(ctx, config)),
+        contextSetting(ctx, config, true),
+        toggleSetting("tool-escalation", "Tool escalation", replies.escalate,
+          "Open a thread when a channel reply uses editing, shell, or delegation tools. Read-only replies stay in the channel; the thread inherits the conversation.",
+          (value) => saveGatewayConfig(ctx, config, { channelReplies: { ...replies, escalate: value } }, `Tool escalation turned ${onOff(value)}.`)),
+        toggleSetting("follow-up", "Follow-up escalation", replies.followUp,
+          "Open a thread when the same user mentions the bot again in the same channel within ten minutes of a channel reply. When off, the routing model decides.",
+          (value) => saveGatewayConfig(ctx, config, { channelReplies: { ...replies, followUp: value } }, `Follow-up escalation turned ${onOff(value)}.`)),
+      ] : []),
+    ];
+  });
 }
 
 async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
@@ -508,8 +495,7 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
     configuredAt: new Date().toISOString(),
   };
   const paths = getDiscordGatewayPaths();
-  const currentPid = readPid(paths.pid);
-  const alreadyRunning = currentPid !== undefined && isProcessAlive(currentPid);
+  const alreadyRunning = readGatewayPid(paths.pid) !== undefined;
   writePrivateJson(paths.config, config);
   const applyMessage = !alreadyRunning ? "" : existing?.token !== token
     ? " Settings reload automatically; run /discord restart to reconnect with the new bot token."
@@ -629,22 +615,6 @@ async function configureHomeChannel(ctx: ExtensionCommandContext, config: Discor
   );
 }
 
-async function configureReloadNotices(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const on = config.notifyConfigReloads === true;
-  const selected = await selectDiscordOption(ctx, {
-    title: "Config Reload Notices",
-    description: "Send a brief notice to the notification channel when settings are applied, rejected, or need a restart. No config values are included.",
-    options: [on ? "On (current)" : "On", on ? "Off" : "Off (current)"],
-  });
-  if (!selected) return;
-  const enabled = selected.startsWith("On");
-  if (enabled === on) return;
-  const message = !enabled ? "Config reload notices disabled."
-    : config.homeChannelId ? "Config reload notices enabled."
-      : "Config reload notices enabled. Set a notification channel to receive them in Discord.";
-  saveGatewayConfig(ctx, config, { notifyConfigReloads: enabled }, message);
-}
-
 async function configureWorkspace(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
   const input = await promptDiscordInput(ctx, {
     title: "Gateway Workspace",
@@ -686,12 +656,12 @@ async function configureDefaultModel(ctx: ExtensionCommandContext, config: Disco
   const choices = [
     {
       value: "",
-      label: currentValue ? "Pi default" : "Pi default (current)",
+      label: "Pi default",
       description: "Use Pi's configured default at startup",
     },
     ...models.map(({ value, model }) => ({
       value,
-      label: `${value}${value === currentValue ? " (current)" : ""}`,
+      label: value,
       description: model.name,
     })),
   ];
@@ -712,155 +682,101 @@ async function configureDefaultModel(ctx: ExtensionCommandContext, config: Disco
   );
 }
 
-async function configureToolCallVerbosity(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = config.toolCallVerbosity ?? "full";
-  const selected = await selectDiscordOption(ctx, {
-    title: "Tool call verbosity",
-    description: "Full includes intermediate assistant text; tool only shows tool activity. Workspace change notices remain visible.",
-    options: ["none", "tool only", "full"].map((label) => `${label}${label.replace(" ", "-") === current ? " (current)" : ""}`),
-  });
-  if (!selected) return;
-  const value = selected.startsWith("none") ? "none" : selected.startsWith("tool only") ? "tool-only" : "full";
-  if (value === current) {
-    notify(ctx, "Tool call verbosity is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(ctx, config, { toolCallVerbosity: value }, `Tool call verbosity set to ${value}.`);
+function toolVisibility(config: DiscordGatewayConfig): DiscordToolCallVisibility {
+  return { channels: false, threads: true, dms: true, ...config.toolCallVisibility };
 }
 
-async function configureToolCallVisibility(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = { channels: false, threads: true, dms: true, ...config.toolCallVisibility };
-  const destinations: { key: keyof DiscordToolCallVisibility; label: string }[] = [
+async function configureToolCallVisibility(ctx: ExtensionCommandContext): Promise<void> {
+  const destinations = [
     { key: "channels", label: "Server channels" },
     { key: "threads", label: "Threads" },
     { key: "dms", label: "Direct messages" },
-  ];
-  const selected = await selectDiscordOption(ctx, {
+  ] as const;
+  await runDiscordSettingsPage(ctx, {
     title: "Tool call visibility",
-    description: "Choose where to change tool activity and intermediate assistant text. Verbosity still applies where enabled; prompts and workspace notices stay visible.",
-    options: destinations.map(({ key, label }) => ({
-      label,
-      currentValue: current[key] ? "on" : "off",
-      description: `Show or hide tool activity and intermediate assistant text in ${label.toLowerCase()}. Prompts and workspace notices remain visible.`,
-    })),
+    description: "Verbosity still applies where enabled. Prompts and workspace notices stay visible.",
+  }, () => {
+    const config = readDiscordGatewayConfig();
+    if (!config) return;
+    const current = toolVisibility(config);
+    return destinations.map(({ key, label }) => toggleSetting(key, label, current[key],
+      `Show or hide tool activity and intermediate assistant text in ${label.toLowerCase()}.`,
+      (value) => saveGatewayConfig(ctx, config, { toolCallVisibility: { ...current, [key]: value } },
+        `Tool call info in ${label.toLowerCase()} turned ${onOff(value)}.`)));
   });
-  const destination = destinations.find(({ label }) => label === selected);
-  if (!destination) return;
-  const enabled = current[destination.key];
-  const choice = await selectDiscordOption(ctx, {
-    title: `Tool calls: ${destination.label}`,
-    options: [enabled ? "On (current)" : "On", enabled ? "Off" : "Off (current)"],
-  });
-  if (!choice) return;
-  const value = choice.startsWith("On");
-  if (value === enabled) {
-    notify(ctx, "Tool call visibility is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(ctx, config, {
-    toolCallVisibility: { ...current, [destination.key]: value },
-  }, `Tool call info in ${destination.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
 }
 
-async function configureTableRendering(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
-  const settings: { key: keyof DiscordTableRendering; label: string; description: string }[] = [
+function tableSettings(config: DiscordGatewayConfig): DiscordTableRendering {
+  return { enabled: false, showTitleFooter: false, attachMarkdown: false, ...config.tableRendering };
+}
+
+async function configureTableRendering(ctx: ExtensionCommandContext): Promise<void> {
+  const settings = [
     { key: "enabled", label: "Render tables", description: "Convert Markdown tables to images. Off sends the original Markdown as text, without table images or .md attachments; other table preferences are preserved." },
     { key: "showTitleFooter", label: "Title and footer", description: "Show the table title, page numbering and row/column ranges together. Off shows only the table grid." },
     { key: "attachMarkdown", label: "Markdown attachment", description: "Attach the original table as a .md file alongside its images for copying text and links." },
-  ];
-  const selected = await selectDiscordOption(ctx, {
-    title: "Discord Tables",
-    options: settings.map(({ key, label, description }) => ({ label, description, currentValue: current[key] ? "on" : "off" })),
+  ] as const;
+  await runDiscordSettingsPage(ctx, { title: "Tables" }, () => {
+    const config = readDiscordGatewayConfig();
+    if (!config) return;
+    const current = tableSettings(config);
+    return settings.map(({ key, label, description }) => toggleSetting(key, label, current[key], description,
+      (value) => saveGatewayConfig(ctx, config, { tableRendering: { ...current, [key]: value } },
+        `${label} turned ${onOff(value)}.`)));
   });
-  const setting = settings.find(({ label }) => label === selected);
-  if (!setting) return;
-  const enabled = current[setting.key];
-  const choice = await selectDiscordOption(ctx, {
-    title: `Tables: ${setting.label}`,
-    description: setting.description,
-    options: [enabled ? "On (current)" : "On", enabled ? "Off" : "Off (current)"],
-  });
-  if (!choice) return;
-  const value = choice.startsWith("On");
-  if (value === enabled) {
-    notify(ctx, "Table rendering is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(ctx, config, {
-    tableRendering: { ...current, [setting.key]: value },
-  }, `Table ${setting.label.toLowerCase()} turned ${value ? "on" : "off"}.`);
 }
 
-async function configureChannelSessions(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = { ...DEFAULT_DISCORD_CHANNEL_SESSIONS, ...config.channelSessions };
-  const selected = await selectDiscordOption(ctx, {
+function resetHourLabel(hour: number): string {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+async function configureChannelSessions(ctx: ExtensionCommandContext): Promise<void> {
+  await runDiscordSettingsPage(ctx, {
     title: "Channel sessions",
-    description: "At the daily boundary, roll over only after the inactivity window and with no running/queued work. Otherwise skip until the next day. Old replies keep their linked sessions; plain mentions use the newest default.",
-    options: [
-      { label: "Overnight rollover", currentValue: current.enabled ? "on" : "off", description: "Enable daily context rotation without deleting older reply-linked sessions." },
-      { label: "Timezone", currentValue: current.timezone, description: `Use an explicit IANA timezone. The default is the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}); saved choices are preserved.` },
-      { label: "Reset hour", currentValue: `${String(current.resetHour).padStart(2, "0")}:00`, description: "Local hour at which each day's rollover eligibility is evaluated." },
-      { label: "Inactivity window", currentValue: `${current.idleHours} hours`, description: "Required quiet time before the daily boundary. Busy nights skip the entire day." },
-    ],
+    description: "At the daily boundary, roll over only after the inactivity window and with no running or queued work. Old replies keep their linked sessions; plain mentions use the newest default.",
+  }, () => {
+    const config = readDiscordGatewayConfig();
+    if (!config) return;
+    const current = { ...DEFAULT_DISCORD_CHANNEL_SESSIONS, ...config.channelSessions };
+    const save = (next: typeof current) => {
+      if (!isValidDiscordChannelSessions(next)) {
+        notify(ctx, "Use a valid IANA timezone, reset hour 0–23, and inactivity window 1–168 whole hours.", "error");
+        return;
+      }
+      saveGatewayConfig(ctx, config, { channelSessions: next }, "Channel session settings saved.");
+    };
+    const edit = async (field: "timezone" | "resetHour" | "idleHours", title: string, instruction: string) => {
+      const value = await promptDiscordInput(ctx, { title, instruction, initialValue: String(current[field]), placeholder: "" });
+      if (value === undefined) return;
+      const next = field === "timezone" ? value.trim() : value.trim() ? Number(value) : Number.NaN;
+      if (next !== current[field]) save({ ...current, [field]: next });
+    };
+    return [
+      toggleSetting("rollover", "Overnight rollover", current.enabled,
+        "Rotate the default session daily without deleting older reply-linked sessions.", (enabled) => save({ ...current, enabled })),
+      openSetting("input", "timezone", "Timezone", current.timezone,
+        `Use an explicit IANA timezone. The default is the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}).`,
+        () => edit("timezone", "Timezone", "IANA timezone, e.g. Asia/Jakarta or UTC.")),
+      openSetting("input", "reset-hour", "Reset hour", resetHourLabel(current.resetHour),
+        "Local hour at which each day's rollover eligibility is evaluated.",
+        () => edit("resetHour", "Reset hour", "Whole hour in the selected timezone (0–23).")),
+      openSetting("input", "idle-hours", "Inactivity window", `${current.idleHours} hours`,
+        "Required quiet time before the daily boundary. Busy nights skip the entire day.",
+        () => edit("idleHours", "Inactivity window", "Whole hours without accepted requests in the default session (1–168). A request exactly at the cutoff skips that day's rollover.")),
+    ];
   });
-  if (!selected) return;
-  const next = { ...current };
-  if (selected === "Overnight rollover") {
-    const choice = await selectDiscordOption(ctx, {
-      title: "Overnight rollover",
-      options: [current.enabled ? "On (current)" : "On", current.enabled ? "Off" : "Off (current)"],
-    });
-    if (!choice) return;
-    next.enabled = choice.startsWith("On");
-  } else {
-    const timezone = selected === "Timezone";
-    const hour = selected === "Reset hour";
-    const value = await promptDiscordInput(ctx, {
-      title: selected,
-      instruction: timezone ? "IANA timezone, e.g. Asia/Jakarta or UTC."
-        : hour ? "Whole hour in the selected timezone (0–23)."
-        : "Whole hours without accepted requests in the default session (1–168). A request exactly at the cutoff skips that day's rollover.",
-      initialValue: timezone ? current.timezone : String(hour ? current.resetHour : current.idleHours),
-      placeholder: timezone ? DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone : hour ? "4" : "6",
-    });
-    if (value === undefined) return;
-    if (timezone) next.timezone = value.trim();
-    else if (hour) next.resetHour = value.trim() ? Number(value) : Number.NaN;
-    else next.idleHours = value.trim() ? Number(value) : Number.NaN;
-  }
-  if (!isValidDiscordChannelSessions(next)) {
-    notify(ctx, "Use a valid IANA timezone, reset hour 0–23, and inactivity window 1–168 whole hours.", "error");
-    return;
-  }
-  saveGatewayConfig(ctx, config, { channelSessions: next }, "Channel session settings saved.");
 }
 
-async function configureContextMessages(ctx: ExtensionCommandContext, config: DiscordGatewayConfig, routing = false): Promise<void> {
+function contextSetting(ctx: ExtensionCommandContext, config: DiscordGatewayConfig, routing = false): DiscordSettingRow {
   const current = routing ? config.channelReplies.contextMessages ?? 5 : config.contextMessages;
   const title = routing ? "Routing context" : "Recent context";
   const values = [...new Set([0, 3, 5, 10, 20, 25, current])].sort((a, b) => a - b);
-  const label = (value: number) => value === 0 ? "Off" : `${value} message${value === 1 ? "" : "s"}`;
-  const selected = await selectDiscordOption(ctx, {
-    title,
-    description: routing
-      ? "Messages sent to the router before the reply target, or before your new message when not replying. Independent of agent context. Off disables history, not the direct quote. More context uses more input tokens."
-      : "Messages before the reply target, or before your new message when not replying. Non-replies skip already-delivered context; explicit replies revisit older context. Off disables history.",
-    options: values.map((value) => `${label(value)}${value === current ? " (current)" : ""}`),
-  });
-  if (!selected) return;
-  const value = values.find((entry) => selected.startsWith(label(entry)));
-  if (value === undefined) return;
-  if (value === current) {
-    notify(ctx, `${title} is unchanged.`, "info");
-    return;
-  }
-  saveGatewayConfig(
-    ctx,
-    config,
-    routing ? { channelReplies: { ...config.channelReplies, contextMessages: value } } : { contextMessages: value },
-    value === 0 ? `${title} disabled.${routing ? " Direct reply quotes remain included." : ""}` : `${title} set to ${label(value).toLowerCase()}.`
-  );
+  return cycleSetting(routing ? "routing-context" : "recent-context", title, current, routing
+    ? "Messages sent to the router before the reply target, or before your new message when not replying. Independent of agent context. Off disables history, not the direct quote. More context uses more input tokens."
+    : "Messages before the reply target, or before your new message when not replying. Non-replies skip already-delivered context; explicit replies revisit older context. Off disables history.",
+    values, contextMessagesLabel, (value) => saveGatewayConfig(ctx, config,
+      routing ? { channelReplies: { ...config.channelReplies, contextMessages: value } } : { contextMessages: value },
+      value === 0 ? `${title} disabled.${routing ? " Direct reply quotes remain included." : ""}` : `${title} set to ${contextMessagesLabel(value)}.`));
 }
 
 function channelReplyModeLabel(mode: DiscordChannelReplyMode): string {
@@ -877,28 +793,6 @@ function contextMessagesLabel(count: number): string {
   return count === 0 ? "off" : `${count} message${count === 1 ? "" : "s"}`;
 }
 
-async function configureChannelReplies(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = config.channelReplies.mode;
-  const choices: { value: DiscordChannelReplyMode; label: string; result: string }[] = [
-    { value: "always-thread", label: "Always start a thread", result: "New server conversations start in a thread." },
-    { value: "channel", label: "Always answer in the channel", result: "New server conversations answer directly in the channel." },
-    { value: "auto", label: "Model decides", result: "New server conversations ask a routing model where to answer; failures start a thread." },
-  ];
-  const selected = await selectDiscordOption(ctx, {
-    title: "Channel replies",
-    description: "Where a new server conversation answers when the bot is mentioned. Threads keep long work out of the channel. Existing threads and DMs are unchanged.",
-    options: choices.map((choice) => `${choice.label}${choice.value === current ? " (current)" : ""}`),
-  });
-  if (!selected) return;
-  const choice = choices.find((entry) => selected.startsWith(entry.label));
-  if (!choice) return;
-  if (choice.value === current) {
-    notify(ctx, "Channel replies are unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(ctx, config, { channelReplies: { ...config.channelReplies, mode: choice.value } }, choice.result);
-}
-
 async function configureRoutingModel(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
   const refresh = refreshProviderCatalogs(ctx);
   const routerModel = config.channelReplies.routerModel;
@@ -909,28 +803,28 @@ async function configureRoutingModel(ctx: ExtensionCommandContext, config: Disco
   const choices = [
     {
       value: "",
-      label: currentValue ? "Cheapest available" : "Cheapest available (current)",
+      label: "Cheapest available",
       description: "Use the lowest-cost authenticated chat model at decision time",
     },
     {
       value: "pi-default",
-      label: `Pi default${currentValue === "pi-default" ? " (current)" : ""}`,
+      label: "Pi default",
       description: "Follow Pi's global saved default at each decision; missing/unavailable defaults start a thread",
     },
     {
       value: "gateway-default",
-      label: `Gateway default${currentValue === "gateway-default" ? " (current)" : ""}`,
+      label: "Gateway default",
       description: "Follow the gateway's configured default; use the cheapest authenticated model when unset",
     },
     ...models.map(({ value, model }) => ({
       value,
-      label: `${value}${value === currentValue ? " (current)" : ""}`,
+      label: value,
       description: model.name,
     })),
   ];
   const selected = await selectDiscordModel(ctx, choices, currentValue, refresh, {
     title: "Discord Routing Model",
-    description: `Current: ${routingModelLabel(routerModel)}. Chooses channel or thread replies; defaults are followed at decision time.`,
+    description: "Chooses channel or thread replies. Defaults are followed at decision time.",
   });
   if (selected === undefined) return;
   if (selected === currentValue) {
@@ -949,102 +843,22 @@ async function configureRoutingModel(ctx: ExtensionCommandContext, config: Disco
   );
 }
 
-async function configureToolEscalation(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = config.channelReplies.escalate;
-  const selected = await selectDiscordOption(ctx, {
-    title: "Tool escalation",
-    description: "Open a thread when a channel reply used editing, shell, or delegation tools. Read-only replies stay in the channel. The thread inherits the channel conversation.",
-    options: [`On${current ? " (current)" : ""}`, `Off${current ? "" : " (current)"}`],
-  });
-  if (!selected) return;
-  const value = selected.startsWith("On");
-  if (value === current) {
-    notify(ctx, "Tool escalation is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(
-    ctx,
-    config,
-    { channelReplies: { ...config.channelReplies, escalate: value } },
-    `Tool escalation turned ${value ? "on" : "off"}.`
-  );
-}
-
-async function configureFollowUpEscalation(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const current = config.channelReplies.followUp;
-  const selected = await selectDiscordOption(ctx, {
-    title: "Follow-up escalation",
-    description: "Open a thread when the same user mentions the bot again in the same channel within ten minutes of a channel reply. Turning this off leaves every new mention to the routing model.",
-    options: [`On${current ? " (current)" : ""}`, `Off${current ? "" : " (current)"}`],
-  });
-  if (!selected) return;
-  const value = selected.startsWith("On");
-  if (value === current) {
-    notify(ctx, "Follow-up escalation is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(
-    ctx,
-    config,
-    { channelReplies: { ...config.channelReplies, followUp: value } },
-    `Follow-up escalation turned ${value ? "on" : "off"}.`
-  );
-}
-
 async function configureAccessPaths(ctx: ExtensionCommandContext, config: DiscordGatewayConfig): Promise<void> {
-  const accessPaths = await promptDiscordAccessPaths(ctx, {
-    allowDirectMessages: config.allowDirectMessages,
-    allowServerMessages: config.allowServerMessages,
-  });
-  if (!accessPaths) return;
-  if (
-    accessPaths.allowDirectMessages === config.allowDirectMessages &&
-    accessPaths.allowServerMessages === config.allowServerMessages
-  ) {
-    notify(ctx, "Message access is unchanged.", "info");
-    return;
-  }
-  saveGatewayConfig(ctx, config, accessPaths, "Discord message access updated.");
-}
-
-async function promptDiscordAccessPaths(
-  ctx: ExtensionCommandContext,
-  initialValues: DiscordAccessPaths
-): Promise<DiscordAccessPaths | undefined> {
-  if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
-    try {
-      return await ctx.ui.custom<DiscordAccessPaths | undefined>((tui, theme, keybindings, done) =>
-        new DiscordToggleDialog(tui, theme, initialValues, done, keybindings)
-      );
-    } catch {
-      // Fall back to native selectors if custom rendering is unavailable.
-    }
-  }
-
-  const dmOptions = initialValues.allowDirectMessages
-    ? ["On (current)", "Off"]
-    : ["Off (current)", "On"];
-  const dmChoice = await selectDiscordOption(ctx, {
-    title: "DM Access",
-    description: "Choose whether the gateway accepts direct messages.",
-    options: dmOptions,
-  });
-  if (!dmChoice) return undefined;
-
-  const serverOptions = initialValues.allowServerMessages
-    ? ["On (current)", "Off"]
-    : ["Off (current)", "On"];
-  const serverChoice = await selectDiscordOption(ctx, {
-    title: "Server Access",
-    description: "Choose whether the gateway accepts server mentions and gateway-thread replies.",
-    options: serverOptions,
-  });
-  if (!serverChoice) return undefined;
-
-  return {
-    allowDirectMessages: dmChoice.startsWith("On"),
-    allowServerMessages: serverChoice.startsWith("On"),
-  };
+  const draft = { allowDirectMessages: config.allowDirectMessages, allowServerMessages: config.allowServerMessages };
+  let finished = false;
+  await runDiscordSettingsPage(ctx, { title: "Message access", description: "Changes take effect only after you select Save changes. Esc discards them." }, () => finished ? undefined : [
+    toggleSetting("dms", "Direct messages", draft.allowDirectMessages, "Accept DMs from allowed users.",
+      (value) => { draft.allowDirectMessages = value; }),
+    toggleSetting("servers", "Server messages", draft.allowServerMessages, "Accept allowed server mentions and gateway-thread replies.",
+      (value) => { draft.allowServerMessages = value; }),
+    openSetting("action", "save", "Save changes", "save and go back", "Save both message-access settings at once.", () => {
+      const current = readDiscordGatewayConfig();
+      if (current && (draft.allowDirectMessages !== config.allowDirectMessages || draft.allowServerMessages !== config.allowServerMessages)) {
+        saveGatewayConfig(ctx, current, draft, "Discord message access updated.");
+      }
+      finished = true;
+    }),
+  ]);
 }
 
 function saveGatewayConfig(
@@ -1059,8 +873,8 @@ function saveGatewayConfig(
     configuredAt: new Date().toISOString(),
   };
   writePrivateJson(getDiscordGatewayPaths().config, nextConfig);
-  const pid = readPid(getDiscordGatewayPaths().pid);
-  const applyMessage = !(pid && isProcessAlive(pid))
+  const pid = readGatewayPid(getDiscordGatewayPaths().pid);
+  const applyMessage = !pid
     ? " The change will take effect the next time the gateway starts."
     : updates.token !== undefined && updates.token !== config.token
       ? " Run /discord restart to reconnect with the new bot token."
@@ -1082,10 +896,12 @@ async function selectDiscordOption(
     }
   }
 
-  return ctx.ui.select(
+  const items = discordSelectItems(options);
+  const selected = await ctx.ui.select(
     options.description ? `${options.title}\n${options.description}` : options.title,
-    options.options.map((option) => typeof option === "string" ? option : option.label)
+    items.map((item) => item.label),
   );
+  return items.find((item) => item.label === selected)?.value;
 }
 
 async function promptDiscordInput(
@@ -1196,14 +1012,18 @@ async function startGateway(ctx: ExtensionCommandContext, startReason: "start" |
   }
 
   const paths = getDiscordGatewayPaths();
-  ensurePrivateDirectory(paths.directory);
-  ensurePrivateDirectory(paths.sessions);
-
-  const currentPid = readPid(paths.pid);
-  if (currentPid && isProcessAlive(currentPid)) {
-    notify(ctx, `Discord gateway is already running (PID ${currentPid}).`, "info");
+  const { boot, pid } = await inspectGateway(paths);
+  if (pid || boot.active) {
+    notify(ctx, pid ? `Discord gateway is already running (PID ${pid}).` : "The Discord gateway systemd service is already starting.", "info");
     return;
   }
+  if (boot.unavailable) throw new Error("Cannot check the installed gateway service. The systemd user manager is unavailable.");
+  if (boot.enabled) {
+    await createGatewayBootService(paths).start();
+    notify(ctx, "Started the gateway under systemd. Use /discord status to check the connection.", "info");
+    return;
+  }
+  prepareGatewayDirectory(paths);
   if (existsSync(paths.pid)) unlinkSync(paths.pid);
   if (existsSync(paths.restartRequest)) unlinkSync(paths.restartRequest);
 
@@ -1235,16 +1055,8 @@ async function startGateway(ctx: ExtensionCommandContext, startReason: "start" |
     stdio: ["ignore", logFd, logFd],
     env: {
       ...process.env,
-      PI_ENHANCED_DISCORD_CONFIG_PATH: paths.config,
-      PI_ENHANCED_DISCORD_PID_PATH: paths.pid,
-      PI_ENHANCED_DISCORD_STATUS_PATH: paths.status,
-      PI_ENHANCED_DISCORD_LOG_PATH: paths.log,
-      PI_ENHANCED_DISCORD_SESSION_ROOT: paths.sessions,
-      PI_ENHANCED_DISCORD_THREADS_PATH: paths.threads,
-      PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH: paths.restartRequest,
-      PI_ENHANCED_DISCORD_START_REASON: startReason,
-      PI_ENHANCED_DISCORD_PI_EXECUTABLE: invocation.executable,
-      PI_ENHANCED_DISCORD_PI_ARGS: JSON.stringify(invocation.args),
+      ...gatewayLaunchEnv(paths, invocation, startReason),
+      PI_ENHANCED_DISCORD_SYSTEMD: "0",
     },
   });
   closeSync(logFd);
@@ -1267,9 +1079,31 @@ async function startGateway(ctx: ExtensionCommandContext, startReason: "start" |
     return;
   }
 
-  writePrivateJson(paths.pid, { pid: child.pid, startedAt });
+  writePrivateJson(paths.pid, gatewayPidRecord(child.pid, startedAt));
   child.unref();
   notify(ctx, `Discord gateway started in the background (PID ${child.pid}). Use /discord status to check the connection.`, "info");
+}
+
+function prepareGatewayDirectory(paths: DiscordGatewayPaths) {
+  ensurePrivateDirectory(paths.directory);
+  ensurePrivateDirectory(paths.sessions);
+}
+
+function gatewayLaunchEnv(paths: DiscordGatewayPaths, invocation: { executable: string; args: string[] }, startReason: "start" | "restart") {
+  // Only persist explicit launch metadata, never the interactive shell environment or token.
+  return {
+    PI_CODING_AGENT_DIR: dirname(paths.directory),
+    PI_ENHANCED_DISCORD_CONFIG_PATH: paths.config,
+    PI_ENHANCED_DISCORD_PID_PATH: paths.pid,
+    PI_ENHANCED_DISCORD_STATUS_PATH: paths.status,
+    PI_ENHANCED_DISCORD_LOG_PATH: paths.log,
+    PI_ENHANCED_DISCORD_SESSION_ROOT: paths.sessions,
+    PI_ENHANCED_DISCORD_THREADS_PATH: paths.threads,
+    PI_ENHANCED_DISCORD_RESTART_REQUEST_PATH: paths.restartRequest,
+    PI_ENHANCED_DISCORD_START_REASON: startReason,
+    PI_ENHANCED_DISCORD_PI_EXECUTABLE: invocation.executable,
+    PI_ENHANCED_DISCORD_PI_ARGS: JSON.stringify(invocation.args),
+  };
 }
 
 function waitForSpawn(child: ChildProcess): Promise<void> {
@@ -1282,7 +1116,7 @@ function waitForSpawn(child: ChildProcess): Promise<void> {
 function resolvePiInvocation(): { executable: string; args: string[] } | undefined {
   const entrypoint = process.argv[1];
   if (entrypoint && existsSync(entrypoint) && /\.(?:mjs|cjs|js)$/i.test(entrypoint)) {
-    return { executable: process.execPath, args: [entrypoint] };
+    return { executable: process.execPath, args: [resolve(entrypoint)] };
   }
 
   const pathEntries = (process.env.PATH || "").split(process.platform === "win32" ? ";" : ":");
@@ -1310,7 +1144,7 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
   const approved = await confirmDiscordAction(ctx, {
     title: "Remove Discord Configuration?",
     content: [
-      "This stops the gateway and removes its locally saved bot token and configuration.",
+      "This stops the gateway, removes its boot service if installed, and deletes the locally saved bot token and configuration.",
       "Conversation sessions and logs are kept.",
       "This does not revoke the token in Discord; revoke it separately in the Developer Portal if needed.",
     ],
@@ -1320,23 +1154,14 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
   });
   if (!approved) return;
 
-  const pid = readPid(paths.pid);
-  if (pid && isProcessAlive(pid)) {
-    const status = readJson<DiscordGatewayStatus>(paths.status);
-    if (status) writePrivateJson(paths.status, { ...status, state: "stopping", updatedAt: new Date().toISOString() });
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (error) {
-      if (isProcessAlive(pid)) {
-        notify(ctx, `Could not stop gateway PID ${pid}; configuration was kept. ${error instanceof Error ? error.message : String(error)}`, "error");
-        return;
-      }
-    }
-
-    for (let attempt = 0; attempt < 40 && isProcessAlive(pid); attempt++) {
+  await createGatewayBootService(paths).remove();
+  const pid = readGatewayPid(paths.pid);
+  if (pid) {
+    signalGatewayStop(paths, pid);
+    for (let attempt = 0; attempt < 40 && readGatewayPid(paths.pid); attempt++) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
-    if (isProcessAlive(pid)) {
+    if (readGatewayPid(paths.pid)) {
       notify(ctx, `Gateway PID ${pid} is still stopping; configuration was kept. Run /discord stop and try teardown again.`, "error");
       return;
     }
@@ -1349,8 +1174,8 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
 
 async function restartGateway(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getDiscordGatewayPaths();
-  const pid = readPid(paths.pid);
-  if (pid && isProcessAlive(pid)) {
+  const pid = readGatewayPid(paths.pid);
+  if (pid) {
     if (existsSync(paths.restartRequest)) {
       notify(ctx, "A Discord gateway restart is already pending.", "info");
       return;
@@ -1364,46 +1189,63 @@ async function restartGateway(ctx: ExtensionCommandContext): Promise<void> {
     return;
   }
 
-  if (existsSync(paths.pid)) unlinkSync(paths.pid);
   await startGateway(ctx, "restart");
 }
 
-function stopGateway(ctx: ExtensionCommandContext): void {
+async function stopGateway(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getDiscordGatewayPaths();
-  const pid = readPid(paths.pid);
-  if (!pid || !isProcessAlive(pid)) {
-    if (existsSync(paths.pid)) unlinkSync(paths.pid);
-    notify(ctx, "Discord gateway is not running.", "info");
-    return;
-  }
-
-  const status = readJson<DiscordGatewayStatus>(paths.status);
-  if (status) writePrivateJson(paths.status, { ...status, state: "stopping", updatedAt: new Date().toISOString() });
-  try {
-    process.kill(pid, "SIGTERM");
-    notify(ctx, `Sent stop signal to Discord gateway (PID ${pid}).`, "info");
-  } catch (error) {
-    notify(ctx, `Could not stop gateway PID ${pid}: ${error instanceof Error ? error.message : String(error)}`, "error");
+  const { boot, status, pid } = await inspectGateway(paths);
+  if (boot.unavailable) throw new Error("Cannot stop the installed gateway service. The systemd user manager is unavailable.");
+  // Stop systemd first so it cannot take over while the detached process is stopping.
+  if (boot.active || (pid && status?.supervision === "systemd")) await createGatewayBootService(paths).stop();
+  const remainingPid = readGatewayPid(paths.pid);
+  if (remainingPid && signalGatewayStop(paths, remainingPid)) {
+    notify(ctx, `Sent stop signal to Discord gateway (PID ${remainingPid}).`, "info");
+  } else {
+    notify(ctx, boot.active ? "Stopped the Discord gateway systemd service." : "Discord gateway is not running.", "info");
   }
 }
 
-function showStatus(ctx: ExtensionCommandContext): void {
+function signalGatewayStop(paths: DiscordGatewayPaths, pid: number): boolean {
+  try {
+    if (readGatewayPid(paths.pid) !== pid) return false;
+    process.kill(pid, "SIGTERM");
+    return true;
+  } catch (error) {
+    if (readGatewayPid(paths.pid) !== pid) return false;
+    throw error;
+  }
+}
+
+async function inspectGateway(paths: DiscordGatewayPaths) {
+  const service = createGatewayBootService(paths);
+  const boot = await service.inspect();
+  const pid = readGatewayPid(paths.pid);
+  const recorded = readJson<DiscordGatewayStatus>(paths.status);
+  const status = !pid || recorded?.pid === pid ? recorded : undefined;
+  const bootLabel = !service.supported ? "unavailable (requires systemd)" : boot.unavailable ? "systemd unavailable"
+    : boot.enabled ? "on" : boot.active ? "off (service still running)" : "off";
+  return { boot, pid, status, bootLabel };
+}
+
+async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getDiscordGatewayPaths();
-  const pid = readPid(paths.pid);
-  if (!pid || !isProcessAlive(pid)) {
-    if (existsSync(paths.pid)) unlinkSync(paths.pid);
-    const status = readJson<DiscordGatewayStatus>(paths.status);
+  const { boot, pid, status, bootLabel } = await inspectGateway(paths);
+  if (!pid) {
     const configured = existsSync(paths.config);
-    const lines = [configured ? "Discord gateway is stopped." : "Discord gateway is not configured. Run /discord setup."];
+    const lines = [boot.active ? "Discord gateway is starting under systemd." : boot.failed ? "Discord gateway systemd service failed."
+      : configured ? "Discord gateway is stopped." : "Discord gateway is not configured. Run /discord setup."];
+    lines.push(`Start at boot: ${bootLabel}`);
     if (status?.state === "failed" && status.lastError) lines.push(`Last error: ${status.lastError}`);
     if (configured) lines.push(`Config: ${paths.config}`);
     lines.push(`Logs: ${paths.log}`);
-    notify(ctx, lines.join("\n"), status?.state === "failed" ? "error" : "info");
+    notify(ctx, lines.join("\n"), boot.failed || status?.state === "failed" ? "error" : "info");
     return;
   }
 
-  const status = readJson<DiscordGatewayStatus>(paths.status);
-  const lines = [`Discord gateway: ${status?.state || "running"} (PID ${pid})`];
+  const manager = status?.supervision === "systemd" ? ", systemd" : "";
+  const lines = [`Discord gateway: ${status?.state || "running"} (PID ${pid}${manager})`, `Start at boot: ${bootLabel}`];
+  if (boot.active && status?.supervision === "detached") lines.push("Systemd is waiting to take over after pending work finishes.");
   if (status?.botTag) lines.push(`Bot: ${status.botTag}`);
   if (status?.lastEventAt) lines.push(`Last authorized message: ${status.lastEventAt}`);
   if (status?.lastError) lines.push(`Last error: ${status.lastError}`);
@@ -1426,20 +1268,6 @@ function showLogs(ctx: ExtensionCommandContext): void {
   }
   const lines = readFileSync(paths.log, "utf8").split(/\r?\n/).filter(Boolean).slice(-30);
   notify(ctx, lines.join("\n") || "Gateway log is empty.", "info");
-}
-
-function readPid(path: string): number | undefined {
-  const value = readJson<{ pid?: unknown }>(path)?.pid;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 1 ? value : undefined;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function readJson<T>(path: string): T | undefined {

@@ -1,8 +1,13 @@
 # Discord gateway runtime
 
-`../daemon.mjs` is the standalone Node entry point. Both `/discord start` and
-graceful restarts launch that same file; there is no build step or TypeScript
-loader in the background process. Runtime modules use native ESM (`.mjs`).
+`../daemon.mjs` is the standalone Node entry point. Detached starts and restarts
+launch it directly; `../systemd-launch.mjs` waits for any detached gateway to
+drain before importing the same entry point as the user service's main process.
+A supervised graceful restart exits with a dedicated status so systemd starts
+the replacement rather than the daemon spawning it. Both modes use the same
+config, sessions, PID/status files and log. The Linux PID record stores the boot
+ID and process start ticks to reject recycled PIDs. There is no build step or
+TypeScript loader in the background process.
 Importing them does not connect to Discord, spawn Pi, or install process handlers.
 
 ## Responsibilities and state ownership

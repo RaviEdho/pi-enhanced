@@ -3,6 +3,7 @@ import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from "node:
 import { setTimeout as delay } from "node:timers/promises";
 import { writePrivateJson } from "./persistence.mjs";
 import { log, safeErrorName } from "./logging.mjs";
+import { gatewayPidRecord, SYSTEMD_RESTART_EXIT } from "./process.js";
 import { onceExit } from "./pi-rpc.mjs";
 
 /** Process status, graceful draining, and replacement-daemon handoff. */
@@ -10,13 +11,14 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
   const { pidPath, statusPath, restartRequestPath, logPath } = paths;
   let activeMessageHandlers = 0;
   let pendingMessageTasks = 0;
-  let restartRequested = false;
+  const supervised = process.env.PI_ENHANCED_DISCORD_SYSTEMD === "1";
+  let restartRequested;
   let restartStarted = false;
   let shuttingDown = false;
   let idleCleanupTimer;
   let restartRequestPollTimer;
   const startedAt = new Date().toISOString();
-  let gatewayStatus = { pid: process.pid, state: "starting", startedAt, updatedAt: startedAt };
+  let gatewayStatus = { pid: process.pid, state: "starting", startedAt, updatedAt: startedAt, supervision: supervised ? "systemd" : "detached" };
 
   function writeStatus() {
     gatewayStatus.updatedAt = new Date().toISOString();
@@ -38,11 +40,12 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
       try { unlinkSync(restartRequestPath); } catch { /* best-effort cleanup */ }
       return;
     }
-    if (request?.type !== "restart") {
+    if (request?.type !== "restart" && (request?.type !== "handoff" || supervised)) {
       log("Ignored an invalid gateway control request");
+      try { unlinkSync(restartRequestPath); } catch { /* best-effort cleanup */ }
       return;
     }
-    restartRequested = true;
+    restartRequested = request.type;
     updateStatus("restarting", { lastError: undefined });
     log(`Graceful restart requested${typeof request.reason === "string" && request.reason ? `: ${request.reason.slice(0, 200)}` : ""}; draining accepted messages`);
     maybeStartRequestedRestart();
@@ -51,7 +54,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
   function maybeStartRequestedRestart() {
     if (!restartRequested || restartStarted || shuttingDown || activeMessageHandlers > 0 || pendingMessageTasks > 0 || sessions.hasWork()) return;
     restartStarted = true;
-    void shutdown("Discord agent requested restart", 0, true).catch((error) => {
+    void shutdown("graceful restart requested", 0, restartRequested).catch((error) => {
       const summary = `Gateway restart failed: ${safeErrorName(error)}`;
       log(summary);
       updateStatus("failed", { lastError: summary });
@@ -80,7 +83,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     }
   }
 
-  async function shutdown(reason, exitCode = 0, restart = false) {
+  async function shutdown(reason, exitCode = 0, restart) {
     if (shuttingDown) return;
     shuttingDown = true;
     const failureMessage = exitCode !== 0 ? gatewayStatus.lastError || "Gateway process terminated unexpectedly." : undefined;
@@ -94,6 +97,13 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     await sessions.close();
 
     if (restart && exitCode === 0) {
+      if (supervised || restart === "handoff") {
+        // The service either waits for this handoff or restarts its own MainPID.
+        await destroyDiscordClient();
+        if (restartRequestPath && existsSync(restartRequestPath)) unlinkSync(restartRequestPath);
+        removeOwnPid();
+        process.exit(supervised ? SYSTEMD_RESTART_EXIT : 0);
+      }
       try {
         const replacementPid = await spawnReplacementGateway();
         log(`Started replacement Discord gateway (PID ${replacementPid})`);
@@ -208,7 +218,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
   }
 
   function start() {
-    writePrivateJson(pidPath, { pid: process.pid, startedAt });
+    writePrivateJson(pidPath, gatewayPidRecord(process.pid, startedAt));
     writeStatus();
     idleCleanupTimer = setInterval(() => { void sessions.closeIdle(); }, 60_000);
     idleCleanupTimer.unref();
@@ -229,7 +239,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
 
   return {
     start, updateStatus, shutdown, sendHomeNotification, recordConfigReload, trackTask, handleMessage,
-    isStopping: () => restartRequested || shuttingDown,
+    isStopping: () => Boolean(restartRequested) || shuttingDown,
     isShuttingDown: () => shuttingDown,
     recordEvent: () => updateStatus(gatewayStatus.state, { lastEventAt: new Date().toISOString() }),
   };
