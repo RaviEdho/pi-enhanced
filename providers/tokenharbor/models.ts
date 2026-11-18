@@ -15,6 +15,10 @@ type Cost = Model<"openai-completions">["cost"];
 export interface TokenHarborModel extends Model<"openai-completions"> {
   metadataSource: { url: string; verifiedAt: number };
   tokenHarborReasoning?: TokenHarborReasoning;
+  /** Pi's numeric maxTokens uses 0 for unknown; the OpenAI adapter then omits the default cap. */
+  tokenHarborMaxOutputTokensUnknown?: boolean;
+  /** Pi's numeric cost uses 0 when this base cache-read price is unknown, not verified free. */
+  tokenHarborCacheReadPriceUnknown?: boolean;
   /** Pi's numeric cost uses 0 when this base cache-write price is unknown, not verified free. */
   tokenHarborCacheWritePriceUnknown?: boolean;
 }
@@ -49,7 +53,7 @@ function positive(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 function price(value: unknown): number | undefined {
-  if (value === null || value === undefined || value === "" || typeof value === "boolean") return undefined;
+  if (typeof value === "string" && !value.trim()) return undefined;
   const parsed = typeof value === "string" ? Number(value) : value;
   return typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
@@ -80,8 +84,13 @@ function validModel(value: unknown): value is TokenHarborModel {
   const m = record(value), cost = record(m?.cost), source = record(m?.metadataSource);
   return !!m && validId(m.id) && m.provider === PROVIDER_ID && m.api === "openai-completions" &&
     m.baseUrl === TOKENHARBOR_BASE_URL && typeof m.name === "string" && typeof m.reasoning === "boolean" &&
-    !!positive(m.contextWindow) && !!positive(m.maxTokens) && Array.isArray(m.input) && m.input.includes("text") &&
+    !!positive(m.contextWindow) &&
+    (m.tokenHarborMaxOutputTokensUnknown === true ? m.maxTokens === 0
+      : (m.tokenHarborMaxOutputTokensUnknown === undefined || m.tokenHarborMaxOutputTokensUnknown === false) && !!positive(m.maxTokens)) &&
+    Array.isArray(m.input) && m.input.includes("text") &&
     m.input.every(v => v === "text" || v === "image") && !!cost && costFields.every(k => typeof cost[k] === "number" && price(cost[k]) !== undefined) &&
+    (m.tokenHarborCacheReadPriceUnknown === undefined || typeof m.tokenHarborCacheReadPriceUnknown === "boolean") &&
+    (m.tokenHarborCacheReadPriceUnknown !== true || cost.cacheRead === 0) &&
     (m.tokenHarborCacheWritePriceUnknown === undefined || typeof m.tokenHarborCacheWritePriceUnknown === "boolean") &&
     (m.tokenHarborCacheWritePriceUnknown !== true || cost.cacheWrite === 0) &&
     (cost.tiers === undefined || (Array.isArray(cost.tiers) && cost.tiers.every(value => {
@@ -240,19 +249,22 @@ export function buildTokenHarborModel(raw: RecordValue, page?: PageMetadata): To
   const contextWindow = positive(raw.context_length) ?? positive(page.contextWindow);
   const maxTokens = positive(raw.max_output_tokens) ?? positive(raw.max_completion_tokens) ?? positive(page.maxTokens);
   const input = page.input;
-  if (!contextWindow || !maxTokens || !input?.includes("text")) return undefined;
+  if (!contextWindow || !input?.includes("text")) return undefined;
   const pricing = record(raw.pricing);
-  const prices = costFields.map((field, i) => price(pricing?.[priceFields[i]]) ?? price(page.cost[field]));
-  // Only cache-write pricing is optional. Pi requires a numeric rate, so retain its unknown status separately.
-  const cost = completeCost([prices[0], prices[1], prices[2], prices[3] ?? 0]);
+  const [inputPrice, outputPrice, cacheReadPrice, cacheWritePrice] = costFields.map((field, i) =>
+    price(pricing?.[priceFields[i]]) ?? price(page.cost[field]));
+  // Pi requires numeric rates, so retain unknown cache prices separately from verified zeroes.
+  const cost = completeCost([inputPrice, outputPrice, cacheReadPrice ?? 0, cacheWritePrice ?? 0]);
   if (!cost) return undefined;
   // Only the documented reasoning contract is capability evidence.
   const model: TokenHarborModel = {
     id: raw.id, name: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : raw.id,
     provider: PROVIDER_ID, api: "openai-completions", baseUrl: TOKENHARBOR_BASE_URL,
     reasoning: false,
-    input, contextWindow, maxTokens, cost, metadataSource: { url: page.url, verifiedAt: page.verifiedAt },
-    tokenHarborCacheWritePriceUnknown: prices[3] === undefined,
+    input, contextWindow, maxTokens: maxTokens ?? 0, cost, metadataSource: { url: page.url, verifiedAt: page.verifiedAt },
+    tokenHarborMaxOutputTokensUnknown: maxTokens === undefined,
+    tokenHarborCacheReadPriceUnknown: cacheReadPrice === undefined,
+    tokenHarborCacheWritePriceUnknown: cacheWritePrice === undefined,
     // The audit verified both developer-role messages and max_completion_tokens on this gateway.
     compat: { supportsReasoningEffort: false },
   };
@@ -281,7 +293,7 @@ export async function discoverTokenHarborModels(key: string, signal?: AbortSigna
       // A public page cannot override the listing's required tool support.
       const model = item.tool_call === true ? buildTokenHarborModel(item, await pageMetadata(id, signal, force)) : undefined;
       if (model) models.push(model);
-      else skipped.push({ id, reason: "Missing verified chat/tool metadata, limits, modalities, or input/output/cache-read prices" });
+      else skipped.push({ id, reason: "Missing verified chat/tool metadata, context window, modalities, or input/output prices" });
     }
   }));
   signal?.throwIfAborted();
