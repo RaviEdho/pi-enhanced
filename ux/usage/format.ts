@@ -82,7 +82,7 @@ export function makeProgressBar(
   themeOrColorize: boolean | UsageTheme = false,
   allowHalfBlock = false
 ): string {
-  const safeWidth = Math.max(4, width);
+  const safeWidth = Math.max(1, width);
   const clampedUsed = Math.max(0, Math.min(1, usedFraction));
 
   let markerIndex: number | undefined;

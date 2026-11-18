@@ -115,24 +115,27 @@ export class PlanModeManager {
    */
   public getModeIndicator(
     theme?: ExtensionContext["ui"]["theme"],
-    thinkingLevel?: string
+    thinkingLevel?: string,
+    iconOnly = false,
   ): string {
     const level = thinkingLevel || "off";
 
     if (this.enabled) {
-      if (!theme) return "■ plan";
+      const label = iconOnly ? "■" : "■ plan";
+      if (!theme) return label;
       const isLight = (theme as any)?.appearance === "light";
       const palette = isLight ? AMBER_LIGHT_COLORS : AMBER_DARK_COLORS;
       const ansiColor = palette[level] || palette.off;
-      return `${ansiColor}■ plan\x1b[39m`;
+      return `${ansiColor}${label}\x1b[39m`;
     }
 
+    const label = iconOnly ? "▶" : "▶ implement";
     if (theme) {
       if (typeof (theme as any).getThinkingBorderColor === "function") {
         try {
           const colorFn = (theme as any).getThinkingBorderColor(level);
           if (typeof colorFn === "function") {
-            return colorFn("▶ implement");
+            return colorFn(label);
           }
         } catch {
           // Fallback below
@@ -141,14 +144,14 @@ export class PlanModeManager {
 
       const token = this.getThinkingColorToken(level);
       try {
-        return theme.fg(token as any, "▶ implement");
+        return theme.fg(token as any, label);
       } catch {
         // Fallback to accent
       }
-      return theme.fg("accent", "▶ implement");
+      return theme.fg("accent", label);
     }
 
-    return "▶ implement";
+    return label;
   }
 
   /**

@@ -267,7 +267,7 @@ Configurable options include:
 - `scout.includeHidden`: Index hidden workspace directories, retaining fixed exclusions (`enabled` / `disabled`, default `disabled`)
 - `compressor.enabled`: Output Compressor - terminal noise reduction for bash/powershell (`enabled` / `disabled`)
 - `git.commitModel` (Git Agent Model): Model used by `/commit`, `/git commit`, and `/git summary` (choose an available model or `session`; defaults to the active session model)
-- `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`)
+- `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`). On narrow terminals, line 2 hides the account first, then balances and quota statuses. Starting with the shortest window, it drops each reset timer before hiding the window. After hiding the longest window's timer, it drops cache hit rate, cached token counts, input/output counts together, then cost. The longest window keeps its label, bar, and percentage as long as they fit alongside context usage, which takes priority at the narrowest widths.
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
 - `timer.showWorkingTelemetry`: Live working spinner duration, token count & speed telemetry (`enabled` / `disabled`)
@@ -292,7 +292,7 @@ Explore and design code solutions safely before committing to file modifications
 
 - **Keyboard Shortcut**: Press `Ctrl+Alt+P` or `Alt+M` to toggle modes at any time.
 - **CLI Startup Flag**: Start Pi in Plan Mode with `pi --plan`.
-- **Status & Textbox Sync**: The terminal footer displays `■ plan • ~/dir` or `▶ implement • ~/dir`, and the input textbox border dynamically reflects reasoning effort across both modes.
+- **Status & Textbox Sync**: The terminal footer displays `■ plan • ~/dir` or `▶ implement • ~/dir`, and the input textbox border dynamically reflects reasoning effort across both modes. On narrow terminals, line 1 hides the `implement` label, Git counts, branch, and reasoning level in that order. It then drops the dot before the path and shortens the path to `.../dir` as needed. The mode icon stays visible, and the final folder name is never cut in half.
 - **Human-in-the-Loop Approval Gate**: When a plan is drafted, an interactive menu presents:
   - `Execute plan`: Automatically switches to Implement Mode and launches execution of step 1.
   - `Refine plan`: Prompts for adjustments while remaining safely in Plan Mode.

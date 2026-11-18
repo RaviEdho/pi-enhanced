@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -18,7 +18,7 @@ import { PlanModeManager } from "../plan/manager.js";
 import { EnhancedSettingsStore } from "../settings/store.js";
 import { makeProgressBar } from "./format.js";
 import { FooterStatsCache, type FooterStats } from "./stats.js";
-import { formatGitStatus, GitStatusMonitor } from "./git-status.js";
+import { formatGitStatus, GitStatusMonitor, type GitStatus } from "./git-status.js";
 import { balanceDisplayValue, bucketTimeElapsed, hasValidReset, isValueBucket } from "./buckets.js";
 import type { ProviderUsageReport, QuotaBucket } from "./types.js";
 import { fallbackUsageIdentity, usageAccountIdentity } from "./identity.js";
@@ -92,69 +92,60 @@ function extractKeyBuckets(report: ProviderUsageReport, modelId?: string): KeyBu
   return { primary: windows[0], secondary: windows.slice(1), balances };
 }
 
-/** Keep the Git summary visible by shortening the directory first. */
-function renderDirectoryDetails(
+/** Fit mode, directory, Git and (with quota enabled) model on one line. */
+function renderFooterLine1(
   ctx: ExtensionContext,
-  gitDetails: string,
+  gitStatus: GitStatus | undefined,
+  fallbackBranch: string | null,
   theme: ExtensionContext["ui"]["theme"],
   width: number,
+  showModel: boolean,
 ): string {
-  const modeIndicator = PlanModeManager.getInstance().getModeIndicator(theme, ctx.thinkingLevel);
-  const cwd = formatCwd(
+  if (width <= 0) return "";
+  const manager = PlanModeManager.getInstance();
+  const level = ctx.thinkingLevel;
+  const modeIcon = () => manager.getModeIndicator(theme, level, true);
+  let mode = manager.getModeIndicator(theme, level);
+  let cwd = formatCwd(
     ctx.sessionManager?.getCwd?.() || process.cwd(),
     process.env.HOME || process.env.USERPROFILE,
   );
-  const pathWidth = Math.max(0, width - visibleWidth(modeIndicator) - 3 - visibleWidth(gitDetails));
-  const directory = theme.fg("dim", ` • ${truncateToWidth(cwd, pathWidth, "…")}`);
-  return truncateToWidth(`${modeIndicator}${directory}${gitDetails}`, width);
-}
+  let separator = " • ";
+  let gitDetails = formatGitStatus(gitStatus, fallbackBranch, theme);
+  let model = showModel ? ctx.model?.id || "" : "";
+  let reasoning = model && level && level !== "off" ? ` • ${level}` : "";
+  const gap = 2;
 
-/**
- * Builds Line 1:
- * - Left: PWD (gitBranch +staged ~unstaged ?untracked)
- * - Far Right: Model ID • thinking: level
- */
-function renderFooterLine1(
-  ctx: ExtensionContext,
-  gitDetails: string,
-  theme: ExtensionContext["ui"]["theme"],
-  width: number
-): string {
-  const leftText = renderDirectoryDetails(ctx, gitDetails, theme, width);
+  const directory = () => cwd ? `${separator}${cwd}` : "";
+  const leftWidth = () => visibleWidth(mode) + visibleWidth(directory()) + visibleWidth(gitDetails);
+  const fits = () => leftWidth() + (model ? gap + visibleWidth(model + reasoning) : 0) <= width;
 
-  // Right-side: Model and thinking effort
-  const model = ctx.model;
-  let rightText = "";
-  if (model) {
-    const thinkingLevel = ctx.thinkingLevel;
-    const hasThinking = thinkingLevel && thinkingLevel !== "off";
+  // Drop optional elements whole, in order, before shortening either side.
+  if (!fits() && !manager.isEnabled()) mode = modeIcon();
+  if (!fits()) gitDetails = formatGitStatus(undefined, gitStatus?.branch || fallbackBranch, theme);
+  if (!fits()) gitDetails = "";
+  if (!fits()) reasoning = "";
+  if (!fits()) separator = " ";
 
-    const modelDisplay = model.id;
-    const thinkingDisplay = hasThinking ? ` • ${thinkingLevel}` : "";
-
-    rightText = theme.fg("dim", `${modelDisplay}${thinkingDisplay}`);
-  }
-
-  const leftW = visibleWidth(leftText);
-  const rightW = visibleWidth(rightText);
-  const totalW = leftW + rightW;
-
-  let line = "";
-  if (totalW + 2 <= width) {
-    const pad = " ".repeat(width - leftW - rightW);
-    line = leftText + pad + rightText;
-  } else {
-    const availRight = width - leftW - 2;
-    if (availRight > 8) {
-      const truncatedRight = truncateToWidth(rightText, availRight, "");
-      const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
-      line = leftText + pad + truncatedRight;
-    } else {
-      line = truncateToWidth(leftText, width);
+  if (!fits()) {
+    // Preserve the final path component; only replace the parent path.
+    const folder = basename(cwd) || cwd;
+    const abbreviated = `...${sep}${folder}`;
+    cwd = visibleWidth(abbreviated) < visibleWidth(cwd) ? abbreviated : folder;
+    if (leftWidth() > width) cwd = folder;
+    if (leftWidth() > width) mode = modeIcon();
+    if (leftWidth() > width) cwd = "";
+    if (!fits()) {
+      const available = width - leftWidth() - gap;
+      model = truncateToWidth(model, available, available > 1 ? "…" : "");
     }
   }
 
-  return line;
+  const left = mode + (cwd ? theme.fg("dim", directory()) : "") + gitDetails;
+  const right = model + reasoning;
+  return right
+    ? left + " ".repeat(width - leftWidth() - visibleWidth(right)) + theme.fg("dim", right)
+    : left;
 }
 
 function formatFooterCountdown(resetTime: string, now: number): string {
@@ -175,150 +166,108 @@ function bucketWindowLabel(bucket: QuotaBucket): string {
     : bucket.bucketId === "tokenharbor-free" ? `Free ${label}` : label;
 }
 
-/**
- * Renders the stable budget bar and secondary countdowns for windows with usage.
- */
-function renderProgressBar(
-  primary: QuotaBucket,
-  secondaries: QuotaBucket[] | undefined,
-  now: number,
-  theme: ExtensionContext["ui"]["theme"]
-): string {
-  const usedPct = Math.round(primary.usedFraction * 100);
-  const timeElapsed = bucketTimeElapsed(primary, now);
-  const progressBar = makeProgressBar(primary.usedFraction, 10, timeElapsed, false);
-  const resetSegment = hasValidReset(primary)
-    ? ` (${formatFooterCountdown(primary.resetTime!, now)})`
-    : "";
-
-  let secondarySegment = "";
-  const sortedSecondaries = [...(secondaries ?? [])].sort(
-    (a, b) => quotaWindowSeconds(b) - quotaWindowSeconds(a)
-  );
-  for (const secondary of sortedSecondaries) {
-    if (secondary.usedFraction <= 0) continue;
-    const secPct = Math.round(secondary.usedFraction * 100);
-    const secLabel = bucketWindowLabel(secondary);
-    const countdown =
-      secondary.usedFraction > 0 &&
-      hasValidReset(secondary)
-        ? ` (${formatFooterCountdown(secondary.resetTime!, now)})`
-        : "";
-    const text = `${secLabel}: ${secPct}%${countdown}`;
-    const color = secondary.usedFraction >= 0.95 ? "error" :
-      secondary.usedFraction >= 0.8 ? "warning" : undefined;
-    secondarySegment += ` · ${color ? theme.fg(color, text) : text}`;
-  }
-
-  const primaryLabel = bucketWindowLabel(primary);
-  return `${primaryLabel} [${progressBar}] ${usedPct}%${resetSegment}${secondarySegment}`;
+function quotaTimer(bucket: QuotaBucket, now: number): string {
+  return bucket.resetTime && hasValidReset(bucket) ? ` (${formatFooterCountdown(bucket.resetTime, now)})` : "";
 }
 
-/** Render quota and named value balances together for every provider. */
-function renderUsageReport(
-  report: ProviderUsageReport,
-  prefix: string,
-  modelId: string,
-  now: number,
-  theme: ExtensionContext["ui"]["theme"]
-): string {
+interface FooterUsage {
+  account: string;
+  primary?: QuotaBucket;
+  secondary?: QuotaBucket[];
+  details?: string[];
+  message?: string;
+}
+
+/** Keep the account, windows and ancillary details separate for responsive layout. */
+function describeUsageReport(report: ProviderUsageReport, account: string, modelId: string): FooterUsage {
   if (report.error && report.groups.length === 0) {
-    return `${prefix}  ${report.providerId === "inferhub" ? "Balance unavailable" : "Quota unavailable"}`;
+    return { account, message: report.providerId === "inferhub" ? "Balance unavailable" : "Quota unavailable" };
   }
   const { primary, secondary, balances } = extractKeyBuckets(report, modelId);
-  const parts: string[] = [];
+  const details: string[] = [];
   if (primary) {
-    parts.push(renderProgressBar(primary, secondary, now, theme));
-    if (primary.enabled === false) parts.push("disabled");
-    else if (primary.exhausted === true) parts.push("exhausted");
-    else if (primary.exhausted === false && primary.usedFraction >= 1) parts.push("not exhausted");
+    if (primary.enabled === false) details.push("disabled");
+    else if (primary.exhausted === true) details.push("exhausted");
+    else if (primary.exhausted === false && primary.usedFraction >= 1) details.push("not exhausted");
   }
   for (const balance of balances) {
-    const value = balanceDisplayValue(balance) || "unavailable";
-    parts.push(`${balance.displayName}: ${value}`);
+    details.push(`${balance.displayName}: ${balanceDisplayValue(balance) || "unavailable"}`);
+  }
+  if (primary || details.length) {
+    return { account, primary, secondary: secondary.filter((bucket) => bucket.usedFraction > 0), details };
   }
   const hasZeroBalance = report.groups.some((group) => group.buckets.some((bucket) =>
-    isValueBucket(bucket) &&
-    (bucket.balanceAmount ?? bucket.balanceUsd) === 0
+    isValueBucket(bucket) && (bucket.balanceAmount ?? bucket.balanceUsd) === 0
   ));
-  if (!parts.length && report.providerId !== "ollama-cloud" && !hasZeroBalance) {
-    const summary = report.capacitySummaryShort || report.capacitySummary;
-    if (summary) parts.push(summary);
-  }
-  if (parts.length) return `${prefix}  ${parts.join(" · ")}`;
-  if ((report.providerId === "ollama-cloud" && report.groups.length > 0) || hasZeroBalance) return prefix;
-  return `${prefix}  ${report.error || report.quotaUnavailableReason ? "Quota unavailable" : "No quota limits reported"}`;
+  if (hasZeroBalance || (report.providerId === "ollama-cloud" && report.groups.length > 0)) return { account };
+  const summary = report.providerId === "ollama-cloud" ? undefined : report.capacitySummaryShort || report.capacitySummary;
+  const message = summary || (report.error || report.quotaUnavailableReason ? "Quota unavailable" : "No quota limits reported");
+  return { account, message };
 }
 
-/**
- * Builds Line 2 Right Side: Active account usage bar.
- */
-function buildUsageBar(ctx: ExtensionContext): string {
+/** Look up the active account's cached quota data; layout never triggers a refresh. */
+function getFooterUsage(ctx: ExtensionContext, now: number): FooterUsage | undefined {
   const model = ctx.model;
-  if (!model) return "";
+  if (!model) return;
 
   const isGo = model.provider === OPENCODE_GO_ID;
-  if (isGo && !isOpenCodeGoEndpoint(model.baseUrl)) return "";
+  if (isGo && !isOpenCodeGoEndpoint(model.baseUrl)) return;
   const balancer = AccountBalancer.getInstance();
   const sessionId = ctx.sessionManager?.getSessionId?.();
   const account = balancer.getSessionAccount(model.provider, sessionId, model.id)
     ?? (isGo ? getOpenCodeGoEnvAccount() : undefined);
 
   if (!account) {
-    if (model.provider !== "ollama-cloud") return "";
+    if (model.provider !== "ollama-cloud") return;
     const auth = getOllamaFallbackAuth(250);
-    if (!auth) return "";
+    if (!auth) return;
     const key = `ollama-cloud-fallback:${getOllamaCredentialId(auth.token)}`;
     const report = QuotaManager.getInstance().getReport(key);
     const identity = fallbackUsageIdentity(auth.label, auth.token);
-    return report ? renderUsageReport(report, identity, model.id, Date.now(), ctx.ui.theme)
-      : `${identity}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
+    return report ? describeUsageReport(report, identity, model.id)
+      : { account: identity, message: isProviderNetworkEnabled() ? "···" : "offline" };
   }
 
   const prefix = usageAccountIdentity(account);
-
-  const now = Date.now();
   // Check 429 cooldown
   if (account.blockedUntil && account.blockedUntil > now) {
     const remainingSec = Math.ceil((account.blockedUntil - now) / 1000);
     const mins = Math.floor(remainingSec / 60);
     const secs = remainingSec % 60;
     const cooldownStr = mins > 0 ? `${mins}m${secs}s` : `${secs}s`;
-    return `${prefix}  [COOLDOWN ~${cooldownStr}]`;
+    return { account: prefix, message: `[COOLDOWN ~${cooldownStr}]` };
   }
 
   const report = QuotaManager.getInstance().getReport(account.id)
     ?? (account.provider === "inferhub" && account.apiKey ? getInferHubUsageFailure(account.apiKey) : undefined)
     ?? (isGo && account.apiKey ? getOpenCodeGoUsageFailure(account.apiKey) : undefined);
-  if (!report) {
-    return `${prefix}  ${isProviderNetworkEnabled() ? "···" : "offline"}`;
-  }
-
-  return renderUsageReport(report, prefix, model.id, now, ctx.ui.theme);
+  return report ? describeUsageReport(report, prefix, model.id)
+    : { account: prefix, message: isProviderNetworkEnabled() ? "···" : "offline" };
 }
 
-/**
- * Builds the left statistics string (tokens, cache hits, cost, context window)
- * respecting the configured usage.contextFormat ("pi", "pi-enhanced", or "off").
- */
-function buildStatsLeft(
-  stats: FooterStats,
-  theme: ExtensionContext["ui"]["theme"]
-): string {
+interface FooterStatParts {
+  tokens: string;
+  cache: string;
+  hitRate: string;
+  cost: string;
+  context: string;
+}
+
+function formatStats({ tokens, cache, hitRate, cost, context }: FooterStatParts): string {
+  return [tokens, cache, hitRate, cost, context].filter(Boolean).join(" ");
+}
+
+function buildStatsParts(stats: FooterStats, theme: ExtensionContext["ui"]["theme"]): FooterStatParts {
   const { input, output, cacheRead, cacheWrite, cost, latestCacheHitRate, contextUsage } = stats;
-
-  const statParts: string[] = [];
-  if (input > 0) statParts.push(`↑${formatTokens(input)}`);
-  if (output > 0) statParts.push(`↓${formatTokens(output)}`);
-  if (cacheRead > 0) statParts.push(`R${formatTokens(cacheRead)}`);
-  if (cacheWrite > 0) statParts.push(`W${formatTokens(cacheWrite)}`);
-  if ((cacheRead > 0 || cacheWrite > 0) && latestCacheHitRate !== undefined) {
-    statParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-  }
-  if (cost > 0) {
-    statParts.push(formatCost(cost));
-  }
-
+  const tokens = [input > 0 ? `↑${formatTokens(input)}` : "", output > 0 ? `↓${formatTokens(output)}` : ""];
+  const cache = [cacheRead > 0 ? `R${formatTokens(cacheRead)}` : "", cacheWrite > 0 ? `W${formatTokens(cacheWrite)}` : ""];
+  const parts: FooterStatParts = {
+    tokens: tokens.filter(Boolean).join(" "),
+    cache: cache.filter(Boolean).join(" "),
+    hitRate: (cacheRead > 0 || cacheWrite > 0) && latestCacheHitRate !== undefined ? `CH${latestCacheHitRate.toFixed(1)}%` : "",
+    cost: cost > 0 ? formatCost(cost) : "",
+    context: "",
+  };
   const contextFormat = EnhancedSettingsStore.getInstance().get("usage.contextFormat");
   if (contextFormat !== "off") {
     if (contextUsage && contextUsage.contextWindow > 0) {
@@ -339,29 +288,16 @@ function buildStatsLeft(
 
       // Colorize based on usage threshold (matching Pi native conventions)
       if (contextPercentValue > 90) {
-        statParts.push(theme.fg("error", displayStr));
+        parts.context = theme.fg("error", displayStr);
       } else if (contextPercentValue > 70) {
-        statParts.push(theme.fg("warning", displayStr));
+        parts.context = theme.fg("warning", displayStr);
       } else {
-        statParts.push(displayStr);
+        parts.context = displayStr;
       }
     }
   }
 
-  return statParts.join(" ");
-}
-
-/**
- * Builds the standard directory line (matching Pi native layout Line 1):
- * - pwd (branch)
- */
-function renderStandardPwdLine(
-  ctx: ExtensionContext,
-  gitDetails: string,
-  theme: ExtensionContext["ui"]["theme"],
-  width: number
-): string {
-  return renderDirectoryDetails(ctx, gitDetails, theme, width);
+  return parts;
 }
 
 /**
@@ -375,7 +311,7 @@ function renderStandardFooterLine(
   width: number,
   stats: FooterStats
 ): string {
-  const statsLeft = buildStatsLeft(stats, theme);
+  const statsLeft = formatStats(buildStatsParts(stats, theme));
   const statsLeftWidth = visibleWidth(statsLeft);
 
   const model = ctx.model;
@@ -414,42 +350,91 @@ function renderStandardFooterLine(
   return theme.fg("dim", truncateToWidth(statsLeft, width));
 }
 
-/**
- * Builds Line 2:
- * - Left: ↑input ↓output Rcache Wcache $cost context%/contextWindow
- * - Far Right (under model name): ⚡ account [████████░░░┃░░░] 52% (2d14h)
- */
+/** Keep quota fields intact as the terminal narrows, then make room on the stats side. */
 function renderFooterLine2(
   ctx: ExtensionContext,
   theme: ExtensionContext["ui"]["theme"],
   width: number,
   stats: FooterStats
 ): string {
-  // Style each side separately: a context warning's foreground reset must not
-  // cancel the quota's dim color on the right.
-  const leftText = theme.fg("dim", buildStatsLeft(stats, theme));
-  const rightText = theme.fg("dim", buildUsageBar(ctx));
+  if (width <= 0) return "";
+  const now = Date.now();
+  const usage = getFooterUsage(ctx, now);
+  const statParts = buildStatsParts(stats, theme);
+  const primary = usage?.primary;
+  let left = formatStats(statParts);
+  let account = usage?.account ?? "";
+  let details = usage?.details ?? [];
+  let message = usage?.message ?? "";
+  let primaryTimer = primary ? quotaTimer(primary, now) : "";
+  const primaryLabel = primary ? bucketWindowLabel(primary) : "";
+  const primaryPercent = primary ? `${Math.round(primary.usedFraction * 100)}%` : "";
+  const elapsed = primary ? bucketTimeElapsed(primary, now) : undefined;
+  let bar = primary ? makeProgressBar(primary.usedFraction, 10, elapsed) : "";
+  let compact = false;
+  let gap = 2;
 
-  const leftW = visibleWidth(leftText);
-  const rightW = visibleWidth(rightText);
-  const totalW = leftW + rightW;
-
-  let line = "";
-  if (totalW + 2 <= width) {
-    const pad = " ".repeat(width - leftW - rightW);
-    line = leftText + pad + rightText;
-  } else {
-    const availRight = width - leftW - 2;
-    if (availRight > 10) {
-      const truncatedRight = truncateToWidth(rightText, availRight, "");
-      const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncatedRight)));
-      line = leftText + pad + truncatedRight;
-    } else {
-      line = truncateToWidth(leftText, width);
+  const secondary = (usage?.secondary ?? []).map((bucket) => ({
+    text: `${bucketWindowLabel(bucket)}: ${Math.round(bucket.usedFraction * 100)}%`,
+    timer: quotaTimer(bucket, now),
+    color: bucket.usedFraction >= 0.95 ? "error" as const : bucket.usedFraction >= 0.8 ? "warning" as const : undefined,
+  }));
+  const renderRight = () => {
+    const parts = primary ? [compact ? `${primaryLabel}${bar}${primaryPercent}`
+      : `${primaryLabel} [${bar}] ${primaryPercent}${primaryTimer}`] : [];
+    for (const { text, timer, color } of secondary) parts.push(color ? theme.fg(color, text + timer) : text + timer);
+    if (message) parts.push(message);
+    return [account, parts.concat(details).join(" · ")].filter(Boolean).join("  ");
+  };
+  let right = "";
+  const fits = () => {
+    right = renderRight();
+    return visibleWidth(left) + (left && right ? gap : 0) + visibleWidth(right) <= width;
+  };
+  const shrinkStats = (fitsStats: () => boolean) => {
+    for (const field of ["hitRate", "cache", "tokens", "cost"] as const) {
+      if (fitsStats()) break;
+      statParts[field] = "";
+      left = formatStats(statParts);
     }
+  };
+
+  if (!fits()) account = "";
+  if (!fits()) details = [];
+  while (secondary.length && !fits()) {
+    const shortest = secondary[secondary.length - 1];
+    if (shortest.timer) shortest.timer = "";
+    else secondary.pop();
+  }
+  if (primary && !fits()) primaryTimer = "";
+
+  if (primary) {
+    shrinkStats(fits);
+    if (!fits()) {
+      // First shrink the standard widget, then use an unbracketed widget on tiny
+      // terminals. Keep the full label and percentage even on the compact bar.
+      for (let size = 9; size >= 4 && !fits(); size--) bar = makeProgressBar(primary.usedFraction, size, elapsed);
+      if (!fits()) {
+        compact = true;
+        gap = 1;
+        for (let size = 4; size >= 1; size--) {
+          bar = makeProgressBar(primary.usedFraction, size, elapsed);
+          if (fits()) break;
+        }
+      }
+    }
+    if (!fits()) right = ""; // The terminal cannot fit both: keep context size.
+  } else if (!fits()) {
+    shrinkStats(() => visibleWidth(left) <= width);
+    message = truncateToWidth(message, width - visibleWidth(left) - (left ? gap : 0));
+    right = renderRight();
   }
 
-  return line;
+  // Style the two sides separately so that a context warning's reset cannot
+  // cancel the foreground style of the quota on the right.
+  if (!right) return theme.fg("dim", truncateToWidth(left, width));
+  const pad = " ".repeat(width - visibleWidth(left) - visibleWidth(right));
+  return (left ? theme.fg("dim", left) : "") + pad + theme.fg("dim", right);
 }
 
 const RUNNING_CACHE_TTL_MS = 15 * 1000; // 15 seconds cache TTL while model is active
@@ -636,18 +621,13 @@ export function registerUsageFooter(pi: ExtensionAPI): void {
           const settings = EnhancedSettingsStore.getInstance();
           const showQuotaFooter = settings.get("usage.showFooter");
           const stats = statsCache.read(ctx, settings.get("usage.contextFormat") !== "off");
-          const gitDetails = formatGitStatus(monitor.status, footerData?.getGitBranch?.() ?? null, theme);
-          const lines: string[] = [];
-
-          if (showQuotaFooter) {
-            const line1 = renderFooterLine1(ctx, gitDetails, theme, width);
-            const line2 = renderFooterLine2(ctx, theme, width, stats);
-            lines.push(line1, line2);
-          } else {
-            const line1 = renderStandardPwdLine(ctx, gitDetails, theme, width);
-            const line2 = renderStandardFooterLine(ctx, footerData, theme, width, stats);
-            lines.push(line1, line2);
-          }
+          const line1 = renderFooterLine1(
+            ctx, monitor.status, footerData?.getGitBranch?.() ?? null, theme, width, showQuotaFooter,
+          );
+          const line2 = showQuotaFooter
+            ? renderFooterLine2(ctx, theme, width, stats)
+            : renderStandardFooterLine(ctx, footerData, theme, width, stats);
+          const lines = [line1, line2];
 
           // Include other extension statuses if present
           const extensionStatuses = footerData?.getExtensionStatuses?.();
