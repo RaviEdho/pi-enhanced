@@ -15,9 +15,10 @@ import {
   LOGIN_TIMEOUT_MS,
   PROVIDER_ID,
 } from "./constants.js";
-import { updateCachedKenariBilling } from "./plan.js";
+import { cacheKenariBillingSnapshot, getKenariPlanType } from "./plan.js";
 import { fetchKenariModels } from "./models.js";
 import type {
+  KenariAccountBilling,
   KenariBalanceResponse,
   KenariCliTokenResponse,
   KenariQuotaResponse,
@@ -29,7 +30,7 @@ import type {
 export async function validateKenariApiKey(
   apiKey: string,
   signal?: AbortSignal
-): Promise<{ planName?: string; balanceIdr?: number }> {
+): Promise<KenariAccountBilling | null> {
   const timeoutSignal = AbortSignal.timeout(API_TIMEOUT_MS);
   const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
@@ -45,44 +46,16 @@ export async function validateKenariApiKey(
   ]);
 
   if ((!quotaRes || !quotaRes.ok) && (!balanceRes || !balanceRes.ok)) {
-    const errorText = quotaRes ? await quotaRes.text() : "Invalid or revoked API key";
-    throw new Error(`Kenari key validation failed: ${errorText}`);
+    const statuses = [quotaRes?.status, balanceRes?.status].filter(Boolean).join(" / ");
+    throw new Error(`Kenari key validation failed: ${statuses ? `HTTP ${statuses}` : "account endpoints unavailable"}`);
   }
 
-  let planName: string | undefined;
-  if (quotaRes && quotaRes.ok) {
-    try {
-      const quota = (await quotaRes.json()) as KenariQuotaResponse;
-      if (quota.plan?.name) {
-        planName = quota.plan.name;
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
-  let balanceIdr: number | undefined;
-  let availableMicroIdr = 0;
-  if (balanceRes && balanceRes.ok) {
-    try {
-      const bal = (await balanceRes.json()) as KenariBalanceResponse;
-      if (typeof bal.available_micro_idr === "number") {
-        availableMicroIdr = bal.available_micro_idr;
-        balanceIdr = Math.round(bal.available_micro_idr / 1_000_000);
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
-  updateCachedKenariBilling(apiKey, {
-    planName,
-    availableMicroIdr,
-    hasBalance: availableMicroIdr > 0,
-    fetchedAt: Date.now(),
-  });
-
-  return { planName, balanceIdr };
+  const [quota, balance] = await Promise.all([
+    quotaRes?.ok ? quotaRes.json().catch(() => null) as Promise<KenariQuotaResponse | null> : null,
+    balanceRes?.ok ? balanceRes.json().catch(() => null) as Promise<KenariBalanceResponse | null> : null,
+  ]);
+  signal?.throwIfAborted();
+  return cacheKenariBillingSnapshot(apiKey, quota, balance);
 }
 
 export { getKenariApiKey, resolveKenariApiKey } from "./credentials.js";
@@ -185,7 +158,7 @@ export async function validateAndStoreKenariApiKey(
   // Pi's post-login model sync is offline-only. Prime the catalog first so
   // either login method exposes the live models without a process restart.
   onProgress?.("Loading available Kenari models...");
-  await fetchKenariModels(key, signal);
+  await fetchKenariModels(signal);
   signal?.throwIfAborted();
 
   const store = AccountStore.getInstance();
@@ -204,7 +177,8 @@ export async function validateAndStoreKenariApiKey(
     apiKey: key,
     access: key,
     ...(type === "oauth" ? { refresh: "", expires: 0 } : {}),
-    planType: validation.planName || "PAYG",
+    planType: getKenariPlanType(validation) ?? existing?.planType,
+    disabledCause: undefined,
     label: displayIdentity,
     email: existing?.email || displayIdentity,
     createdAt: existing?.createdAt || Date.now(),

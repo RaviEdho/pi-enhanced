@@ -36,7 +36,8 @@ Enhanced Pi extension package providing the **Google Antigravity** provider, **C
 - **Kenari AI Gateway Provider**:
   - Direct connection to Kenari (`https://kenari.id/v1`) with access to 110+ open and closed frontier models in Rupiah.
   - Dual authentication: Choose browser loopback PKCE sign-in or API-key login via `/login kenari`, or set `KENARI_API_KEY`.
-  - Dynamic live model discovery (`/v1/models` and `/api/public/pricing`) with live micro-IDR token pricing converted to USD, context length limits, tool calling, and discrete reasoning effort controls.
+  - Dynamic live model discovery ([`/v1/models`](https://kenari.id/v1/models) and [`/api/public/pricing`](https://kenari.id/api/public/pricing)) with live micro-IDR token pricing converted to USD, context length limits, tool calling, and discrete reasoning effort controls.
+  - Free-tier keys need no subscription or top-up. Select `kenari/kenari-free` or choose a current `:free` model from `/model`. Free requests have daily and per-minute limits; paid models require plan or coupon coverage, or prepaid balance. See Kenari’s [model catalog](https://kenari.id/docs/models.md), [billing](https://kenari.id/docs/billing.md), and [plan quota](https://kenari.id/docs/langganan.md) docs (checked November 18, 2026).
   - Multi-account pooling with transparent 429 rate limit failover (`plan_limit_reached`, `free_quota_daily`, `free_quota_rpm`) and 402 balance backoff (`insufficient_balance`).
   - Live rolling window quota (5-hour, weekly, monthly) and prepaid balance monitoring via `/usage` and interactive status footer.
 - **Command Code Provider**:
@@ -192,9 +193,10 @@ pi --model commandcode/claude-sonnet-5-5
 pi --model commandcode/deepseek/deepseek-v4.1-flash
 pi --model commandcode/google/gemini-3.7-flash
 
-# Interactive mode with Kenari
-pi --model kenari/deepseek-v4-1-flash:free
+# Interactive mode with Kenari (no subscription or balance needed)
 pi --model kenari/kenari-free
+
+# If your account has access to the paid model
 pi --model kenari/claude-haiku-5-5
 
 # Token Harbor: use the exact ID discovered for your key

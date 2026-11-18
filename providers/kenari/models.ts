@@ -17,82 +17,28 @@ import type {
   KenariRawModel,
 } from "./types.js";
 
+// Individual free model IDs rotate. Use Kenari's built-in route without a live catalog.
+const KENARI_FREE_ROUTE: Model<"openai-completions"> = {
+  id: "kenari-free",
+  name: "Kenari Free Route (Auto-fallback)",
+  api: "openai-completions",
+  provider: PROVIDER_ID,
+  baseUrl: KENARI_API_BASE_URL,
+  headers: { "User-Agent": KENARI_USER_AGENT },
+  reasoning: false,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 8192,
+  compat: {
+    supportsStore: false,
+    supportsReasoningEffort: false,
+    thinkingFormat: "deepseek",
+    maxTokensField: "max_tokens",
+  },
+};
+
 export const DEFAULT_KENARI_MODELS: Model<"openai-completions">[] = [
-  {
-    id: "step-3-7-flash:free",
-    name: "Step 3.7 Flash (Free)",
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    baseUrl: KENARI_API_BASE_URL,
-    headers: { "User-Agent": KENARI_USER_AGENT },
-    reasoning: true,
-    thinkingLevelMap: {
-      off: "none",
-      minimal: "minimal",
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: null,
-      max: null,
-    },
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 16384,
-    compat: {
-      supportsStore: false,
-      supportsReasoningEffort: true,
-      thinkingFormat: "deepseek",
-      maxTokensField: "max_tokens",
-    },
-  },
-  {
-    id: "agnes-2-5-flash:free",
-    name: "Agnes 2.5 Flash (Free)",
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    baseUrl: KENARI_API_BASE_URL,
-    headers: { "User-Agent": KENARI_USER_AGENT },
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 512000,
-    maxTokens: 8192,
-    compat: {
-      supportsStore: false,
-      supportsReasoningEffort: false,
-      thinkingFormat: "deepseek",
-      maxTokensField: "max_tokens",
-    },
-  },
-  {
-    id: "deepseek-v4-1-flash:free",
-    name: "DeepSeek V4.1 Flash (Free)",
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    baseUrl: KENARI_API_BASE_URL,
-    headers: { "User-Agent": KENARI_USER_AGENT },
-    reasoning: true,
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-      low: "low",
-      medium: null,
-      high: "high",
-      xhigh: "xhigh",
-      max: null,
-    },
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1048576,
-    maxTokens: 65536,
-    compat: {
-      supportsStore: false,
-      supportsReasoningEffort: true,
-      thinkingFormat: "deepseek",
-      maxTokensField: "max_tokens",
-    },
-  },
   {
     id: "claude-fable-5",
     name: "Claude Fable 5",
@@ -261,25 +207,7 @@ export const DEFAULT_KENARI_MODELS: Model<"openai-completions">[] = [
       maxTokensField: "max_tokens",
     },
   },
-  {
-    id: "kenari-free",
-    name: "Kenari Free Route (Auto-fallback)",
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    baseUrl: KENARI_API_BASE_URL,
-    headers: { "User-Agent": KENARI_USER_AGENT },
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-    compat: {
-      supportsStore: false,
-      supportsReasoningEffort: false,
-      thinkingFormat: "deepseek",
-      maxTokensField: "max_tokens",
-    },
-  },
+  KENARI_FREE_ROUTE,
 ];
 
 function getCachePath(): string {
@@ -292,10 +220,14 @@ export function loadCachedModels(): Model<"openai-completions">[] | null {
     if (!existsSync(file)) return null;
     const raw = readFileSync(file, "utf-8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    return Array.isArray(parsed) && parsed.length > 0 ? withKenariFreeRoute(parsed) : null;
   } catch {
     return null;
   }
+}
+
+function withKenariFreeRoute(models: Model<"openai-completions">[]): Model<"openai-completions">[] {
+  return models.some((model) => model.id === KENARI_FREE_ROUTE.id) ? models : [...models, KENARI_FREE_ROUTE];
 }
 
 export function saveCachedModels(models: Model<"openai-completions">[]): void {
@@ -398,10 +330,7 @@ export function transformKenariModel(
 /**
  * Fetches dynamic models catalog and active exchange rate from Kenari.
  */
-export async function fetchKenariModels(
-  apiKey?: string,
-  signal?: AbortSignal
-): Promise<Model<"openai-completions">[] | null> {
+export async function fetchKenariModels(signal?: AbortSignal): Promise<Model<"openai-completions">[] | null> {
   try {
     const timeoutSignal = AbortSignal.timeout(MODEL_FETCH_TIMEOUT_MS);
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -410,10 +339,7 @@ export async function fetchKenariModels(
       "User-Agent": KENARI_USER_AGENT,
       Accept: "application/json",
     };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-    }
-
+    // This catalog is public and shared across accounts, so never send the API key.
     const [modelsRes, pricingRes] = await Promise.all([
       fetch(MODELS_URL, { headers, signal: combinedSignal }),
       fetch(PRICING_URL, { headers: { "User-Agent": KENARI_USER_AGENT }, signal: combinedSignal }).catch(() => null),
@@ -452,14 +378,10 @@ export async function fetchKenariModels(
       }
     }
 
-    if (models.length > 0) {
-      // Also ensure the kenari-free fallback route is included if not present
-      if (!models.some((m) => m.id === "kenari-free")) {
-        const freeRoute = DEFAULT_KENARI_MODELS.find((m) => m.id === "kenari-free");
-        if (freeRoute) models.push(freeRoute);
-      }
-      saveCachedModels(models);
-      return models;
+    if (models.length > 0 && !combinedSignal.aborted) {
+      const catalog = withKenariFreeRoute(models);
+      saveCachedModels(catalog);
+      return catalog;
     }
 
     return null;

@@ -6,7 +6,7 @@ import { isProviderNetworkEnabled } from "../network.js";
 import { KENARI_API_BASE_URL, PROVIDER_ID, PROVIDER_NAME } from "./constants.js";
 import { DEFAULT_KENARI_MODELS, fetchKenariModels, loadCachedModels } from "./models.js";
 import { getKenariApiKey, resolveKenariApiKey } from "./credentials.js";
-import { fetchKenariBillingInfo, fetchKenariPlans, filterKenariModelsForBilling, getCachedKenariBilling, loadCachedPlans } from "./plan.js";
+import { fetchKenariBillingInfo, fetchKenariPlans, filterKenariModelsForBilling, getCachedKenariBilling, getKenariPlanType, loadCachedPlans } from "./plan.js";
 
 /** Register cached Kenari discovery; defer live requests and streaming code. */
 export async function registerKenariProvider(pi: ExtensionAPI): Promise<void> {
@@ -93,15 +93,19 @@ export async function registerKenariProvider(pi: ExtensionAPI): Promise<void> {
       if (context.signal.aborted) return;
       const allowNetwork = context.allowNetwork && isProviderNetworkEnabled();
       const token = credentialKey(context.credential) || resolveKenariApiKey();
-      if (allowNetwork) await fetchKenariPlans(context.signal).catch(() => {});
       let nextModels = loadCachedModels() || models;
       if (allowNetwork) {
-        const live = await fetchKenariModels(token, context.signal);
+        const [live, billing] = await Promise.all([
+          fetchKenariModels(context.signal),
+          token ? fetchKenariBillingInfo(token, context.signal) : null,
+          fetchKenariPlans(context.signal),
+        ]);
+        if (context.signal.aborted) return;
         if (live?.length) nextModels = live;
-        const billing = token ? await fetchKenariBillingInfo(token, context.signal).catch(() => null) : null;
+        const planType = getKenariPlanType(billing);
         const account = store.getActive(PROVIDER_ID);
-        if (billing?.planName && account && (account.apiKey === token || account.access === token) && billing.planName !== account.planType) {
-          account.planType = billing.planName;
+        if (planType && token && account && (account.apiKey === token || account.access === token) && planType !== account.planType) {
+          account.planType = planType;
           store.upsert(account);
         }
       }

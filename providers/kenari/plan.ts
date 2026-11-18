@@ -365,22 +365,28 @@ export function getCachedKenariBilling(apiKey?: string): KenariAccountBilling | 
   return null;
 }
 
-/**
- * Updates in-memory and disk cache for an API key's billing status.
- */
-export function updateCachedKenariBilling(
+/** An unavailable quota response is different from an explicit `plan: null`. */
+export function cacheKenariBillingSnapshot(
   apiKey: string,
-  billing: Partial<KenariAccountBilling>
-): KenariAccountBilling {
+  quota?: KenariQuotaResponse | null,
+  balance?: KenariBalanceResponse | null,
+): KenariAccountBilling | null {
   const key = apiKey.trim();
   const existing = getCachedKenariBilling(key);
+  const planName = quota?.plan === null ? null : quota?.plan?.name?.trim() || undefined;
+  const availableMicroIdr = Number.isFinite(balance?.available_micro_idr) ? balance?.available_micro_idr : undefined;
+  if (planName === undefined && availableMicroIdr === undefined) return existing;
+
+  const coupon = quota?.coupon;
   const updated: KenariAccountBilling = {
-    planId: billing.planId ?? existing?.planId,
-    planName: billing.planName ?? existing?.planName,
-    availableMicroIdr: billing.availableMicroIdr ?? existing?.availableMicroIdr ?? 0,
-    hasBalance: (billing.availableMicroIdr ?? existing?.availableMicroIdr ?? 0) > 0,
-    couponScope: billing.couponScope ?? existing?.couponScope,
-    fetchedAt: billing.fetchedAt ?? Date.now(),
+    planId: planName === undefined ? existing?.planId : undefined,
+    planName: planName === undefined ? existing?.planName : planName,
+    availableMicroIdr,
+    hasBalance: (availableMicroIdr ?? 0) > 0,
+    couponScope: quota?.coupon !== undefined
+      ? (coupon && (coupon.remaining_rp === null || coupon.remaining_rp > 0) ? coupon.scope_models : undefined)
+      : existing?.couponScope,
+    fetchedAt: Date.now(),
   };
 
   inMemoryBillingCache.set(key, updated);
@@ -394,6 +400,13 @@ export function updateCachedKenariBilling(
   }
 
   return updated;
+}
+
+export function getKenariPlanType(billing?: KenariAccountBilling | null): string | undefined {
+  if (billing?.planName) return billing.planName;
+  if (billing?.planName !== null) return undefined;
+  if (billing.availableMicroIdr === undefined) return "No plan";
+  return billing.hasBalance ? "PAYG" : "Free";
 }
 
 /**
@@ -460,24 +473,12 @@ export async function fetchKenariBillingInfo(
       return cached;
     }
 
-    const quotaData = quotaRes && quotaRes.ok ? ((await quotaRes.json()) as KenariQuotaResponse) : null;
-    const balanceData = balanceRes && balanceRes.ok ? ((await balanceRes.json()) as KenariBalanceResponse) : null;
-
-    const availableMicroIdr =
-      typeof balanceData?.available_micro_idr === "number" ? balanceData.available_micro_idr : 0;
-    const planName = quotaData?.plan?.name || undefined;
-    const couponScope =
-      quotaData?.coupon && (quotaData.coupon.remaining_rp === null || quotaData.coupon.remaining_rp > 0)
-        ? quotaData.coupon.scope_models
-        : undefined;
-
-    return updateCachedKenariBilling(key, {
-      planName,
-      availableMicroIdr,
-      hasBalance: availableMicroIdr > 0,
-      couponScope,
-      fetchedAt: Date.now(),
-    });
+    const [quotaData, balanceData] = await Promise.all([
+      quotaRes?.ok ? quotaRes.json().catch(() => null) as Promise<KenariQuotaResponse | null> : null,
+      balanceRes?.ok ? balanceRes.json().catch(() => null) as Promise<KenariBalanceResponse | null> : null,
+    ]);
+    if (signal?.aborted) return cached;
+    return cacheKenariBillingSnapshot(key, quotaData, balanceData);
   } catch {
     return cached;
   }
@@ -499,7 +500,7 @@ export function findMatchingKenariPlan(
 ): KenariPlan | undefined {
   if (!identifier) return undefined;
   const clean = identifier.trim().toLowerCase();
-  if (clean === "free" || clean === "payg" || clean === "none") return undefined;
+  if (!clean || ["free", "payg", "none", "no plan"].includes(clean)) return undefined;
 
   return plans.find(
     (p) =>
@@ -546,7 +547,7 @@ export function isModelAllowedForKenariBilling(
   }
 
   // 5. Subscription plan scope
-  const planIdentifier = billing.planName || billing.planId;
+  const planIdentifier = billing.planName === null ? undefined : billing.planName || billing.planId;
   if (planIdentifier) {
     const activePlans = plans && plans.length > 0 ? plans : loadCachedPlans();
     const matched = findMatchingKenariPlan(planIdentifier, activePlans);

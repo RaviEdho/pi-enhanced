@@ -6,7 +6,7 @@ import {
   PROVIDER_ID,
   PROVIDER_NAME,
 } from "../../providers/kenari/constants.js";
-import { updateCachedKenariBilling } from "../../providers/kenari/plan.js";
+import { cacheKenariBillingSnapshot, getKenariPlanType } from "../../providers/kenari/plan.js";
 import { QUOTA_WINDOW, QUOTA_WINDOW_LABEL, QUOTA_WINDOW_SHORT_LABEL } from "./windows.js";
 import type {
   KenariBalanceResponse,
@@ -53,22 +53,15 @@ export async function fetchKenariUsage(
       };
     }
 
-    const quotaData = quotaRes && quotaRes.ok ? ((await quotaRes.json()) as KenariQuotaResponse) : null;
-    const balanceData = balanceRes && balanceRes.ok ? ((await balanceRes.json()) as KenariBalanceResponse) : null;
+    const [quotaData, balanceData] = await Promise.all([
+      quotaRes?.ok ? quotaRes.json().catch(() => null) as Promise<KenariQuotaResponse | null> : null,
+      balanceRes?.ok ? balanceRes.json().catch(() => null) as Promise<KenariBalanceResponse | null> : null,
+    ]);
+    signal?.throwIfAborted();
+    if (!quotaData && !balanceData) throw new Error("Kenari account usage unavailable");
 
-    const availableMicroIdr = balanceData?.available_micro_idr ?? 0;
-    updateCachedKenariBilling(apiKey, {
-      planName: quotaData?.plan?.name,
-      availableMicroIdr,
-      hasBalance: availableMicroIdr > 0,
-      couponScope:
-        quotaData?.coupon && (quotaData.coupon.remaining_rp === null || quotaData.coupon.remaining_rp > 0)
-          ? quotaData.coupon.scope_models
-          : undefined,
-      fetchedAt,
-    });
-
-    const planType = quotaData?.plan?.name || existingPlanType || "PAYG";
+    const billing = cacheKenariBillingSnapshot(apiKey, quotaData, balanceData);
+    const planType = getKenariPlanType(billing) ?? existingPlanType;
 
     const groups: QuotaGroup[] = [];
     const planWindows = quotaData?.plan?.windows;
@@ -128,8 +121,8 @@ export async function fetchKenariUsage(
     }
 
     // 2. Prepaid Balance
-    let availableIdr = 0;
-    if (balanceData && typeof balanceData.available_micro_idr === "number") {
+    let availableIdr: number | undefined;
+    if (balanceData && Number.isFinite(balanceData.available_micro_idr)) {
       availableIdr = balanceData.available_micro_idr / 1_000_000;
       const reservedIdr = (balanceData.reserved_micro_idr || 0) / 1_000_000;
 
@@ -172,14 +165,16 @@ export async function fetchKenariUsage(
       });
     }
 
-    let capacitySummary = `Rp ${Math.round(availableIdr).toLocaleString("id-ID")} available`;
+    const balanceText = availableIdr === undefined ? undefined : `Rp ${Math.round(availableIdr).toLocaleString("id-ID")}`;
+    let capacitySummary = balanceText && `${balanceText} available`;
     let capacitySummaryShort = capacitySummary;
+    const balanceSuffix = balanceText ? ` · ${balanceText} bal` : "";
     if (planWindows?.five_hour && planWindows.five_hour.budget_rp > 0) {
-      capacitySummary = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
-      capacitySummaryShort = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.fiveHour]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummary = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.fiveHour]})${balanceSuffix}`;
+      capacitySummaryShort = `Rp ${planWindows.five_hour.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.fiveHour]})${balanceSuffix}`;
     } else if (planWindows?.week && planWindows.week.budget_rp > 0) {
-      capacitySummary = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
-      capacitySummaryShort = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.weekly]}) · Rp ${Math.round(availableIdr).toLocaleString("id-ID")} bal`;
+      capacitySummary = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_LABEL[QUOTA_WINDOW.weekly]})${balanceSuffix}`;
+      capacitySummaryShort = `Rp ${planWindows.week.remaining_rp.toLocaleString("id-ID")} (${QUOTA_WINDOW_SHORT_LABEL[QUOTA_WINDOW.weekly]})${balanceSuffix}`;
     }
 
     return {

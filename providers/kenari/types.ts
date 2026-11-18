@@ -117,8 +117,9 @@ export interface KenariPlan {
 
 export interface KenariAccountBilling {
   planId?: string;
-  planName?: string;
-  availableMicroIdr: number;
+  /** null means Kenari confirmed there is no active plan; undefined means unknown. */
+  planName?: string | null;
+  availableMicroIdr?: number;
   hasBalance: boolean;
   couponScope?: string[];
   fetchedAt: number;
