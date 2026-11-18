@@ -41,6 +41,7 @@ export class SessionUi {
   }
 
   get interaction() { return this.session.interaction; }
+  get config() { return this.session.turnConfig ?? this.session.config; }
 
   resetPrompt() {
     this.stopCommitProgress();
@@ -214,7 +215,7 @@ export class SessionUi {
     // Classify the actual destination, not historyScope (channel replies also
     // use a thread-shaped history authorization scope).
     const kind = channel.isThread?.() ? "threads" : channel.isDMBased?.() ? "dms" : "channels";
-    return this.session.config?.toolCallVisibility?.[kind] ?? kind !== "channels";
+    return this.config?.toolCallVisibility?.[kind] ?? kind !== "channels";
   }
 
   waitingForReplyDecision() {
@@ -228,7 +229,7 @@ export class SessionUi {
     const calls = Array.isArray(message?.content) ? message.content.filter((block) => block?.type === "toolCall") : [];
     if (calls.length === 1 && calls[0].name === "discord_no_reply") return undefined;
     const interaction = this.interaction;
-    if (this.closed || !this.toolCallsVisible() || (this.session.config?.toolCallVerbosity ?? "full") !== "full" ||
+    if (this.closed || !this.toolCallsVisible() || (this.config?.toolCallVerbosity ?? "full") !== "full" ||
         !interaction?.channel || ["commit", "usage"].includes(interaction.workflow) ||
         message?.role !== "assistant" || ["error", "aborted"].includes(message.stopReason) ||
         !Array.isArray(message.content) || !message.content.some((block) => block?.type === "toolCall")) return undefined;
@@ -240,7 +241,7 @@ export class SessionUi {
     // Preserve the ordering of already buffered activity and narration.
     this.sendToolActivityBatch();
     const delivery = this.toolActivityPromise.then(async () => {
-      await sendAgentReply(interaction.channel, text, undefined, { tableRendering: this.session.config?.tableRendering });
+      await sendAgentReply(interaction.channel, text, undefined, { tableRendering: this.config?.tableRendering });
       return true;
     }).catch((error) => {
       log(`Could not send assistant narration: ${safeErrorName(error)}`);
@@ -252,7 +253,7 @@ export class SessionUi {
 
   queueToolActivity(record) {
     const interaction = this.interaction;
-    if (this.closed || !this.toolCallsVisible() || this.session.config?.toolCallVerbosity === "none" || !interaction?.channel || ["commit", "usage"].includes(interaction.workflow)) return;
+    if (this.closed || !this.toolCallsVisible() || this.config?.toolCallVerbosity === "none" || !interaction?.channel || ["commit", "usage"].includes(interaction.workflow)) return;
     if (record.toolName === "discord_no_reply" && (record.type !== "tool_execution_end" || !record.isError)) return;
     if (record.toolName === "set_working_directory" && record.type !== "tool_execution_end") return;
     if (record.type === "tool_execution_end" && !record.isError) return;

@@ -58,18 +58,17 @@ function readOptional(path) {
 }
 
 /** Durable defaults and reply affinity. No chat text or credentials are stored here. */
-export function createChannelSessionRegistry({ sessionRoot, sessions, settings = {}, now = Date.now }) {
-  const policy = { ...DEFAULT_CHANNEL_SESSIONS, ...settings };
-  if (!isValidChannelSessions(policy)) throw new Error("Invalid channel session policy");
-  const schedule = `${policy.timezone}:${policy.resetHour}`;
+export function createChannelSessionRegistry({ sessionRoot, sessions, settings, getSettings = () => settings, now = Date.now }) {
   const channels = new Map();
 
-  function channel(guildId, channelId) {
+  function channel(guildId, channelId, settings = getSettings()) {
     if (!SNOWFLAKE.test(guildId) || !SNOWFLAKE.test(channelId)) throw new Error("Invalid channel identity");
     const baseKey = getChannelSessionKey(guildId, channelId);
     if (channels.has(baseKey)) return channels.get(baseKey);
     const directory = join(sessionRoot, "channel-routes", createHash("sha256").update(baseKey).digest("hex"));
     const path = join(directory, "state.json");
+    const policy = { ...DEFAULT_CHANNEL_SESSIONS, ...settings };
+    const schedule = `${policy.timezone}:${policy.resetHour}`;
     const state = readOptional(path) ?? {
       defaultKey: baseKey, checkedBoundary: latestChannelBoundary(now(), policy), schedule,
       lastActivityAt: 0, lastFinishedAt: 0, pending: 0,
@@ -86,8 +85,10 @@ export function createChannelSessionRegistry({ sessionRoot, sessions, settings =
     return entry;
   }
 
-  function current(guildId, channelId, acceptedAt = now()) {
-    const entry = channel(guildId, channelId);
+  function current(guildId, channelId, acceptedAt = now(), settings = getSettings()) {
+    const policy = { ...DEFAULT_CHANNEL_SESSIONS, ...settings };
+    const schedule = `${policy.timezone}:${policy.resetHour}`;
+    const entry = channel(guildId, channelId, settings);
     const state = entry.state;
     // Selection may wait behind a routing decision. A request accepted before
     // the boundary still belongs to that night, even if dequeued afterward.

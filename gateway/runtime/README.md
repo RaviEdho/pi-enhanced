@@ -9,7 +9,7 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 
 | Module | Responsibility |
 | --- | --- |
-| `config.mjs` | Read and validate configuration, paths, executable arguments, context-message bounds, and startup reason. |
+| `config.mjs` | Load and validate settings and launch environment; watch for saved settings and update live configuration and allowlists. |
 | `discord-rest.mjs` | Own an isolated Undici 6 dispatcher for Discord REST, with automatic retries disabled. |
 | `router.mjs` | Authorize messages, choose DM/thread/channel conversations, deduplicate, and schedule replies. |
 | `route-decider.mjs` | Ask a chat model whether a new server conversation needs a thread or a direct channel reply, with timeouts and thread fallback. |
@@ -47,6 +47,16 @@ callbacks where commands and lifecycle depend on each other.
   accepts blank lists; Settings accepts `off` to clear them while blank keeps
   current values. Existing nonempty lists keep their authorization semantics.
 
+- Watch the config directory rather than `config.json` itself: Pi saves with
+  atomic replacement. Debounce file events and back them up with a stat poll.
+  Validate before replacing live settings and both allowlists together; keep
+  the old settings on invalid/unavailable files and log without exposing file
+  contents. The login token stays pinned to the running process. Do not stop
+  sessions or rebuild the router/registries on a config save: a new message
+  captures routing, rollover, context and display settings at acceptance,
+  whereas fresh Pi sessions use current defaults when opening. Protected tools
+  still recheck authorization directly from disk. Close the watcher at shutdown.
+
 - Create Discord REST with its own explicitly supplied Undici 6 `Agent`, not the
   process-wide dispatcher. Importing Pi's SDK loads Undici 8 and replaces the
   legacy global dispatcher with a compatibility wrapper; real multipart Discord
@@ -76,8 +86,8 @@ callbacks where commands and lifecycle depend on each other.
   and range footer together; `tableRendering.attachMarkdown` independently adds
   the exact original UTF-8 table as `table-N.md`. These two options default to
   false, including legacy configurations. Configure them under `/discord` → Settings → Tables;
-  setup preserves saved values and changes apply after a gateway restart, like
-  other settings. Validate optional boolean fields in both TS storage and daemon
+  setup preserves saved values and changes apply automatically to new turns.
+  Validate optional boolean fields in both TS storage and daemon
   config loaders. Pass settings to final replies and visible tool narration.
   Send each table in one message: maximum eight PNGs plus optional source. Always
   keep page/range context in alt text; with decorations off, fit the canvas to
@@ -265,7 +275,7 @@ callbacks where commands and lifecycle depend on each other.
   with `Intl.DateTimeFormat().resolvedOptions().timeZone` (UTC if unavailable);
   preserve explicitly saved timezones. Validate optional fields
   in both TS storage and the daemon; keep defaults/validation synchronized. Native
-  `/discord` Settings → Channel sessions edits all four fields; restart to apply.
+  `/discord` Settings → Channel sessions edits all four fields; new requests apply the new policy without rebuilding the registry.
   Each local daily boundary is evaluated lazily on the next accepted mention.
   Activity within the inactivity window (inclusive cutoff), pending/running work,
   or work finishing across the boundary skips that whole day—not merely until

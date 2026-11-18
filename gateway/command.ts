@@ -188,7 +188,7 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
         {
           label: "Bot token",
           currentValue: "configured",
-          description: "Replace the saved Discord bot token. Input is visible; the token is stored in private local config.",
+          description: "Replace the saved Discord bot token. Input is visible; the token is stored in private local config. Restart the gateway to reconnect with it.",
         },
         {
           label: "Allowed users",
@@ -502,9 +502,12 @@ async function setupGateway(ctx: ExtensionCommandContext): Promise<void> {
   const currentPid = readPid(paths.pid);
   const alreadyRunning = currentPid !== undefined && isProcessAlive(currentPid);
   writePrivateJson(paths.config, config);
+  const applyMessage = !alreadyRunning ? "" : existing?.token !== token
+    ? " Settings reload automatically; run /discord restart to reconnect with the new bot token."
+    : " The gateway will reload these settings automatically.";
   notify(
     ctx,
-    `Discord gateway configured for ${bot.username}.\nWorkspace: ${cwd}\nConfig: ${paths.config}\nEnable the Message Content Intent in Discord's Developer Portal, invite the bot with View Channel, Read Message History, Send Messages, Create Public Threads, Send Messages in Threads, and Manage Threads so it can rename generated thread titles.${alreadyRunning ? " The running gateway still has its previous settings; run /discord stop, then /discord start to apply these changes." : ""}`,
+    `Discord gateway configured for ${bot.username}.\nWorkspace: ${cwd}\nConfig: ${paths.config}\nEnable the Message Content Intent in Discord's Developer Portal, invite the bot with View Channel, Read Message History, Send Messages, Create Public Threads, Send Messages in Threads, and Manage Threads so it can rename generated thread titles.${applyMessage}`,
     "info"
   );
 
@@ -768,7 +771,7 @@ async function configureChannelSessions(ctx: ExtensionCommandContext, config: Di
   const current = { ...DEFAULT_DISCORD_CHANNEL_SESSIONS, ...config.channelSessions };
   const selected = await selectDiscordOption(ctx, {
     title: "Channel sessions",
-    description: "At the daily boundary, roll over only after the inactivity window and with no running/queued work. Otherwise skip until the next day. Old replies keep their linked sessions; plain mentions use the newest default. Restart the gateway to apply changes.",
+    description: "At the daily boundary, roll over only after the inactivity window and with no running/queued work. Otherwise skip until the next day. Old replies keep their linked sessions; plain mentions use the newest default.",
     options: [
       { label: "Overnight rollover", currentValue: current.enabled ? "on" : "off", description: "Enable daily context rotation without deleting older reply-linked sessions." },
       { label: "Timezone", currentValue: current.timezone, description: `Use an explicit IANA timezone. The default is the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}); saved choices are preserved.` },
@@ -1032,10 +1035,12 @@ function saveGatewayConfig(
   };
   writePrivateJson(getDiscordGatewayPaths().config, nextConfig);
   const pid = readPid(getDiscordGatewayPaths().pid);
-  const restartMessage = pid && isProcessAlive(pid)
-    ? " Run /discord restart to apply this change."
-    : " The change will take effect the next time the gateway starts.";
-  notify(ctx, `${message}${restartMessage}`, "info");
+  const applyMessage = !(pid && isProcessAlive(pid))
+    ? " The change will take effect the next time the gateway starts."
+    : updates.token !== undefined && updates.token !== config.token
+      ? " Run /discord restart to reconnect with the new bot token."
+      : " The gateway will reload this setting automatically.";
+  notify(ctx, `${message}${applyMessage}`, "info");
 }
 
 async function selectDiscordOption(

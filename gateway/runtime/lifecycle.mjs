@@ -6,8 +6,8 @@ import { log, safeErrorName } from "./logging.mjs";
 import { onceExit } from "./pi-rpc.mjs";
 
 /** Process status, graceful draining, and replacement-daemon handoff. */
-export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands, closeTransport = () => {} }) {
-  const { configPath, pidPath, statusPath, restartRequestPath, logPath } = paths;
+export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands, closeConfigWatch = () => {}, closeTransport = () => {} }) {
+  const { pidPath, statusPath, restartRequestPath, logPath } = paths;
   let activeMessageHandlers = 0;
   let pendingMessageTasks = 0;
   let restartRequested = false;
@@ -86,6 +86,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     const failureMessage = exitCode !== 0 ? gatewayStatus.lastError || "Gateway process terminated unexpectedly." : undefined;
     clearInterval(idleCleanupTimer);
     clearInterval(restartRequestPollTimer);
+    closeConfigWatch();
     if (!restart) updateStatus("stopping", { lastError: undefined });
     log(`Shutting down (${reason})`);
     interactions.close();
@@ -184,14 +185,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
   }
 
   async function sendHomeNotification(text) {
-    let homeChannelId = config.homeChannelId;
-    try {
-      const latestConfig = JSON.parse(readFileSync(configPath, "utf8"));
-      homeChannelId = typeof latestConfig.homeChannelId === "string" && /^\d{17,20}$/.test(latestConfig.homeChannelId)
-        ? latestConfig.homeChannelId : undefined;
-    } catch {
-      // Keep the in-memory destination when the config is unavailable.
-    }
+    const homeChannelId = config.homeChannelId;
     if (!homeChannelId) return;
     try {
       const channel = await client.channels.fetch(homeChannelId);

@@ -311,7 +311,7 @@ export class PiRpcSession {
 
   /** Retry only the explicitly configured default, never an arbitrary model. */
   async fallbackToDefault(failure) {
-    const target = modelIdentity(this.config.model);
+    const target = modelIdentity((this.turnConfig ?? this.config).model);
     if (!target) return { reported: false, detail: "No explicit gateway default model is configured; no automatic switch was made." };
     let reported = false;
     let confirmedChange;
@@ -471,12 +471,13 @@ export class PiRpcSession {
     return this.request("steer", { message });
   }
 
-  async promptAndWait(message, interaction, images = [], { extensionCommand = false } = {}) {
+  async promptAndWait(message, interaction, images = [], { extensionCommand = false, turnConfig = { ...this.config } } = {}) {
     if (this.running) throw new Error("Pi session received overlapping prompts");
     await this.ui.flushPendingAskUserCompletion();
     this.running = true;
     this.lastUsedAt = Date.now();
     this.interaction = interaction;
+    this.turnConfig = turnConfig;
     this.lastAssistantNarration = undefined;
     this.lastAssistantMessage = undefined;
     this.lastRunTools = undefined;
@@ -608,6 +609,7 @@ export class PiRpcSession {
       await this.ui.clearStatusMessages();
       this.imageToolCalls?.clear();
       this.interaction = undefined;
+      this.turnConfig = undefined;
       this.running = false;
       this.lastUsedAt = Date.now();
     }

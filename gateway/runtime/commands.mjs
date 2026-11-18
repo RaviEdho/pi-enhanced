@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { buildCommitCardPayload, buildConversationSettingPayload } from "./components.mjs";
+import { readGatewayConfig } from "./config.mjs";
 import { replyEphemeral } from "./interactions.mjs";
 import { discordOptionLabel, splitMessage, startTyping } from "./messages.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
@@ -238,7 +239,18 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       }
     }
 
-    if (targetChannelId === config.homeChannelId) {
+    let latestConfig;
+    try {
+      latestConfig = readGatewayConfig(configPath);
+    } catch {
+      await replyEphemeral(interaction, "The saved gateway configuration is invalid or unavailable.");
+      return;
+    }
+    if (!latestConfig.allowedUserIds.includes("*") && !latestConfig.allowedUserIds.includes(interaction.user?.id)) {
+      await replyEphemeral(interaction, "You are not authorized to configure this bot.");
+      return;
+    }
+    if (targetChannelId === latestConfig.homeChannelId) {
       const text = isThread
         ? `<#${targetChannelId}> (parent channel of this thread) is already configured as the home channel.`
         : `<#${targetChannelId}> is already configured as the home channel.`;
@@ -250,22 +262,12 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
       return;
     }
 
-    let latestConfig;
-    try {
-      latestConfig = JSON.parse(readFileSync(configPath, "utf8"));
-    } catch {
-      latestConfig = { ...config };
-    }
-
     latestConfig.homeChannelId = targetChannelId;
     latestConfig.configuredAt = new Date().toISOString();
-
-    if (!allowedChannels.has("*") && !allowedChannels.has(targetChannelId)) {
-      allowedChannels.add(targetChannelId);
-      latestConfig.allowedChannelIds = [...new Set([...(latestConfig.allowedChannelIds || []), targetChannelId])];
-    }
-
+    const addChannel = !latestConfig.allowedChannelIds.includes("*") && !latestConfig.allowedChannelIds.includes(targetChannelId);
+    if (addChannel) latestConfig.allowedChannelIds.push(targetChannelId);
     writePrivateJson(configPath, latestConfig);
+    if (addChannel) allowedChannels.add(targetChannelId);
     config.homeChannelId = targetChannelId;
     log(`Home channel set to ${targetChannelId} by ${interaction.user?.tag || interaction.user?.id}`);
 
@@ -607,10 +609,10 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
 
   function saveDefaultModel(interaction, selected) {
     if (lifecycle.isStopping() || !isDefaultModelChannel(interaction)) throw new Error("Channel is no longer authorized");
-    const latest = JSON.parse(readFileSync(configPath, "utf8"));
+    const latest = readGatewayConfig(configPath);
     if (latest.allowServerMessages === false ||
-        !Array.isArray(latest.allowedUserIds) || !latest.allowedUserIds.some((id) => id === "*" || id === interaction.user?.id) ||
-        !Array.isArray(latest.allowedChannelIds) || !latest.allowedChannelIds.some((id) => id === "*" || id === interaction.channelId)) {
+        !latest.allowedUserIds.some((id) => id === "*" || id === interaction.user?.id) ||
+        !latest.allowedChannelIds.some((id) => id === "*" || id === interaction.channelId)) {
       throw new Error("Channel or user is no longer authorized");
     }
     latest.model = { provider: selected.provider, id: selected.id };
@@ -638,6 +640,11 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
     const pending = pendingDiscordCommands.get(token);
     if (!pending || interaction.user?.id !== pending.userId || interaction.channelId !== pending.channelId) {
       await replyEphemeral(interaction, "This setting picker is no longer active or belongs to another user.");
+      return;
+    }
+    if ((!allowedUsers.has("*") && !allowedUsers.has(interaction.user?.id)) ||
+        (pending.defaultModel ? !isDefaultModelChannel(interaction) : getConversationSessionKey(interaction) !== pending.sessionKey)) {
+      await replyEphemeral(interaction, "You are no longer authorized to use this setting picker.");
       return;
     }
     if (action === "prev" || action === "next") {

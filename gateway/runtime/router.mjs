@@ -30,28 +30,19 @@ export function usesEscalatingTool(toolNames) {
   return false;
 }
 
+function contextCount(setting) {
+  return Number.isInteger(setting) ? Math.min(Math.max(setting, 0), CONTEXT_MESSAGE_LIMIT) : DEFAULT_CONTEXT_MESSAGES;
+}
+
 /** Authorization and Discord-to-Pi conversation routing. */
 export function createMessageRouter({ client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle, routeDecider, channelSessions }) {
   const seenMessages = new Set();
-  const allowDirectMessages = config.allowDirectMessages !== false;
-  const allowServerMessages = config.allowServerMessages !== false;
-  const channelReplies = config.channelReplies ?? { mode: "always-thread", escalate: true };
-  const decidePerMessage = channelReplies.mode === "auto";
-  const escalateChannelReplies = channelReplies.escalate !== false;
-  // Separate switch: a repeated mention is a weaker signal than real tool work.
-  const escalateFollowUps = escalateChannelReplies && channelReplies.followUp !== false;
   const lastChannelReplyAt = new Map();
   const lastDeliveredMessage = new Map();
-  const contextMessageCount = Number.isInteger(config.contextMessages)
-    ? Math.min(Math.max(config.contextMessages, 0), CONTEXT_MESSAGE_LIMIT)
-    : DEFAULT_CONTEXT_MESSAGES;
-  const routingContextMessageCount = Number.isInteger(channelReplies.contextMessages)
-    ? Math.min(Math.max(channelReplies.contextMessages, 0), CONTEXT_MESSAGE_LIMIT)
-    : DEFAULT_CONTEXT_MESSAGES;
 
   function classifyMessage(message) {
-    if (message.guildId == null) return allowDirectMessages ? { kind: "dm" } : undefined;
-    if (!allowServerMessages) return undefined;
+    if (message.guildId == null) return config.allowDirectMessages !== false ? { kind: "dm" } : undefined;
+    if (config.allowServerMessages === false) return undefined;
     const channel = message.channel;
     if (typeof channel?.isThread === "function" && channel.isThread()) {
       const registration = threads.get(message.channelId);
@@ -67,7 +58,6 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
   }
 
   function rememberChannelReply(sessionKey, userId) {
-    if (!escalateFollowUps) return;
     const key = `${sessionKey}:${userId}`;
     lastChannelReplyAt.delete(key);
     lastChannelReplyAt.set(key, Date.now());
@@ -76,7 +66,6 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
 
   /** Consume a pending follow-up so one topic escalates at most once. */
   function continuePreviousChannelReply(sessionKey, userId) {
-    if (!escalateFollowUps) return false;
     const key = `${sessionKey}:${userId}`;
     const at = lastChannelReplyAt.get(key);
     if (at === undefined) return false;
@@ -105,9 +94,10 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     return { afterId: last.messageId, skip: false };
   }
 
-  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext, defaultSessionKey, startedAt }) {
-    if (!decidePerMessage) {
-      return { target: channelReplies.mode === "channel" ? "channel" : "thread", reason: "mode" };
+  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps }) {
+    const mode = turnConfig.channelReplies?.mode;
+    if (mode !== "auto") {
+      return { target: mode === "channel" ? "channel" : "thread", reason: "mode" };
     }
     if (escalateFollowUps && continuePreviousChannelReply(defaultSessionKey, message.author.id)) {
       return { target: "thread", reason: "follow-up" };
@@ -119,7 +109,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       author: message.author.username,
       isReply,
       imageCount: imageAttachments.length,
-      loadContext, startedAt,
+      loadContext, startedAt, routingConfig: turnConfig,
     });
     return { target: decision.target === "channel" ? "channel" : "thread", reason: decision.reason };
   }
@@ -199,7 +189,10 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       return;
     }
     const acceptedAt = Date.now();
-    const run = () => prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt);
+    // A save replaces nested settings rather than mutating them. Keep this
+    // turn's routing/context/output choices together, even while queued.
+    const turnConfig = { ...config };
+    const run = () => prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt, turnConfig);
     // Serialize target selection, not agent execution. Concurrent classifier
     // reads must not assign later mentions before earlier activity is recorded.
     if (route.kind === "new-thread") {
@@ -209,8 +202,15 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     }
   }
 
-  async function prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt) {
+  async function prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt, turnConfig) {
     const startedAt = Date.now();
+    const channelReplies = turnConfig.channelReplies ?? {};
+    const decidePerMessage = channelReplies.mode === "auto";
+    const escalateChannelReplies = channelReplies.escalate !== false;
+    // Separate switch: a repeated mention is a weaker signal than real tool work.
+    const escalateFollowUps = escalateChannelReplies && channelReplies.followUp !== false;
+    const contextMessageCount = contextCount(turnConfig.contextMessages);
+    const routingContextMessageCount = contextCount(channelReplies.contextMessages);
     const embedContext = formatDiscordEmbedContext(message);
     // Lazily read only after authorization. Routing and the queued agent turn
     // share the same snapshot, but format independent windows/watermarks.
@@ -240,7 +240,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       return { replyContext, recentContext };
     };
     const defaultSessionKey = route.kind === "new-thread"
-      ? channelSessions?.current(message.guildId, message.channelId, acceptedAt) ?? getChannelSessionKey(message.guildId, message.channelId)
+      ? channelSessions?.current(message.guildId, message.channelId, acceptedAt, turnConfig.channelSessions) ?? getChannelSessionKey(message.guildId, message.channelId)
       : undefined;
     let linkedSessionKey;
     let missingSessionNotice;
@@ -287,7 +287,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       // An explicit bot reply has stronger affinity than classifier/follow-up
       // routing, including when the saved mode would normally start a thread.
       const decision = linkedSessionKey ? { target: "channel", reason: "reply-session" }
-        : await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext, defaultSessionKey, startedAt });
+        : await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps });
       if (decision.target === "channel" || typeof message.startThread !== "function") {
         if (decision.target !== "channel") log(`Cannot start a thread in channel ${message.channelId}; replying in the channel instead`);
         sessionKey = linkedSessionKey ?? defaultSessionKey;
@@ -381,7 +381,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
             channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing, onMessageSent,
             allowNoReply: route.kind === "thread",
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
-          }, images);
+          }, images, { turnConfig });
           if (!session.forceStopped && result?.disposition === "no_reply") return undefined;
           // Retry if the early watch expired before the title became available.
           if (!channelConversation) threads.watchThreadTitle(target, session);
@@ -394,9 +394,9 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         });
         if (!result) return;
         if (result.text === undefined) return;
-        if (result.text.trim()) await sendAgentReply(target, result.text, replyToMessageId, { tableRendering: config.tableRendering });
+        if (result.text.trim()) await sendAgentReply(target, result.text, replyToMessageId, { tableRendering: turnConfig.tableRendering });
         else await sendText(target, "The agent finished without a text response.", replyToMessageId);
-        if (channelConversation) rememberChannelReply(sessionKey, message.author.id);
+        if (channelConversation && escalateFollowUps) rememberChannelReply(sessionKey, message.author.id);
         if (result.escalate) await escalateToThread({ message, content, session: result.session, titleStarter: result.titleStarter });
       } catch (error) {
         log(`Pi run failed: ${safeErrorName(error)}`);

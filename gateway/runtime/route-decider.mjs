@@ -136,59 +136,49 @@ export async function loadPiModels() {
  * which is the reversible choice.
  */
 export function createRouteDecider({ config, loadModels = loadPiModels, loadDefaultModel = loadPiDefaultModel, now = Date.now }) {
-  const settings = config?.channelReplies ?? {};
-  let prepared;
-  let preparing;
+  let prepared = false;
+  let cachedChoice;
+  let loading;
   let loadedRuntime;
   let unavailableAt;
 
-  async function selectModel(runtime) {
-    let preferred = settings.routerModel;
+  async function prepare(routingConfig) {
+    // Share the provider registry between startup warming and all decisions,
+    // even if a reload changes the selected model during initialization.
+    const runtime = loadedRuntime ?? await (loading ??= Promise.resolve().then(loadModels).then((result) => {
+      loadedRuntime = result;
+      unavailableAt = undefined;
+      return result;
+    }).finally(() => { loading = undefined; }));
+    let preferred = routingConfig?.channelReplies?.routerModel;
+    const followsDefault = preferred === "pi-default" || preferred === "gateway-default";
     if (preferred === "pi-default") {
-      preferred = await loadDefaultModel(config.cwd);
+      preferred = await loadDefaultModel(routingConfig.cwd);
       if (!preferred) throw new Error("Pi has no global saved default model");
     } else if (preferred === "gateway-default") {
       // No gateway override means cheapest, not Pi's default or a conversation's model.
-      preferred = config.model;
+      preferred = routingConfig.model;
     }
+    const key = preferred ? JSON.stringify([preferred.provider, preferred.id]) : "cheapest";
+    if (!followsDefault && cachedChoice?.key === key) return { runtime, model: cachedChoice.model };
     const model = pickRouterModel((await runtime.getAvailable?.()) ?? runtime.getModels?.() ?? [], preferred);
     if (!model) throw new Error("No authenticated chat model matches the routing configuration");
-    return model;
-  }
-
-  async function prepare() {
-    if (prepared) {
-      // Follow changes to saved defaults without reloading providers or pinning
-      // the model selected during startup warming. Explicit models stay fixed.
-      return settings.routerModel === "pi-default" || settings.routerModel === "gateway-default"
-        ? { runtime: prepared.runtime, model: await selectModel(prepared.runtime) } : prepared;
-    }
-    // Startup warming and simultaneous mentions must share one initialization.
-    if (!preparing) {
-      preparing = (async () => {
-        // Keep a loaded registry even if a followed default is not configured
-        // yet, so a later decision can see it without reloading providers.
-        const runtime = loadedRuntime ??= await loadModels();
-        const model = await selectModel(runtime);
-        prepared = { runtime, model };
-        unavailableAt = undefined;
-        return prepared;
-      })().finally(() => { preparing = undefined; });
-    }
-    return preparing;
+    if (!followsDefault) cachedChoice = { key, model };
+    prepared = true;
+    return { runtime, model };
   }
 
   /** Load the model registry and auth ahead of the first decision. */
   async function warm() {
     try {
-      await prepare();
+      await prepare({ ...config });
     } catch (error) {
       if (!loadedRuntime) unavailableAt = now();
       log(`Discord reply routing unavailable: ${safeErrorName(error)}`);
     }
   }
 
-  async function decide({ content, author, isReply, imageCount, embedContext, loadContext, startedAt }) {
+  async function decide({ content, author, isReply, imageCount, embedContext, loadContext, startedAt, routingConfig = { ...config } }) {
     if (unavailableAt !== undefined && now() - unavailableAt < UNAVAILABLE_RETRY_MS) {
       return { target: "thread", reason: "router-unavailable" };
     }
@@ -208,7 +198,7 @@ export function createRouteDecider({ config, loadModels = loadPiModels, loadDefa
       // Context reads and model preparation share the same six-second budget.
       // The caller memoizes reads so the main agent can reuse them afterward.
       const [{ runtime, model }, routingContext] = await Promise.race([
-        Promise.all([prepare(), loadContext?.()]),
+        Promise.all([prepare(routingConfig), loadContext?.()]),
         deadline,
       ]);
       const response = await Promise.race([runtime.completeSimple(model, {
@@ -240,5 +230,5 @@ export function createRouteDecider({ config, loadModels = loadPiModels, loadDefa
     }
   }
 
-  return { decide, warm, isPrepared: () => prepared !== undefined };
+  return { decide, warm, isPrepared: () => prepared };
 }

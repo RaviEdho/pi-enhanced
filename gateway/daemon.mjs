@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
-import { loadGatewayConfig } from "./runtime/config.mjs";
+import { loadGatewayConfig, watchGatewayConfig } from "./runtime/config.mjs";
 import { createCommandHandlers } from "./runtime/commands.mjs";
 import { createDiscordRestTransport } from "./runtime/discord-rest.mjs";
 import { createInteractionManager } from "./runtime/interactions.mjs";
@@ -20,6 +20,7 @@ const extensionRoot = realpathSync(fileURLToPath(new URL("../", import.meta.url)
 const { config, paths, piExecutable, piArgs, startReason } = loadGatewayConfig();
 const allowedUsers = new Set(config.allowedUserIds);
 const allowedChannels = new Set(config.allowedChannelIds);
+const closeConfigWatch = watchGatewayConfig({ configPath: paths.configPath, config, allowedUsers, allowedChannels });
 const discordTransport = createDiscordRestTransport();
 const client = new Client({
   rest: discordTransport.options,
@@ -49,6 +50,7 @@ const lifecycle = createLifecycle({
   sessions, interactions,
   closeTransport: discordTransport.close,
   closeCommands: () => commands.close(),
+  closeConfigWatch,
 });
 const commands = createCommandHandlers({
   client, config, configPath: paths.configPath,
@@ -56,7 +58,7 @@ const commands = createCommandHandlers({
 });
 const routeDecider = createRouteDecider({ config });
 const channelSessions = createChannelSessionRegistry({
-  sessionRoot: paths.sessionRoot, sessions, settings: config.channelSessions,
+  sessionRoot: paths.sessionRoot, sessions, getSettings: () => config.channelSessions,
 });
 const router = createMessageRouter({
   client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle,
