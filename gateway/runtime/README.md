@@ -32,7 +32,8 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
 | `agent-replies.mjs` | Send completed assistant text with ordered table-only images and text fallback. |
 | `table-renderer.mjs` | Parse top-level Markdown tables and render bounded, escaped SVG to PNG locally. |
-| `messages.mjs` | Split/send text, manage typing, resolve direct reply context, format bounded rich-preview text and recent conversation context, and safely download supported Discord CDN images. |
+| `messages.mjs` | Split/send text, manage typing, format bounded reply/embed/history context, and validate and package visual attachments. |
+| `attachments.mjs` | Download bounded Discord CDN uploads; import non-image files into the active workspace and format untrusted text previews. |
 | `threads.mjs` | Own thread registration, shared conversation keys, persistence, pruning, and generated-title watchers. |
 | `lifecycle.mjs` | Own PID/status files, process handlers, restart requests, draining, and replacement startup. |
 | `persistence.mjs` | Write private JSON files through temporary-file replacement. |
@@ -163,6 +164,19 @@ callbacks where commands and lifecycle depend on each other.
   thread sources and cross-server access. Different-participant
   steering revokes history for that run. Shared results can reach participants
   without source access and persist in sessions. Discovery uses the same IPC and active scope, only in server threads: fresh guild, roles, members and channels, current whitelist and both parties' channel permissions using the same channel types and voice Connect requirement; voice results have type `voice`. Names are untrusted, results are capped at 50 with explicit truncation. Channel names and IDs can also persist and be seen by all shared-thread participants. IPC is not an OS sandbox.
+- Import only the current accepted message's non-image attachments. Finish
+  conversation routing and get the session inside its queue before resolving cwd,
+  so a prior workspace handoff is respected. Auto routing starts a thread for
+  file imports without a classifier call; explicit modes and bot-reply affinity
+  still win. Use only Discord HTTPS attachment CDN URLs, with no redirects.
+  Bound file imports to four attempts, 10 MiB each, 20 MiB total and a shared
+  15-second download deadline, separately from image delivery. Save raw bytes in
+  a private, unique `.discord-uploads/upload-*` subdirectory with sanitized names
+  and exclusive writes. Reject symlinked import directories. Include relative
+  paths and bounded, JSON-quoted UTF-8 previews (up to 2 KiB per text file) as
+  untrusted data in the main agent's turn only, not in routing or title input.
+  Do not parse, extract, execute, or clean up saved uploads automatically. Failed
+  imports do not block a turn with text, reply context, or other usable uploads.
 - `discord_fetch_image` is a Discord-only, model-only read tool. Download directly
   inside the Pi child using `downloadPublicImage`, with the same public DNS pinning,
   HTTPS/port/credential restrictions, ten-second deadline, and three-redirect limit

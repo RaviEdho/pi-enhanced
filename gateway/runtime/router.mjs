@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
+import { formatDiscordFileContext, loadDiscordFiles, saveDiscordFiles } from "./attachments.mjs";
 import {
-  fetchRecentContextMessages, formatDiscordEmbedContext, getDiscordImageAttachments, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext, loadRecentContext,
-  sendText, startTyping, stripBotMention,
+  fetchRecentContextMessages, formatDiscordEmbedContext, hasDiscordReply, loadDiscordImages, loadDiscordReplyContext, loadRecentContext,
+  sendText, splitDiscordAttachments, startTyping, stripBotMention,
 } from "./messages.mjs";
 import { sendAgentReply } from "./agent-replies.mjs";
 import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
@@ -94,7 +95,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     return { afterId: last.messageId, skip: false };
   }
 
-  async function chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps }) {
+  async function chooseConversationTarget({ message, content, embedContext, attachments, isReply, loadContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps }) {
     const mode = turnConfig.channelReplies?.mode;
     if (mode !== "auto") {
       return { target: mode === "channel" ? "channel" : "thread", reason: "mode" };
@@ -102,13 +103,15 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     if (escalateFollowUps && continuePreviousChannelReply(defaultSessionKey, message.author.id)) {
       return { target: "thread", reason: "follow-up" };
     }
+    // Importing files writes to the workspace. No classifier call is needed.
+    if (attachments.files.length) return { target: "thread", reason: "file-import" };
     if (!routeDecider) return { target: "thread", reason: "router-unavailable" };
     const decision = await routeDecider.decide({
       content,
       embedContext,
       author: message.author.username,
       isReply,
-      imageCount: imageAttachments.length,
+      imageCount: attachments.images.length,
       loadContext, startedAt, routingConfig: turnConfig,
     });
     return { target: decision.target === "channel" ? "channel" : "thread", reason: decision.reason };
@@ -178,21 +181,18 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     seenMessages.add(message.id);
     if (seenMessages.size > 3000) seenMessages.delete(seenMessages.values().next().value);
 
-    const imageAttachments = getDiscordImageAttachments(message);
+    const attachments = splitDiscordAttachments(message);
     const isReply = hasDiscordReply(message);
     const contextBeforeId = isReply ? message.reference.messageId : message.id;
-    if (!content && imageAttachments.length === 0 && !isReply) {
-      const hasAttachments = (message.attachments?.size || 0) > 0;
-      await sendText(message.channel, hasAttachments
-        ? "I can read text and PNG, JPEG, GIF, or WebP image attachments. This message has no supported image or text."
-        : "Please send a text message or attach an image.", message.id);
+    if (!content && !attachments.images.length && !attachments.files.length && !isReply) {
+      await sendText(message.channel, "Please send a text message or attach a file.", message.id);
       return;
     }
     const acceptedAt = Date.now();
     // A save replaces nested settings rather than mutating them. Keep this
     // turn's routing/context/output choices together, even while queued.
     const turnConfig = { ...config };
-    const run = () => prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt, turnConfig);
+    const run = () => prepareRun(message, route, content, attachments, isReply, contextBeforeId, acceptedAt, turnConfig);
     // Serialize target selection, not agent execution. Concurrent classifier
     // reads must not assign later mentions before earlier activity is recorded.
     if (route.kind === "new-thread") {
@@ -202,7 +202,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     }
   }
 
-  async function prepareRun(message, route, content, imageAttachments, isReply, contextBeforeId, acceptedAt, turnConfig) {
+  async function prepareRun(message, route, content, attachments, isReply, contextBeforeId, acceptedAt, turnConfig) {
     const startedAt = Date.now();
     const channelReplies = turnConfig.channelReplies ?? {};
     const decidePerMessage = channelReplies.mode === "auto";
@@ -287,7 +287,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       // An explicit bot reply has stronger affinity than classifier/follow-up
       // routing, including when the saved mode would normally start a thread.
       const decision = linkedSessionKey ? { target: "channel", reason: "reply-session" }
-        : await chooseConversationTarget({ message, content, embedContext, imageAttachments, isReply, loadContext: loadRoutingContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps });
+        : await chooseConversationTarget({ message, content, embedContext, attachments, isReply, loadContext: loadRoutingContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps });
       if (decision.target === "channel" || typeof message.startThread !== "function") {
         if (decision.target !== "channel") log(`Cannot start a thread in channel ${message.channelId}; replying in the channel instead`);
         sessionKey = linkedSessionKey ?? defaultSessionKey;
@@ -357,19 +357,29 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
               cachedMessages: await getRecentMessages(),
             })
             : "";
-          const { images, skippedCount } = await loadDiscordImages(imageAttachments);
-          if (!content && images.length === 0 && !isReply) {
-            await sendText(target, "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images under 10 MB each.", replyToMessageId);
+          const uploads = attachments.files.length ? await loadDiscordFiles(attachments.files) : [];
+          const { images, skippedCount } = await loadDiscordImages(attachments.images);
+          // Resolve the current cwd inside the queue, after downloads so the
+          // not-yet-running session cannot be evicted while waiting on the CDN.
+          let session = uploads.length ? await sessions.get(sessionKey) : undefined;
+          const files = session ? saveDiscordFiles(uploads, session.cwd) : [];
+          if (!content && !images.length && !files.length && !isReply) {
+            await sendText(target, attachments.files.length
+              ? "I couldn't import any attachments. Check that the workspace is writable and the files are at most 10 MiB each."
+              : "I couldn't load any attached images. Try PNG, JPEG, GIF, or WebP images at most 10 MiB each.", replyToMessageId);
             return undefined;
           }
-          const messageContent = content || (isReply
-            ? "Please respond to the message I am replying to."
-            : "Please inspect the attached image(s) and describe what you see.");
+          const messageContent = content || [
+            isReply ? "Please respond to the message I am replying to." : undefined,
+            files.length ? "Please confirm which files were imported and briefly describe any text previews." : undefined,
+            images.length && !isReply ? "Please inspect the attached image(s) and describe what you see." : undefined,
+          ].filter(Boolean).join(" ");
           const imageNote = skippedCount > 0
             ? `\n\n[Gateway note: ${skippedCount} image attachment(s) could not be included. Analyze only the images attached to this prompt.]`
             : "";
-          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${embedContext}${replyContext}${recentContext}`;
-          const session = await sessions.get(sessionKey);
+          const fileContext = formatDiscordFileContext({ files, skippedCount: attachments.files.length - files.length });
+          const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${fileContext}${embedContext}${replyContext}${recentContext}`;
+          session ??= await sessions.get(sessionKey);
           // Initialize before the first user turn so inherited titles/old user
           // messages cannot win the automatic-title race in a forked session.
           if (route.kind === "new-thread" && !channelConversation) {

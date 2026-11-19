@@ -1,3 +1,4 @@
+import { downloadDiscordAttachment } from "./attachments.mjs";
 import { log, safeErrorName } from "./logging.mjs";
 
 const DISCORD_TEXT_LIMIT = 1900;
@@ -10,8 +11,7 @@ const MAX_CONTEXT_EMBED_FIELDS = 5;
 const MAX_DISCORD_IMAGES = 4;
 const MAX_DISCORD_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_DISCORD_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
-const DISCORD_IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
-const DISCORD_IMAGE_HOSTS = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
+const DISCORD_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const DISCORD_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 
 export function startTyping(channel) {
@@ -215,15 +215,19 @@ export async function loadRecentContext(channel, { beforeId, afterId, limit = 5,
   }
 }
 
-export function getDiscordImageAttachments(message) {
+export function splitDiscordAttachments(message) {
+  const images = [];
+  const files = [];
   const attachments = message.attachments && typeof message.attachments.values === "function"
-    ? Array.from(message.attachments.values())
+    ? message.attachments.values()
     : [];
-  return attachments.filter((attachment) => {
-    const contentType = typeof attachment.contentType === "string" ? attachment.contentType.toLowerCase() : "";
-    const extension = typeof attachment.name === "string" ? attachment.name.split(".").pop()?.toLowerCase() : "";
-    return contentType.startsWith("image/") || DISCORD_IMAGE_EXTENSIONS.has(extension);
-  });
+  for (const attachment of attachments) {
+    const contentType = typeof attachment.contentType === "string" ? attachment.contentType.toLowerCase().split(";", 1)[0].trim() : "";
+    const extension = typeof attachment.name === "string" && attachment.name.includes(".")
+      ? attachment.name.split(".").pop().toLowerCase() : "";
+    (DISCORD_IMAGE_TYPES.has(contentType) || DISCORD_IMAGE_EXTENSIONS.has(extension) ? images : files).push(attachment);
+  }
+  return { images, files };
 }
 
 export async function loadDiscordImages(attachments) {
@@ -255,62 +259,13 @@ export async function loadDiscordImages(attachments) {
 }
 
 export async function downloadDiscordImage(attachment, maxBytes) {
-  const url = new URL(attachment.url);
-  if (
-    url.protocol !== "https:" ||
-    !DISCORD_IMAGE_HOSTS.has(url.hostname) ||
-    (url.port && url.port !== "443") ||
-    (url.username || url.password) ||
-    !(url.pathname.startsWith("/attachments/") || url.pathname.startsWith("/ephemeral-attachments/"))
-  ) {
-    throw new Error("attachment URL is not a Discord CDN image");
-  }
-  if (Number.isFinite(attachment.size) && attachment.size > maxBytes) {
-    throw new Error("attachment exceeds the image size limit");
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DISCORD_IMAGE_DOWNLOAD_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      redirect: "error",
-    });
-    if (!response.ok) throw new Error(`Discord CDN returned HTTP ${response.status}`);
-    const contentLength = response.headers.get("content-length");
-    if (contentLength && Number(contentLength) > maxBytes) {
-      throw new Error("attachment exceeds the image size limit");
-    }
-    if (!response.body) throw new Error("Discord CDN returned an empty response");
-
-    const reader = response.body.getReader();
-    const chunks = [];
-    let byteLength = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        byteLength += value.byteLength;
-        if (byteLength > maxBytes) {
-          await reader.cancel().catch(() => undefined);
-          throw new Error("attachment exceeds the image size limit");
-        }
-        chunks.push(Buffer.from(value));
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const data = Buffer.concat(chunks, byteLength);
-    const mimeType = detectDiscordImageMimeType(data);
-    if (!mimeType) throw new Error("attachment is not a supported PNG, JPEG, GIF, or WebP image");
-    return {
-      content: { type: "image", data: data.toString("base64"), mimeType },
-      byteLength,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  const data = await downloadDiscordAttachment(attachment, maxBytes);
+  const mimeType = detectDiscordImageMimeType(data);
+  if (!mimeType) throw new Error("attachment is not a supported PNG, JPEG, GIF, or WebP image");
+  return {
+    content: { type: "image", data: data.toString("base64"), mimeType },
+    byteLength: data.length,
+  };
 }
 
 export function detectDiscordImageMimeType(data) {
