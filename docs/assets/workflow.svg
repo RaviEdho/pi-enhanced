@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 150" width="750" height="150" role="img" aria-labelledby="title desc">
+  <title id="title">From plan to commit in Pi</title>
+  <desc id="desc">Three connected steps: explore the code in plan mode, make changes in implement mode, and review a commit proposal.</desc>
+  <rect width="750" height="150" rx="14" fill="#152232"/>
+  <g fill="none" stroke="#58738a" stroke-width="2">
+    <path d="M52 40h479"/>
+    <path d="m173 36 5 4-5 4m244-8 5 4-5 4"/>
+  </g>
+  <g stroke-width="2" fill="#152232">
+    <circle cx="46" cy="40" r="16" stroke="#8de0cb"/>
+    <circle cx="290" cy="40" r="16" stroke="#9bc5ff"/>
+    <circle cx="534" cy="40" r="16" stroke="#ffce91"/>
+  </g>
+  <g text-anchor="middle" font-family="monospace" font-size="15" fill="#f1f5fc">
+    <text x="46" y="45">1</text><text x="290" y="45">2</text><text x="534" y="45">3</text>
+  </g>
+  <g font-family="monospace" font-size="23" font-weight="bold">
+    <text x="30" y="91" fill="#8de0cb">/plan</text>
+    <text x="274" y="91" fill="#9bc5ff">/implement</text>
+    <text x="518" y="91" fill="#ffce91">/commit</text>
+  </g>
+  <g font-family="sans-serif" font-size="18" fill="#d7e2ef">
+    <text x="30" y="121">Explore the code</text>
+    <text x="274" y="121">Make changes</text>
+    <text x="518" y="121">Review the proposal</text>
+  </g>
+</svg>
