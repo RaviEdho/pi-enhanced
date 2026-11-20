@@ -1,7 +1,7 @@
 {
   "name": "pi-enhanced",
   "version": "0.1.0",
-  "description": "Enhanced Pi extension package with providers, tools, and a persistent Discord agent gateway.",
+  "description": "Enhanced Pi extension package with providers, tools, and persistent Discord and WhatsApp gateways.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -49,10 +49,13 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "baileys": "7.0.0-rc14",
     "cron-parser": "^5.10.6",
     "discord.js": "^14.27.0",
     "luxon": "^3.7.2",
     "markdown-it": "^15.0.3",
+    "proper-lockfile": "4.1.2",
+    "qrcode": "1.5.4",
     "sharp": "^0.35.5",
     "undici": "^6.29.1"
   }

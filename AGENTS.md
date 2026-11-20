@@ -30,6 +30,8 @@ Upstream review checkpoints for the RTK-inspired compressor and FFF-inspired Sco
 - **Feedback (`tools/feedback/`)**: Native `ask_user` freeform input, three-choice selectors with custom answers, and sequential questionnaires; supports dismissal, non-interactive environments, signals/timeouts, and plan mode.
 - **Discord (`gateway/`)**: Detached bot with `/discord setup|configure|start|stop|teardown|status|logs` and menu; allowlisted DM/server routes, mention threads, per-channel or per-thread conversations, model-decided reply routing with deterministic escalation, bounded automatic recent-message context, full-tool Pi CLI sessions, shared thread history, isolated DM/user sessions, author identity, and participant-scoped approvals.
 
+- **WhatsApp (`gateway/whatsapp/`)**: Experimental detached Baileys gateway with local `/whatsapp` QR pairing and management, explicit phone allowlists, and private text DMs. Reuses Discord's Pi RPC/session runtime but not its history IPC, commands, or UI. Never log QR payloads or auth state.
+
 ### Directory map
 
 This map is a starting point, not an exhaustive or guaranteed-current inventory. Inspect the code for current files and responsibilities.
@@ -41,7 +43,8 @@ providers/                   Registration plus antigravity/, codex/, commandcode
   oauth-page.ts              Shared OAuth response pages
   <provider>/                Discovery/catalog, auth, plan rules, streaming, constants, types as applicable
 gateway/                     Discord commands/dialogs, storage, workspace handoff tool
-  daemon.mjs, runtime/       Detached entry point and routing/session/RPC/lifecycle modules
+  daemon.mjs, runtime/       Discord entry point, shared session/RPC, and Discord runtime modules
+  whatsapp/                   WhatsApp commands, detached daemon, auth, and DM adapter
 tools/
   git/                       Runners, inspection/proposal tools, prompts, dialogs, git helpers
   compressor/                Pipeline, parsers/, rules, sanitizer, recall, savings tracker

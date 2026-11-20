@@ -29,7 +29,7 @@ When you’re ready to make changes, use `/implement` with your instructions. Af
 | See what’s filling the context window | `/context` breaks down messages, tool output, and remaining space. |
 | Search without flooding the chat | Ask Pi to find a symbol or search the web. Terminal output is condensed; `/recall <id>` retrieves the original. |
 | Delegate a side task | `/subagent` starts an isolated task; `/jobs` shows background work. |
-| Work from Discord | Start with the [gateway setup guide](docs/discord.md). Only allow people you trust with your local files and shell. |
+| Work from chat | See the [Discord](docs/discord.md) and [WhatsApp](docs/whatsapp.md) gateway guides. Only allow people you trust with your local files and shell. |
 | Tune the extension | `/settings-enhanced` controls search, compression, session titles, telemetry, and more. |
 
 ## Guides
@@ -37,6 +37,7 @@ When you’re ready to make changes, use `/implement` with your instructions. Af
 - **[Providers and accounts](docs/providers.md)** — Sign-in, model selection, billing caveats, and failover for Google Antigravity, Command Code, Kenari, Token Harbor, InferHub (experimental), Ollama Cloud, OpenCode Go, and OpenAI Codex.
 - **[Terminal workflows and settings](docs/workflows.md)** — Plan mode, selective commits, pull requests, web search keys, and the settings reference.
 - **[Discord gateway](docs/discord.md)** — Bot permissions, shared threads, file uploads, schedules, and running the gateway at boot.
+- **[WhatsApp gateway](docs/whatsapp.md)** — Experimental QR pairing and allowlisted private text DMs with saved Pi conversations.
 
 ## Development
 

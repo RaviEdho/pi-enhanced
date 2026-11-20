@@ -13,7 +13,11 @@ import {
 
 /** One Pi child process and its newline-delimited RPC transport. */
 export class PiRpcSession {
-  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, seed, cwd, scheduled = false, scheduleTool, onWorkspaceChanged = () => {} }) {
+  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, seed, cwd, scheduled = false, scheduleTool, onWorkspaceChanged = () => {}, transport }) {
+    // Discord remains the default; other transports opt into their own UI and
+    // child context without enabling Discord tools or opening its history IPC.
+    this.transport = transport;
+    this.transportName = transport?.name ?? "Discord";
     this.historyOptions = { client, configPath, scheduleTool };
     this.scheduled = scheduled;
     this.initialCwd = cwd ?? config.cwd;
@@ -43,16 +47,18 @@ export class PiRpcSession {
     this.lastAssistantMessage = undefined;
     this.currentModel = undefined;
     this.lastUsedAt = Date.now();
-    this.ui = interactions.createSessionUi(this);
+    this.ui = transport ? transport.createSessionUi(this) : interactions.createSessionUi(this);
   }
 
   async start() {
-    const historyIpc = await createHistoryIpc({ ...this.historyOptions, session: this });
-    if (this.stopping) {
-      historyIpc.close();
-      throw new Error("Pi session is stopping");
+    if (!this.transport) {
+      const historyIpc = await createHistoryIpc({ ...this.historyOptions, session: this });
+      if (this.stopping) {
+        historyIpc.close();
+        throw new Error("Pi session is stopping");
+      }
+      this.historyIpc = historyIpc;
     }
-    this.historyIpc = historyIpc;
     mkdirSync(this.sessionDirectory, { recursive: true, mode: 0o700 });
     this.sessionDirectory = realpathSync(this.sessionDirectory);
     const saved = loadWorkspace(this.sessionDirectory);
@@ -62,7 +68,7 @@ export class PiRpcSession {
     try {
       // Validate the source first, so an unavailable target can still recover
       // the original conversation, even if no workspace.json was written yet.
-      pending = loadWorkspaceRequest(this.sessionDirectory, { validateTarget: false });
+      pending = this.transport ? undefined : loadWorkspaceRequest(this.sessionDirectory, { validateTarget: false });
       if (pending && pending.requestId !== this.appliedRequestId && (pending.previousCwd !== cwd || (saved && pending.sessionFile !== saved.sessionFile))) {
         throw new Error("Interrupted workspace switch does not match this conversation");
       }
@@ -131,20 +137,28 @@ export class PiRpcSession {
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_EXECUTABLE;
     delete agentEnvironment.PI_ENHANCED_DISCORD_PI_ARGS;
     delete agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD;
-    agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD = "1";
-    agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_PORT = String(this.historyIpc.port);
-    agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_TOKEN = this.historyIpc.token;
+    delete agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_PORT;
+    delete agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_TOKEN;
+    delete agentEnvironment.PI_ENHANCED_DISCORD_CWD_REQUEST_PATH;
+    delete agentEnvironment.PI_ENHANCED_DISCORD_CWD_TOKEN;
     agentEnvironment.PI_ENHANCED_EXTENSION_ROOT = this.extensionRoot;
-    agentEnvironment.PI_ENHANCED_DISCORD_CWD_REQUEST_PATH = join(this.sessionDirectory, "cwd-request.json");
-    agentEnvironment.PI_ENHANCED_DISCORD_CWD_TOKEN = this.cwdToken;
+    if (this.transport) {
+      Object.assign(agentEnvironment, this.transport.childEnvironment);
+    } else {
+      agentEnvironment.PI_ENHANCED_DISCORD_GATEWAY_CHILD = "1";
+      agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_PORT = String(this.historyIpc.port);
+      agentEnvironment.PI_ENHANCED_DISCORD_HISTORY_TOKEN = this.historyIpc.token;
+      agentEnvironment.PI_ENHANCED_DISCORD_CWD_REQUEST_PATH = join(this.sessionDirectory, "cwd-request.json");
+      agentEnvironment.PI_ENHANCED_DISCORD_CWD_TOKEN = this.cwdToken;
+    }
 
     const sessionArgs = [
       ...this.piArgs,
       "--mode", "rpc",
       "--session-dir", this.sessionDirectory,
       ...(forkFrom ? ["--fork", forkFrom] : sessionFile ? ["--session", sessionFile] : ["--continue"]),
-      "--approve",
-      "--append-system-prompt", [
+      this.transport ? "--no-approve" : "--approve",
+      "--append-system-prompt", this.transport?.systemPrompt ?? [
         "Discord conversation identity:",
         "Server threads are collaborative: all allowlisted participants in a thread share one conversation history, workspace, model, and thinking level. DMs remain separate.",
         "Each incoming Discord message is labeled by the gateway with its author's username and user ID. Use the user ID as the stable participant identity; usernames are labels and may change.",
@@ -309,6 +323,7 @@ export class PiRpcSession {
   }
 
   async notifyModelStatus(message) {
+    if (this.transport) return this.transport.notifyModelStatus(this.interaction, message);
     if (!this.interaction?.channel?.send) throw new Error("No Discord destination for a model notice");
     // Native notification delivery is ordered, ignores tool-visibility toggles,
     // and preserves private usage/commit UI behavior.
@@ -340,15 +355,15 @@ export class PiRpcSession {
       confirmedChange = `Automatically switched model: \`${modelLabel(previous)}\` → \`${modelLabel(target)}\` (configured default).`;
       this.rememberWorkspace();
       if (this.stopping) throw new Error("Pi session is stopping");
-      // Never issue the retry before Discord confirms delivery of the notice.
+      // Never issue the retry before the transport confirms delivery of the notice.
       await this.notifyModelStatus(`${confirmedChange} Retrying your request once.`);
       return { reported, switched: true };
     } catch (error) {
       if (this.stopping || this.forceStopped) throw error;
       log(`Automatic model fallback failed: ${safeErrorName(error)}`);
       return { reported, detail: confirmedChange
-        ? `${confirmedChange} Persistence or Discord delivery could not be confirmed, so the request was not retried.`
-        : "The automatic model switch or its Discord announcement could not be confirmed; the request was not retried." };
+        ? `${confirmedChange} Persistence or ${this.transportName} delivery could not be confirmed, so the request was not retried.`
+        : `The automatic model switch or its ${this.transportName} announcement could not be confirmed; the request was not retried.` };
     }
   }
 
@@ -434,7 +449,7 @@ export class PiRpcSession {
 
   async request(type, fields = {}, timeoutMs = 30_000) {
     if (!this.child || this.closed || !this.child.stdin.writable) throw new Error("Pi RPC process is unavailable");
-    const id = `discord-${process.pid}-${++this.counter}`;
+    const id = `${this.transportName.toLowerCase()}-${process.pid}-${++this.counter}`;
     const response = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
@@ -566,7 +581,7 @@ export class PiRpcSession {
               // Accepted prompts/images already live in Pi history. Rejected
               // prompts do not: preserve their original payload for the retry.
               if (accepted.success) {
-                message = "[Gateway note: The previous model was unavailable before any tool work. The gateway switched to its configured default model and notified the user. Answer the pending Discord request above using the existing conversation context.]";
+                message = `[Gateway note: The previous model was unavailable before any tool work. The gateway switched to its configured default model and notified the user. Answer the pending ${this.transportName} request above using the existing conversation context.]`;
                 images = [];
               }
               continue;
@@ -581,7 +596,7 @@ export class PiRpcSession {
         }
         let pending;
         try {
-          pending = loadWorkspaceRequest(this.sessionDirectory);
+          pending = this.transport ? undefined : loadWorkspaceRequest(this.sessionDirectory);
         } catch (error) {
           clearWorkspaceRequest(this.sessionDirectory);
           throw error;

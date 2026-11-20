@@ -10,6 +10,16 @@ ID and process start ticks to reject recycled PIDs. There is no build step or
 TypeScript loader in the background process.
 Importing them does not connect to Discord, spawn Pi, or install process handlers.
 
+## Shared Pi runtime
+
+WhatsApp reuses `sessions.mjs`, `pi-rpc.mjs`, and saved workspace metadata through
+`../whatsapp/pi-ui.mjs`. With no transport adapter, Pi RPC still starts Discord
+history IPC, sets Discord child environment variables, and uses the existing
+Discord interaction UI. The WhatsApp adapter supplies its own UI factory, system
+prompt, child marker, and model-notice delivery. It does not enable Discord IPC,
+workspace handoffs, or tools. Keep transport authorization and delivery outside
+session persistence and RPC framing.
+
 ## Responsibilities and state ownership
 
 | Module | Responsibility |
@@ -252,6 +262,11 @@ callbacks where commands and lifecycle depend on each other.
   default falls back to the origin only if no home is set. Old rows without a
   delivery value stay on their origin. A scheduled agent uses the normal tool set
   but never presents an interactive prompt: dismiss it and report any blocker.
+  Shell jobs share Agent permissions, capture and revalidate the workspace, and
+  bypass Pi and its run slots. The scheduler allows up to two concurrent shell
+  jobs within its four-job cap. Post only status after reauthorization; discard
+  process output and omit commands from job listings. Stop active shells during
+  immediate shutdown and wait for their cleanup before the daemon exits.
 - Poll only while Discord is ready and the lifecycle is accepting new work. Save
   the next occurrence and claim atomically before invoking a job. Coalesce missed
   occurrences into at most one catch-up, keep the phase of fixed intervals, never
@@ -262,11 +277,6 @@ callbacks where commands and lifecycle depend on each other.
   override use `channelSessions.timezone`, even if rollover is disabled. Resolve
   `tomorrow HH:MM` by the local calendar date, not by adding 24 hours. Reject local
   times skipped or repeated by DST; an explicit offset disambiguates a repeated
-  Shell jobs share Agent permissions, capture and revalidate the workspace, and
-  bypass Pi and its run slots. The scheduler allows up to two concurrent shell
-  jobs within its four-job cap. Post only status after reauthorization; discard
-  process output and omit commands from job listings. Stop active shells during
-  immediate shutdown and wait for their cleanup before the daemon exits.
   time. Persist the effective timezone and run time so settings changes do not
   shift existing jobs.
 - A mention in an allowlisted server channel starts either a thread or a direct channel reply,

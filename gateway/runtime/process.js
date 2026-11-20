@@ -1,4 +1,5 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 export const SYSTEMD_RESTART_EXIT = 75;
 
@@ -14,6 +15,22 @@ export function gatewayPidRecord(pid, startedAt) {
   let identity;
   try { if (process.platform === "linux") identity = linuxProcessIdentity(pid); } catch { /* Process has already exited. */ }
   return { pid, startedAt, identity };
+}
+
+export function resolvePiInvocation() {
+  const entrypoint = process.argv[1];
+  if (entrypoint && existsSync(entrypoint) && /\.(?:mjs|cjs|js)$/i.test(entrypoint)) {
+    return { executable: process.execPath, args: [resolve(entrypoint)] };
+  }
+  const pathEntries = (process.env.PATH || "").split(process.platform === "win32" ? ";" : ":");
+  const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const directory of pathEntries) {
+    for (const extension of extensions) {
+      const candidate = resolve(directory, `pi${extension}`);
+      if (existsSync(candidate)) return { executable: candidate, args: [] };
+    }
+  }
+  return undefined;
 }
 
 export function readGatewayPid(path) {

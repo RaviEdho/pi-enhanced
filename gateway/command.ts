@@ -19,7 +19,7 @@ import { DiscordConfirmationDialog, type DiscordConfirmationDialogOptions } from
 import { DiscordInputDialog } from "./input-dialog.js";
 import { withDiscordDialogSession } from "./dialog-session.js";
 import { selectDiscordModel } from "./model-dialog.js";
-import { gatewayPidRecord, readGatewayPid } from "./runtime/process.js";
+import { gatewayPidRecord, readGatewayPid, resolvePiInvocation } from "./runtime/process.js";
 import { createGatewayBootService } from "./systemd.js";
 import { discordSelectItems, DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
 import { runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
@@ -1144,23 +1144,6 @@ function waitForSpawn(child: ChildProcess): Promise<void> {
     child.once("spawn", () => resolveSpawn());
     child.once("error", (error) => rejectSpawn(error));
   });
-}
-
-function resolvePiInvocation(): { executable: string; args: string[] } | undefined {
-  const entrypoint = process.argv[1];
-  if (entrypoint && existsSync(entrypoint) && /\.(?:mjs|cjs|js)$/i.test(entrypoint)) {
-    return { executable: process.execPath, args: [resolve(entrypoint)] };
-  }
-
-  const pathEntries = (process.env.PATH || "").split(process.platform === "win32" ? ";" : ":");
-  const extensions = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
-  for (const directory of pathEntries) {
-    for (const extension of extensions) {
-      const candidate = resolve(directory, `pi${extension}`);
-      if (existsSync(candidate)) return { executable: candidate, args: [] };
-    }
-  }
-  return undefined;
 }
 
 async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
