@@ -7,7 +7,7 @@ import { gatewayPidRecord, SYSTEMD_RESTART_EXIT } from "./process.js";
 import { onceExit } from "./pi-rpc.mjs";
 
 /** Process status, graceful draining, and replacement-daemon handoff. */
-export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands, closeConfigWatch = () => {}, closeTransport = () => {} }) {
+export function createLifecycle({ client, config, paths, daemonPath, sessions, interactions, closeCommands, closeScheduler = () => {}, closeConfigWatch = () => {}, closeTransport = () => {} }) {
   const { pidPath, statusPath, restartRequestPath, logPath } = paths;
   let activeMessageHandlers = 0;
   let pendingMessageTasks = 0;
@@ -89,6 +89,7 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     const failureMessage = exitCode !== 0 ? gatewayStatus.lastError || "Gateway process terminated unexpectedly." : undefined;
     clearInterval(idleCleanupTimer);
     clearInterval(restartRequestPollTimer);
+    closeScheduler();
     closeConfigWatch();
     if (!restart) updateStatus("stopping", { lastError: undefined });
     log(`Shutting down (${reason})`);

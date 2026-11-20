@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { createFreshConversation, loadWorkspace, validateConversationFile, validateForkSource } from "./workspace.mjs";
+import { createFreshConversation, loadWorkspace, validateConversationFile, validateForkSource, validateWorkspaceDirectory } from "./workspace.mjs";
 
 /** Owns session affinity, per-conversation ordering, and global run slots. */
 export function createSessionManager({
@@ -14,6 +14,7 @@ export function createSessionManager({
 }) {
   const sessions = new Map();
   const openingSessions = new Map();
+  const freshSessions = new Set();
   const sessionQueues = new Map();
   const seededSources = new Map();
   const runQueue = [];
@@ -105,9 +106,9 @@ export function createSessionManager({
     }
   }
 
-  async function stopSession(session) {
+  async function stopSession(session, force = false) {
     onSessionClosed(session);
-    await session.stop();
+    await session.stop({ force });
   }
 
   async function get(key) {
@@ -153,6 +154,44 @@ export function createSessionManager({
     }
   }
 
+  function workspaceFor(key, fallback) {
+    const saved = key ? loadWorkspace(sessionDirectoryFor(key)) : undefined;
+    return validateWorkspaceDirectory(saved?.cwd ?? sessions.get(key)?.cwd ?? fallback);
+  }
+
+  /** Run inside an existing global slot, without opening/resuming a conversation. */
+  async function withFreshSession(cwd, task, { timeoutMs = 10 * 60_000 } = {}) {
+    assertOpen();
+    mkdirSync(sessionRoot, { recursive: true, mode: 0o700 });
+    const directory = mkdtempSync(join(sessionRoot, "scheduled-"));
+    let session;
+    const timeout = new AbortController();
+    const timer = setTimeout(() => {
+      timeout.abort();
+      if (session) void session.stop({ force: true }).catch(() => undefined);
+    }, timeoutMs);
+    timer.unref();
+    try {
+      session = createSession(directory, { cwd, scheduled: true });
+      freshSessions.add(session);
+      await session.start();
+      assertOpen();
+      timeout.signal.throwIfAborted();
+      return await task(session, timeout.signal);
+    } catch (error) {
+      if (timeout.signal.aborted) return { outcome: "timed out" };
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      try {
+        if (session) await stopSession(session);
+      } finally {
+        freshSessions.delete(session);
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  }
+
   async function stopRunning(key) {
     const session = sessions.get(key);
     if (!session || session.closed || !session.running) return false;
@@ -194,6 +233,8 @@ export function createSessionManager({
     seed,
     getForkSource,
     prepareFresh,
+    workspaceFor,
+    withFreshSession,
     canResume,
     hasWorkFor: (key) => openingSessions.has(key) || sessionQueues.has(key) || Boolean(sessions.get(key)?.running),
     peek: (key) => sessions.get(key),
@@ -206,7 +247,10 @@ export function createSessionManager({
       if (closePromise) return closePromise;
       closing = true;
       for (const waiter of runQueue.splice(0)) waiter.reject(new Error("Pi session manager is stopping"));
-      closePromise = Promise.all([...sessions.values()].map(stopSession)).then(() => sessions.clear());
+      closePromise = Promise.all([
+        ...[...sessions.values()].map((session) => stopSession(session)),
+        ...[...freshSessions].map((session) => stopSession(session, true)),
+      ]).then(() => sessions.clear());
       return closePromise;
     },
   };

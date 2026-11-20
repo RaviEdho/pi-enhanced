@@ -11,7 +11,22 @@ import { getThreadSessionKey } from "./threads.mjs";
 const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_MODEL_SESSION_KEY = "gateway:default-model-catalog";
 
-export function createCommandHandlers({ client, config, configPath, allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig }) {
+function buildScheduleCommand() {
+  return new SlashCommandBuilder().setName("schedule").setDescription("Manage scheduled reminders and Pi agent jobs in this conversation")
+    .addSubcommand((sub) => sub.setName("create").setDescription("Schedule a reminder or a fresh Pi agent run")
+      .addStringOption((opt) => opt.setName("kind").setDescription("A plain reminder or an unattended Pi task").setRequired(true)
+        .addChoices({ name: "Reminder", value: "reminder" }, { name: "Agent", value: "agent" }))
+      .addStringOption((opt) => opt.setName("when").setDescription("in 10m, tomorrow 05:00, ISO timestamp, every 1h, or five-field cron").setRequired(true).setMaxLength(120))
+      .addStringOption((opt) => opt.setName("text").setDescription("Reminder text or complete instructions for a fresh agent session").setRequired(true).setMaxLength(1800))
+      .addStringOption((opt) => opt.setName("timezone").setDescription("Override the gateway timezone for a local time or cron").setMaxLength(80))
+      .addStringOption((opt) => opt.setName("delivery").setDescription("default (home if set), here, home, dm, or an allowed channel ID").setMaxLength(20)))
+    .addSubcommand((sub) => sub.setName("list").setDescription("Privately list your jobs and recent outcomes in this conversation")
+      .addIntegerOption((opt) => opt.setName("page").setDescription("Page number").setMinValue(1).setMaxValue(50)))
+    .addSubcommand((sub) => sub.setName("cancel").setDescription("Cancel future runs of a job you own in this conversation")
+      .addStringOption((opt) => opt.setName("id").setDescription("Job ID from /schedule list").setRequired(true).setMinLength(36).setMaxLength(36)));
+}
+
+export function createCommandHandlers({ client, config, configPath, allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig, scheduledJobs }) {
   const pendingDiscordCommands = new Map();
 
   async function registerSlashCommands(readyClient) {
@@ -76,13 +91,15 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
             .setDescription("Search available thinking levels")
             .setRequired(true)
             .setAutocomplete(true)),
-      ].map((command) => command.toJSON());
-      await readyClient.application?.commands.set(commands);
+      ];
+      if (scheduledJobs) commands.push(buildScheduleCommand());
+      const definitions = commands.map((command) => command.toJSON());
+      await readyClient.application?.commands.set(definitions);
 
       // Keep these as global commands only; registering both scopes makes Discord
       // display duplicate entries. Remove guild-scoped copies created by older versions,
       // while preserving any unrelated commands registered directly in those guilds.
-      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit", "git", "stop", "steer", "usage"]);
+      const gatewayCommandNames = new Set(["sethome", "model", "thinking", "reasoning", "commit", "git", "stop", "steer", "usage", "schedule"]);
       for (const guild of readyClient.guilds.cache.values()) {
         try {
           const guildCommands = await guild.commands.fetch();
@@ -160,6 +177,10 @@ export function createCommandHandlers({ client, config, configPath, allowedUsers
   }
 
   async function handleChatInputCommand(interaction) {
+    if (interaction.commandName === "schedule" && scheduledJobs) {
+      await lifecycle.trackTask(scheduledJobs.handleCommand(interaction));
+      return;
+    }
     if (interaction.commandName === "usage") {
       await lifecycle.trackTask(handleUsageCommand(interaction));
       return;

@@ -13,15 +13,17 @@ import {
 
 /** One Pi child process and its newline-delimited RPC transport. */
 export class PiRpcSession {
-  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, seed, onWorkspaceChanged = () => {} }) {
-    this.historyOptions = { client, configPath };
+  constructor(sessionDirectory, { config, piExecutable, piArgs, interactions, extensionRoot, client, configPath, seed, cwd, scheduled = false, scheduleTool, onWorkspaceChanged = () => {} }) {
+    this.historyOptions = { client, configPath, scheduleTool };
+    this.scheduled = scheduled;
+    this.initialCwd = cwd ?? config.cwd;
     this.sessionDirectory = sessionDirectory;
     this.config = config;
     this.piExecutable = piExecutable;
     this.piArgs = piArgs;
     this.extensionRoot = extensionRoot;
     this.onWorkspaceChanged = onWorkspaceChanged;
-    this.cwd = config.cwd;
+    this.cwd = this.initialCwd;
     this.sessionFile = undefined;
     this.appliedRequestId = undefined;
     this.workspaceChangeNotice = undefined;
@@ -54,7 +56,7 @@ export class PiRpcSession {
     mkdirSync(this.sessionDirectory, { recursive: true, mode: 0o700 });
     this.sessionDirectory = realpathSync(this.sessionDirectory);
     const saved = loadWorkspace(this.sessionDirectory);
-    const cwd = saved?.cwd || validateWorkspaceDirectory(this.config.cwd);
+    const cwd = saved?.cwd || validateWorkspaceDirectory(this.scheduled ? this.initialCwd : this.config.cwd);
     this.appliedRequestId = saved?.appliedRequestId;
     let pending;
     try {
@@ -158,6 +160,10 @@ export class PiRpcSession {
         `Read ${JSON.stringify(join(this.extensionRoot, "AGENTS.md"))} before modifying the extension's code.`,
         "The extension root is also available as PI_ENHANCED_EXTENSION_ROOT.",
         "Use set_working_directory when the user's task clearly targets another project; shell cd and absolute file paths do not update the session cwd used by /commit.",
+        ...(this.scheduled ? [
+          "This is an unattended scheduled run. Do not treat its schedule as approval for actions that require interactive approval. Interactive prompts will be dismissed; report anything that needs input instead of guessing. Do not create or manage schedules from this run.",
+          "The gateway closes this session once your turn settles. Run delegated work synchronously or wait for it to finish before responding.",
+        ] : []),
       ].join("\n"),
     ];
     const selectedModel = model || (!sessionFile && !forkFrom ? this.config.model : undefined);
@@ -398,9 +404,13 @@ export class PiRpcSession {
         this.noReplyCompleted = false;
         this.lastRunTools.add(record.toolName);
         if (record.toolName === "discord_send_image") this.imageToolCalls?.add(record.toolCallId);
+        if (record.toolName === "discord_schedule" && !record.parentToolCallId) this.scheduleToolCalls?.add(record.toolCallId);
       }
       if (record.type === "tool_execution_end" && record.toolName === "discord_send_image") {
         this.imageToolCalls?.delete(record.toolCallId);
+      }
+      if (record.type === "tool_execution_end" && record.toolName === "discord_schedule") {
+        this.scheduleToolCalls?.delete(record.toolCallId);
       }
       // Invalid/unknown calls may emit only an end event, without a start.
       // They still count as work/errors that silence must not conceal.
@@ -482,6 +492,9 @@ export class PiRpcSession {
     this.lastAssistantMessage = undefined;
     this.lastRunTools = undefined;
     this.imageToolCalls = new Set();
+    this.scheduleToolCalls = new Set();
+    this.scheduledFailed = false;
+    this.scheduledPromptDismissed = false;
     this.sentImageCount = 0;
     this.noReplyCallId = undefined;
     this.noReplyApprovedId = undefined;
@@ -531,6 +544,7 @@ export class PiRpcSession {
           }
           const settled = await settledPromise;
           if (settled.aborted || this.lastAssistantMessage?.stopReason === "aborted") {
+            if (this.scheduled) this.scheduledFailed = true;
             clearWorkspaceRequest(this.sessionDirectory);
             return "The agent run was cancelled.";
           }
@@ -540,6 +554,10 @@ export class PiRpcSession {
           this.rememberWorkspace();
           const failure = modelFailure(this.lastAssistantMessage, this.currentModel);
           const text = formatModelFailure(failure);
+          if (this.scheduled) {
+            this.scheduledFailed = true;
+            return text;
+          }
           if (failure.unavailable && !fallbackUsed && !interaction.workflow && !this.lastRunTools?.size && !this.publicOutputStarted) {
             const fallback = await this.fallbackToDefault(failure);
             if (fallback.switched) {
@@ -608,6 +626,7 @@ export class PiRpcSession {
       await this.ui.flushCommitMessageEdits();
       await this.ui.clearStatusMessages();
       this.imageToolCalls?.clear();
+      this.scheduleToolCalls?.clear();
       this.interaction = undefined;
       this.turnConfig = undefined;
       this.running = false;

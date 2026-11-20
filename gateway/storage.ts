@@ -87,6 +87,7 @@ export interface DiscordGatewayPaths {
   log: string;
   sessions: string;
   threads: string;
+  schedules: string;
   restartRequest: string;
 }
 
@@ -101,6 +102,7 @@ export function getDiscordGatewayPaths(): DiscordGatewayPaths {
     log: join(directory, "gateway.log"),
     sessions: join(directory, "sessions"),
     threads: join(directory, "threads.json"),
+    schedules: join(directory, "schedules.json"),
     restartRequest: join(directory, "restart-request.json"),
   };
 }

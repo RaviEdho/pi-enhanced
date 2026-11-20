@@ -6,13 +6,14 @@ let commandModulePromise: Promise<typeof import("./command.js")> | undefined;
 
 export async function registerDiscordGateway(pi: ExtensionAPI): Promise<void> {
   if (process.env.PI_ENHANCED_DISCORD_GATEWAY_CHILD === "1") {
-    const [{ createDiscordGatewayRestartTool }, { createWorkingDirectoryTool }, { createDiscordHistoryTool, createDiscordListChannelsTool }, { createDiscordNoReplyTool }, { createDiscordSendImageTool }, { createDiscordFetchImageTool }] = await Promise.all([
+    const [{ createDiscordGatewayRestartTool }, { createWorkingDirectoryTool }, { createDiscordHistoryTool, createDiscordListChannelsTool }, { createDiscordNoReplyTool }, { createDiscordSendImageTool }, { createDiscordFetchImageTool }, { createDiscordScheduleTool }] = await Promise.all([
       import("./restart-tool.js"),
       import("./working-directory-tool.js"),
       import("./history-tool.js"),
       import("./no-reply-tool.js"),
       import("./send-image-tool.js"),
       import("./fetch-image-tool.js"),
+      import("./schedule-tool.js"),
     ]);
     pi.registerTool(createDiscordGatewayRestartTool());
     pi.registerTool(createWorkingDirectoryTool());
@@ -21,6 +22,7 @@ export async function registerDiscordGateway(pi: ExtensionAPI): Promise<void> {
     pi.registerTool(createDiscordNoReplyTool());
     pi.registerTool(createDiscordSendImageTool());
     pi.registerTool(createDiscordFetchImageTool());
+    pi.registerTool(createDiscordScheduleTool());
     pi.on("before_agent_start", (event, ctx) => {
       if (!event.systemPromptOptions) return;
       const guidelines = event.systemPromptOptions.promptGuidelines ??= [];

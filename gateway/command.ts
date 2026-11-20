@@ -23,6 +23,7 @@ import { gatewayPidRecord, readGatewayPid } from "./runtime/process.js";
 import { createGatewayBootService } from "./systemd.js";
 import { discordSelectItems, DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
 import { runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
+import { timezoneLabel, timezoneOffsetGroups } from "./timezones.js";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_DISCORD_CHANNEL_SESSIONS,
@@ -730,6 +731,35 @@ function resetHourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
+async function selectGatewayTimezone(ctx: ExtensionCommandContext, current: string): Promise<string | undefined> {
+  const groups = timezoneOffsetGroups(current);
+  const currentGroup = groups.find((group) => group.zones.some(({ id }) => id === current));
+  let selectedOffset = currentGroup?.offset;
+  while (true) {
+    selectedOffset = await selectDiscordOption(ctx, {
+      title: "Timezone · Choose a UTC offset",
+      description: "Offsets are shown for now. The city you choose follows its local time rules, including daylight saving.",
+      options: groups.map(({ offset, label }) => ({ value: offset, label, current: offset === currentGroup?.offset })),
+      selectedOption: selectedOffset,
+    });
+    const group = groups.find(({ offset }) => offset === selectedOffset);
+    if (!group) return;
+
+    const cityCounts = new Map<string, number>();
+    for (const { city } of group.zones) cityCounts.set(city, (cityCounts.get(city) ?? 0) + 1);
+    const zone = await selectDiscordOption(ctx, {
+      title: `Timezone · ${group.offset} · Choose a city`,
+      options: group.zones.map(({ id, city }) => ({
+        value: id,
+        label: cityCounts.get(city) === 1 ? city : `${city} (${id})`,
+        description: id === city ? undefined : id,
+        current: id === current,
+      })),
+    });
+    if (zone !== undefined) return zone;
+  }
+}
+
 async function configureChannelSessions(ctx: ExtensionCommandContext): Promise<void> {
   await runDiscordSettingsPage(ctx, {
     title: "Channel sessions",
@@ -745,18 +775,21 @@ async function configureChannelSessions(ctx: ExtensionCommandContext): Promise<v
       }
       saveGatewayConfig(ctx, config, { channelSessions: next }, "Channel session settings saved.");
     };
-    const edit = async (field: "timezone" | "resetHour" | "idleHours", title: string, instruction: string) => {
+    const edit = async (field: "resetHour" | "idleHours", title: string, instruction: string) => {
       const value = await promptDiscordInput(ctx, { title, instruction, initialValue: String(current[field]), placeholder: "" });
       if (value === undefined) return;
-      const next = field === "timezone" ? value.trim() : value.trim() ? Number(value) : Number.NaN;
+      const next = value.trim() ? Number(value) : Number.NaN;
       if (next !== current[field]) save({ ...current, [field]: next });
     };
     return [
       toggleSetting("rollover", "Overnight rollover", current.enabled,
         "Rotate the default session daily without deleting older reply-linked sessions.", (enabled) => save({ ...current, enabled })),
-      openSetting("input", "timezone", "Timezone", current.timezone,
-        `Use an explicit IANA timezone. The default is the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}).`,
-        () => edit("timezone", "Timezone", "IANA timezone, e.g. Asia/Jakarta or UTC.")),
+      openSetting("picker", "timezone", "Timezone", timezoneLabel(current.timezone),
+        `Sets the local timezone for rollover and the default for new scheduled jobs. If unset, uses the machine timezone (${DEFAULT_DISCORD_CHANNEL_SESSIONS.timezone}).`,
+        async () => {
+          const timezone = await selectGatewayTimezone(ctx, current.timezone);
+          if (timezone !== undefined && timezone !== current.timezone) save({ ...current, timezone });
+        }),
       openSetting("input", "reset-hour", "Reset hour", resetHourLabel(current.resetHour),
         "Local hour at which each day's rollover eligibility is evaluated.",
         () => edit("resetHour", "Reset hour", "Whole hour in the selected timezone (0–23).")),
@@ -1144,7 +1177,7 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
   const approved = await confirmDiscordAction(ctx, {
     title: "Remove Discord Configuration?",
     content: [
-      "This stops the gateway, removes its boot service if installed, and deletes the locally saved bot token and configuration.",
+      "This stops the gateway, removes its boot service if installed, and deletes the saved bot token, configuration, and scheduled jobs.",
       "Conversation sessions and logs are kept.",
       "This does not revoke the token in Discord; revoke it separately in the Developer Portal if needed.",
     ],
@@ -1168,8 +1201,9 @@ async function teardownGateway(ctx: ExtensionCommandContext): Promise<void> {
   }
 
   if (existsSync(paths.pid)) unlinkSync(paths.pid);
+  if (existsSync(paths.schedules)) unlinkSync(paths.schedules);
   unlinkSync(paths.config);
-  notify(ctx, `Discord gateway stopped and local bot configuration removed. Conversation sessions remain at ${paths.sessions}.`, "info");
+  notify(ctx, `Discord gateway stopped and local bot configuration and schedules removed. Conversation sessions remain at ${paths.sessions}.`, "info");
 }
 
 async function restartGateway(ctx: ExtensionCommandContext): Promise<void> {

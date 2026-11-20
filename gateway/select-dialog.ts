@@ -10,6 +10,7 @@ import {
 
 interface DiscordSelectOption {
   label: string;
+  value?: string;
   description?: string;
   current?: boolean;
 }
@@ -28,7 +29,7 @@ export function currentChoiceLabel(label: string, current: boolean): string {
 export function discordSelectItems(options: DiscordSelectDialogOptions) {
   return options.options.map((option) => typeof option === "string"
     ? { value: option, label: option }
-    : { value: option.label, label: currentChoiceLabel(option.label, !!option.current), description: option.description });
+    : { value: option.value ?? option.label, label: currentChoiceLabel(option.label, !!option.current), description: option.description });
 }
 
 /** A plain choice or action picker; settings pages have their own native SettingsList. */

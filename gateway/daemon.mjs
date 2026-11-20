@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 import { loadGatewayConfig, watchGatewayConfig } from "./runtime/config.mjs";
@@ -10,6 +11,7 @@ import { log, safeErrorName, summarizeDiscordError } from "./runtime/logging.mjs
 import { PiRpcSession } from "./runtime/pi-rpc.mjs";
 import { createMessageRouter } from "./runtime/router.mjs";
 import { createRouteDecider } from "./runtime/route-decider.mjs";
+import { createScheduledJobs } from "./runtime/scheduled-jobs.mjs";
 import { createSessionManager } from "./runtime/sessions.mjs";
 import { createChannelSessionRegistry } from "./runtime/channel-sessions.mjs";
 import { createThreadRegistry } from "./runtime/threads.mjs";
@@ -38,7 +40,8 @@ const sessions = createSessionManager({
   sessionRoot: paths.sessionRoot,
   createSession: (directory, options = {}) => new PiRpcSession(directory, {
     config, piExecutable, piArgs, interactions, extensionRoot, client, configPath: paths.configPath,
-    seed: options.seed,
+    seed: options.seed, cwd: options.cwd, scheduled: options.scheduled,
+    scheduleTool: (request) => scheduledJobs.handleTool(request),
     onWorkspaceChanged: (session) => commands.cancelSession(session),
   }),
   onSessionClosed: (session) => commands.cancelSession(session),
@@ -49,19 +52,24 @@ const lifecycle = createLifecycle({
   sessions, interactions,
   closeTransport: discordTransport.close,
   closeCommands: () => commands.close(),
+  closeScheduler: () => scheduledJobs.close(),
   closeConfigWatch: () => configWatch.close(),
 });
 const configWatch = watchGatewayConfig({
   configPath: paths.configPath, config, allowedUsers, allowedChannels, onReload: lifecycle.recordConfigReload,
 });
-const commands = createCommandHandlers({
-  client, config, configPath: paths.configPath,
-  allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig: configWatch.reload,
-});
-const routeDecider = createRouteDecider({ config });
 const channelSessions = createChannelSessionRegistry({
   sessionRoot: paths.sessionRoot, sessions, getSettings: () => config.channelSessions,
 });
+const scheduledJobs = createScheduledJobs({
+  client, configPath: paths.configPath, path: join(dirname(paths.configPath), "schedules.json"),
+  sessions, lifecycle, threads, channelSessions,
+});
+const commands = createCommandHandlers({
+  client, config, configPath: paths.configPath,
+  allowedUsers, allowedChannels, threads, sessions, lifecycle, reloadConfig: configWatch.reload, scheduledJobs,
+});
+const routeDecider = createRouteDecider({ config });
 const router = createMessageRouter({
   client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle,
   routeDecider, channelSessions,
@@ -70,6 +78,7 @@ const router = createMessageRouter({
 client.on("clientReady", (readyClient) => {
   lifecycle.updateStatus("ready", { botTag: readyClient.user.tag, lastError: undefined });
   log(`Connected as ${readyClient.user.tag}`);
+  scheduledJobs.start();
   void commands.registerSlashCommands(readyClient);
   void lifecycle.sendHomeNotification(startReason === "start"
     ? "Discord gateway started and is online."

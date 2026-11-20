@@ -15,12 +15,15 @@ export async function discordRequest(params: object, signal?: AbortSignal, opera
   const result = await new Promise<string>((resolve, reject) => {
     const socket = createConnection({ host: "127.0.0.1", port });
     let data = "";
+    socket.setEncoding("utf8");
     const abort = () => socket.destroy(new Error("History request cancelled."));
     if (signal?.aborted) { socket.destroy(); reject(new Error("History request cancelled.")); return; }
     signal?.addEventListener("abort", abort, { once: true });
-    socket.setTimeout(timeoutMs, () => socket.destroy(new Error("Discord request timed out; check the conversation before retrying an upload.")));
+    socket.setTimeout(timeoutMs, () => socket.destroy(new Error(operation === "schedule"
+      ? "Discord schedule request timed out; list jobs before retrying."
+      : "Discord request timed out; check the conversation before retrying an upload.")));
     socket.on("connect", () => socket.write(JSON.stringify({ ...params, ...(operation ? { operation } : {}), token }) + "\n"));
-    socket.on("data", (chunk) => { data += chunk.toString("utf8"); if (data.length > 100_000) socket.destroy(new Error("History response too large.")); });
+    socket.on("data", (chunk) => { data += chunk; if (data.length > 100_000) socket.destroy(new Error("History response too large.")); });
     socket.on("error", reject);
     socket.on("close", () => { signal?.removeEventListener("abort", abort); if (data) resolve(data); else reject(new Error("History request failed.")); });
   });

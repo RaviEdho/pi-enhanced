@@ -29,6 +29,8 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
+| `scheduled-jobs.mjs` | Authorize schedule commands and tools, keep agent runs scoped to the origin, and resolve and reauthorize notification destinations. |
+| `schedule-time.mjs`, `scheduler.mjs` | Parse one-time, interval, and timezone-aware cron schedules; own private storage, polling, durable claims, cancellation, and bounded outcomes. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
 | `agent-replies.mjs` | Send completed assistant text with ordered table-only images and text fallback. |
 | `table-renderer.mjs` | Parse top-level Markdown tables and render bounded, escaped SVG to PNG locally. |
@@ -133,8 +135,8 @@ callbacks where commands and lifecycle depend on each other.
   anchor it before the incoming message. The target is quoted separately and is not
   part of the history count. Exclude the anchor/current/future and own-bot messages.
   For non-replies, keep a per-conversation delivered-message watermark: pass only
-  messages newer than it, and skip automatic context when the watermark belongs to a
-  different channel (a freshly created thread has no earlier messages to recover).
+  messages newer than it when it belongs to the same channel. A watermark from the
+  parent channel does not limit the first bounded history lookup inside a new thread.
   Explicit replies intentionally bypass this watermark so an older target's context
   is available even after newer messages were delivered. Label reply-anchored history
   with its target message ID so it cannot be confused with current channel discussion.
@@ -231,6 +233,36 @@ callbacks where commands and lifecycle depend on each other.
   quoted context. Apply this to resumed sessions and workspace handoffs too.
 - Route work through `sessions.enqueue(key, task)` to preserve conversation order.
   Use `sessions.withRunSlot(task)` for agent runs to enforce global concurrency.
+  Scheduled agents take global slots but use a new private session directory per
+  run, independent of conversation queues. The recorded cwd is validated at run
+  time; no conversation history, message affinity, or model overrides are copied.
+  Stop the isolated child and remove its scratch session directory after settlement.
+- Schedule management is scoped to the owner and originating conversation. The
+  authenticated IPC obtains the owner, conversation and cwd from the active root
+  tool call. Reject changed/steered scopes, slash workflows, and unattended runs.
+  History and discovery retain the origin's scope; changing delivery does not
+  expand it. Both origin and delivery are checked at run time using current saved
+  access rules and fresh Discord permissions. Explicit channel IDs require the
+  allowlist; a currently configured home channel need not be allowlisted, but
+  the owner must have View Channel and the bot must be able to post. Explicit DM
+  delivery resolves only the owner's DM and respects the DM access setting.
+  Resolve home per occurrence, pin the destination within a run for text/images,
+  and fail closed if the required destination changes or access is revoked. The
+  default falls back to the origin only if no home is set. Old rows without a
+  delivery value stay on their origin. A scheduled agent uses the normal tool set
+  but never presents an interactive prompt: dismiss it and report any blocker.
+- Poll only while Discord is ready and the lifecycle is accepting new work. Save
+  the next occurrence and claim atomically before invoking a job. Coalesce missed
+  occurrences into at most one catch-up, keep the phase of fixed intervals, never
+  overlap the same job, and do not replay a claimed occurrence after a crash.
+  A hard stop may therefore interrupt a job after its durable claim; a graceful
+  restart drains accepted jobs. Cancellation only removes future occurrences.
+  At creation, local one-time schedules and cron jobs without an explicit
+  override use `channelSessions.timezone`, even if rollover is disabled. Resolve
+  `tomorrow HH:MM` by the local calendar date, not by adding 24 hours. Reject local
+  times skipped or repeated by DST; an explicit offset disambiguates a repeated
+  time. Persist the effective timezone and run time so settings changes do not
+  shift existing jobs.
 - A mention in an allowlisted server channel starts either a thread or a direct channel reply,
   decided by `channelReplies.mode` in the saved config: `always-thread` (default, prior
   behavior), `channel`, or `auto`. Only `auto` consults a model. Resolve the model lazily

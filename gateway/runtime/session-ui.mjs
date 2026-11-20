@@ -204,14 +204,14 @@ export class SessionUi {
   }
 
   async notifyWorkspaceChanged(previousCwd, cwd) {
-    if (this.closed || previousCwd === cwd || !this.interaction?.channel) return;
+    if (this.closed || this.session.scheduled || previousCwd === cwd || !this.interaction?.channel) return;
     this.session.publicOutputStarted = true;
     await sendText(this.interaction.channel, `-# Workspace changed: ${workspaceDetail(previousCwd)} → ${workspaceDetail(cwd)}`);
   }
 
   toolCallsVisible() {
     const channel = this.interaction?.channel;
-    if (!channel) return false;
+    if (!channel || this.session.scheduled) return false;
     // Classify the actual destination, not historyScope (channel replies also
     // use a thread-shaped history authorization scope).
     const kind = channel.isThread?.() ? "threads" : channel.isDMBased?.() ? "dms" : "channels";
@@ -357,6 +357,14 @@ export class SessionUi {
     }
     const interaction = this.interaction;
     const method = request.method;
+    if (this.session.scheduled) {
+      // Unattended runs do not accept approvals or consume users' replies.
+      if (["select", "confirm", "input", "editor"].includes(method)) {
+        this.session.scheduledPromptDismissed = true;
+        this.sendUiResponse(request.id, { cancelled: true });
+      }
+      return;
+    }
     if (method === "setWidget" && request.widgetKey === "commit") {
       const lines = Array.isArray(request.widgetLines) ? request.widgetLines.filter((line) => typeof line === "string") : [];
       if (lines.length === 0) this.stopCommitProgress();

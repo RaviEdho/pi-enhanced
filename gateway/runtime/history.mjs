@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 import { isValidAllowlist } from "./config.mjs";
 import { ImageDeliveryError, sendImage } from "./send-image.mjs";
+import { ScheduleError } from "./schedule-time.mjs";
 
 const snowflake = (s) => typeof s === "string" && /^\d{17,20}$/.test(s);
 
@@ -45,6 +46,7 @@ export async function readChannelHistory({ client, configPath, session, request 
     } else throw new Error("History is unavailable for this conversation");
   };
   const authorize = async () => {
+    await active.authorizeScheduledOrigin?.();
     checkConfig();
     const channel = await client.channels.fetch(channelId, { force: true });
     if (channel?.id !== channelId || !client.user?.id) throw new Error("History source unavailable");
@@ -95,6 +97,7 @@ export async function listChannels({ client, configPath, session }) {
     }
     return config;
   };
+  await active?.authorizeScheduledOrigin?.();
   checkConfig();
   if (!client.user?.id) throw new Error("Bot unavailable");
   const guild = await client.guilds.fetch({ guild: scope.guildId, force: true });
@@ -106,6 +109,7 @@ export async function listChannels({ client, configPath, session }) {
     guild.channels.fetch(),
     guild.roles.fetch(),
   ]);
+  await active.authorizeScheduledOrigin?.();
   const config = checkConfig();
   const allowed = [...channels.values()].filter((channel) =>
     channel && channel.guild?.id === scope.guildId && snowflake(channel.id) &&
@@ -119,7 +123,7 @@ export async function listChannels({ client, configPath, session }) {
   return { untrusted: true, channels: items, truncated: allowed.length > items.length, ...(allowed.length > items.length ? { note: "Only the first 50 authorized channels are shown." } : {}) };
 }
 
-export async function createHistoryIpc({ client, configPath, session }) {
+export async function createHistoryIpc({ client, configPath, session, scheduleTool }) {
   const token = randomBytes(32).toString("hex");
   const sockets = new Set();
   const server = createServer((socket) => {
@@ -132,11 +136,15 @@ export async function createHistoryIpc({ client, configPath, session }) {
     socket.on("close", () => { controller.abort(); clearTimeout(deadline); sockets.delete(socket); });
     socket.setTimeout(15000, () => socket.destroy());
     let data = "";
+    let handled = false;
+    socket.setEncoding("utf8");
     socket.on("error", () => {});
     socket.on("data", (chunk) => {
-      data += chunk.toString("utf8");
+      if (handled) return;
+      data += chunk;
       if (data.length > 32768) return socket.destroy(); // Bounded image URL, caption and alt text, including JSON escaping.
       if (!data.includes("\n")) return;
+      handled = true;
       socket.pause();
       void (async () => {
         let operation;
@@ -160,13 +168,16 @@ export async function createHistoryIpc({ client, configPath, session }) {
                 ? session.approveNoReply(request.toolCallId)
                 : request.operation === "send_image"
                   ? await sendImage({ client, configPath, session, request, signal: controller.signal })
-                  : (() => { throw new Error("Unknown operation"); })();
+                  : request.operation === "schedule" && scheduleTool
+                    ? await scheduleTool({ session, request, signal: controller.signal })
+                    : (() => { throw new Error("Unknown operation"); })();
           socket.end(JSON.stringify({ result }) + "\n");
         } catch (error) {
           socket.end(JSON.stringify({ error: operation === "send_image"
             ? (error instanceof ImageDeliveryError ? error.message : "Image sending unavailable or access denied.")
             : operation === "no_reply"
             ? "No-reply unavailable: requires an existing, unsteered server thread turn before other tools or public output. Respond normally."
+            : operation === "schedule" ? (error instanceof ScheduleError ? error.message : "Schedule operation failed or access was denied.")
             : "History unavailable or access denied." }) + "\n");
         }
       })();

@@ -141,6 +141,11 @@ async function authorizeDestination({ client, configPath, session, active, waite
     } else fail("Image sending is unavailable for this conversation.");
   };
   check();
+  if (active.authorizeScheduledDelivery) {
+    const channel = await active.authorizeScheduledDelivery({ attachFiles: true });
+    check();
+    return { channel, check };
+  }
   const channel = await client.channels.fetch(active.channelId, { force: true });
   if (!channel?.send || channel.id !== active.channelId || !client.user?.id) fail("Discord destination unavailable.");
   if (scope.kind === "dm") {

@@ -83,16 +83,10 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     }
   }
 
-  /**
-   * Automatic context only fills gaps: messages newer than the last delivered
-   * one. A watermark from another channel cannot order this channel, so the
-   * conversation is treated as caught up instead of re-reading old messages.
-   */
-  function contextWatermark(sessionKey, channelId) {
+  /** Use only same-channel watermarks; a new thread still needs its initial history window. */
+  function contextAfterId(sessionKey, channelId) {
     const last = lastDeliveredMessage.get(sessionKey);
-    if (!last) return { afterId: undefined, skip: false };
-    if (last.channelId !== channelId) return { afterId: undefined, skip: true };
-    return { afterId: last.messageId, skip: false };
+    return last?.channelId === channelId ? last.messageId : undefined;
   }
 
   async function chooseConversationTarget({ message, content, embedContext, attachments, isReply, loadContext, defaultSessionKey, startedAt, turnConfig, escalateFollowUps }) {
@@ -329,7 +323,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     // The thread starter belongs to the parent channel, so it cannot be a reply target inside the new thread.
     // Explicit replies deliberately revisit the target's older context, even
     // if the agent has already seen newer messages in this conversation.
-    const watermark = isReply ? { afterId: undefined, skip: false } : contextWatermark(sessionKey, message.channel.id);
+    const afterId = isReply ? undefined : contextAfterId(sessionKey, message.channel.id);
     rememberDelivered(sessionKey, message.channel.id, message.id);
     const queuedRun = sessions.enqueue(sessionKey, async () => {
       const typing = startTyping(target);
@@ -347,11 +341,11 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         }
         const result = await sessions.withRunSlot(async () => {
           const replyContext = await getReplyContext();
-          const recentContext = contextMessageCount > 0 && !watermark.skip
+          const recentContext = contextMessageCount > 0
             ? await loadRecentContext(message.channel, {
               beforeId: contextBeforeId,
               replyAnchored: isReply,
-              afterId: watermark.afterId,
+              afterId,
               limit: contextMessageCount,
               botUserId: client.user?.id,
               cachedMessages: await getRecentMessages(),
