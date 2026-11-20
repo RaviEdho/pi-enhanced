@@ -12,12 +12,12 @@ const UI_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_MODEL_SESSION_KEY = "gateway:default-model-catalog";
 
 function buildScheduleCommand() {
-  return new SlashCommandBuilder().setName("schedule").setDescription("Manage scheduled reminders and Pi agent jobs in this conversation")
-    .addSubcommand((sub) => sub.setName("create").setDescription("Schedule a reminder or a fresh Pi agent run")
-      .addStringOption((opt) => opt.setName("kind").setDescription("A plain reminder or an unattended Pi task").setRequired(true)
-        .addChoices({ name: "Reminder", value: "reminder" }, { name: "Agent", value: "agent" }))
+  return new SlashCommandBuilder().setName("schedule").setDescription("Manage scheduled reminders, Pi agent jobs, and shell commands in this conversation")
+    .addSubcommand((sub) => sub.setName("create").setDescription("Schedule a reminder, a fresh Pi agent run, or a shell command")
+      .addStringOption((opt) => opt.setName("kind").setDescription("Reminder, unattended Pi task, or shell command (no model)").setRequired(true)
+        .addChoices({ name: "Reminder", value: "reminder" }, { name: "Agent", value: "agent" }, { name: "Shell", value: "shell" }))
       .addStringOption((opt) => opt.setName("when").setDescription("in 10m, tomorrow 05:00, ISO timestamp, every 1h, or five-field cron").setRequired(true).setMaxLength(120))
-      .addStringOption((opt) => opt.setName("text").setDescription("Reminder text or complete instructions for a fresh agent session").setRequired(true).setMaxLength(1800))
+      .addStringOption((opt) => opt.setName("text").setDescription("Reminder text, self-contained agent instructions, or a shell command").setRequired(true).setMaxLength(1800))
       .addStringOption((opt) => opt.setName("timezone").setDescription("Override the gateway timezone for a local time or cron").setMaxLength(80))
       .addStringOption((opt) => opt.setName("delivery").setDescription("default (home if set), here, home, dm, or an allowed channel ID").setMaxLength(20)))
     .addSubcommand((sub) => sub.setName("list").setDescription("Privately list your jobs and recent outcomes in this conversation")

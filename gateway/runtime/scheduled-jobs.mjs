@@ -5,7 +5,8 @@ import { replyEphemeral } from "./interactions.mjs";
 import { log, safeErrorName } from "./logging.mjs";
 import { sendText } from "./messages.mjs";
 import { ScheduleError } from "./schedule-time.mjs";
-import { createScheduler, isScheduleDelivery, snowflake } from "./scheduler.mjs";
+import { createScheduler, isScheduleDelivery, scheduleUsesWorkspace, snowflake } from "./scheduler.mjs";
+import { runScheduledShell } from "./scheduled-shell.mjs";
 import { getThreadSessionKey } from "./threads.mjs";
 import { validateWorkspaceDirectory } from "./workspace.mjs";
 
@@ -73,6 +74,8 @@ export async function authorizeScheduleDestination({ client, configPath, scope, 
 
 export function createScheduledJobs({ client, configPath, path, sessions, lifecycle, threads, channelSessions }) {
   const toolCalls = new WeakMap();
+  const shellShutdown = new AbortController();
+  const activeShells = new Set();
   const scheduler = createScheduler({ path, run, withRunSlot: sessions.withRunSlot, trackTask: lifecycle.trackTask,
     canRun: () => client.isReady() && !lifecycle.isStopping() });
 
@@ -131,6 +134,12 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
         await sendText(target, `**Reminder**\n${job.text}`);
         return "sent";
       }
+      if (job.kind === "shell") {
+        await authorizeDelivery();
+        const status = await runShell(job);
+        if (!shellShutdown.signal.aborted) await sendText(target, `**Scheduled shell** · \`${job.id}\`\n${status.message}`);
+        return status.outcome;
+      }
       let result;
       try {
         result = await sessions.withFreshSession(job.cwd, async (session, signal) => {
@@ -177,12 +186,31 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
     }
   }
 
+  async function runShell(job) {
+    let cwd;
+    try { cwd = validateWorkspaceDirectory(job.cwd); }
+    catch { return { outcome: "failed", message: "The saved workspace is unavailable." }; }
+    const execution = runScheduledShell(job.text, cwd, { signal: shellShutdown.signal });
+    activeShells.add(execution);
+    try {
+      const { outcome, code } = await execution;
+      const message = outcome === "completed" ? "Completed (exit code 0)."
+        : outcome === "timed out" ? "The shell command exceeded its 10-minute time limit and was stopped."
+        : outcome === "interrupted" ? "The shell command was interrupted."
+        : code === undefined ? "The shell command could not start or was terminated."
+        : `Failed (exit code ${code}).`;
+      return { outcome, message };
+    } finally {
+      activeShells.delete(execution);
+    }
+  }
+
   async function createJob(scope, input, resolveWorkspace, origin, check) {
     const delivery = await resolveDelivery(scope, input.delivery === undefined ? "default" : input.delivery, origin);
     check();
     const config = configFor(configPath, scope);
     let cwd;
-    if (input.kind === "agent") {
+    if (scheduleUsesWorkspace(input.kind)) {
       try { cwd = resolveWorkspace(config); } catch { throw new ScheduleError("The current workspace is unavailable."); }
     }
     // Persist the resolved zone so changing the gateway configuration only
@@ -273,7 +301,11 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
     return action;
   }
 
-  return { ...scheduler, handleCommand, handleTool };
+  return { ...scheduler, handleCommand, handleTool, close() {
+    scheduler.close();
+    shellShutdown.abort();
+    return Promise.allSettled(activeShells);
+  } };
 }
 
 function cancelMessage({ id, running }) {

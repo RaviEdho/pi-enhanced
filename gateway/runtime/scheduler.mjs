@@ -10,6 +10,8 @@ export const snowflake = (id) => typeof id === "string" && /^\d{17,20}$/.test(id
 export const isScheduleDelivery = (value) => ["default", "here", "home", "dm"].includes(value) || snowflake(value);
 const jobId = (id) => typeof id === "string" && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(id);
 const outcomes = new Set(["running", "sent", "completed", "blocked", "failed", "timed out", "access denied", "interrupted"]);
+const jobKinds = new Set(["reminder", "agent", "shell"]);
+export const scheduleUsesWorkspace = (kind) => kind === "agent" || kind === "shell";
 const active = (job) => job.nextAt !== null || job.last?.outcome === "running";
 const sameScope = (job, scope) => job.userId === scope.userId && job.channelId === scope.channelId && job.guildId === scope.guildId && job.parentChannelId === scope.parentChannelId;
 
@@ -18,10 +20,13 @@ function validDestination(scope) {
     : snowflake(scope.guildId) && snowflake(scope.parentChannelId));
 }
 
+function validJobText(kind, text) {
+  return typeof text === "string" && text.length <= JOB_TEXT_LIMIT && !!text.trim() && (kind !== "shell" || !text.includes("\0"));
+}
+
 function validJob(job) {
-  return job && jobId(job.id) && validDestination(job) && ["reminder", "agent"].includes(job.kind) &&
-    typeof job.text === "string" && job.text.trim() && job.text.length <= JOB_TEXT_LIMIT &&
-    (job.kind !== "agent" || (typeof job.cwd === "string" && isAbsolute(job.cwd))) &&
+  return job && jobId(job.id) && validDestination(job) && jobKinds.has(job.kind) && validJobText(job.kind, job.text) &&
+    (!scheduleUsesWorkspace(job.kind) || (typeof job.cwd === "string" && isAbsolute(job.cwd))) &&
     (job.schedule?.kind === "once"
       ? job.schedule.timezone === undefined || isScheduleTimezone(job.schedule.timezone)
       : isRecurringSchedule(job.schedule)) &&
@@ -79,22 +84,23 @@ export function createScheduler({ path, run, withRunSlot, trackTask = (task) => 
   }
 
   function prepare(input, defaultTimezone) {
-    if (!["reminder", "agent"].includes(input.kind)) throw new ScheduleError("Choose a reminder or an agent job.");
-    if (typeof input.text !== "string" || !input.text.trim() || input.text.length > JOB_TEXT_LIMIT) throw new ScheduleError(`Provide 1–${JOB_TEXT_LIMIT} characters of reminder text or agent instructions.`);
+    if (!jobKinds.has(input.kind)) throw new ScheduleError("Choose a reminder, agent, or shell job.");
+    if (!validJobText(input.kind, input.text)) throw new ScheduleError(`Provide 1–${JOB_TEXT_LIMIT} characters of reminder text, agent instructions, or a shell command without null characters.`);
     const delivery = input.delivery === undefined ? "default" : input.delivery;
     if (!isScheduleDelivery(delivery)) throw new ScheduleError("Delivery must be default, here, home, dm, or a Discord channel ID.");
-    return { ...parseSchedule(input.when, input.timezone, now(), defaultTimezone), kind: input.kind, text: input.text.trim(), delivery };
+    const text = input.kind === "shell" ? input.text : input.text.trim();
+    return { ...parseSchedule(input.when, input.timezone, now(), defaultTimezone), kind: input.kind, text, delivery };
   }
 
   function create(scope, input, cwd, defaultTimezone) {
     checkScope(scope);
     const prepared = prepare(input, defaultTimezone);
-    if (prepared.kind === "agent" && (typeof cwd !== "string" || !isAbsolute(cwd))) throw new ScheduleError("The job's workspace is unavailable.");
+    if (scheduleUsesWorkspace(prepared.kind) && (typeof cwd !== "string" || !isAbsolute(cwd))) throw new ScheduleError("The job's workspace is unavailable.");
     const live = [...jobs.values()].filter(active);
     if (live.length >= 100 || live.filter((job) => job.userId === scope.userId).length >= 20) throw new ScheduleError("Active job limit reached (20 per user, 100 for the gateway).");
     const { userId, channelId, guildId, parentChannelId } = scope;
     const job = { id: randomUUID(), userId, channelId, guildId, parentChannelId, ...prepared,
-      ...(prepared.kind === "agent" ? { cwd } : {}), createdAt: now() };
+      ...(scheduleUsesWorkspace(prepared.kind) ? { cwd } : {}), createdAt: now() };
     update(job);
     return summary(job);
   }
@@ -139,13 +145,16 @@ export function createScheduler({ path, run, withRunSlot, trackTask = (task) => 
 
   function tick() {
     if (closed || !readable || !canRun()) return;
-    let agents = [...inFlight.values()].filter((kind) => kind === "agent").length;
+    const counts = { agent: 0, shell: 0 };
+    for (const kind of inFlight.values()) if (scheduleUsesWorkspace(kind)) counts[kind] += 1;
     const due = [...jobs.values()].filter((job) => job.nextAt !== null && job.nextAt <= now() && !inFlight.has(job.id))
       .sort((a, b) => a.nextAt - b.nextAt);
     for (const job of due) {
       if (inFlight.size >= 4) break;
-      if (job.kind === "agent" && agents >= 2) continue;
-      if (job.kind === "agent") agents += 1;
+      if (scheduleUsesWorkspace(job.kind)) {
+        if (counts[job.kind] >= 2) continue;
+        counts[job.kind] += 1;
+      }
       inFlight.set(job.id, job.kind);
       const executeJob = () => execute(job.id);
       const task = Promise.resolve().then(() => job.kind === "agent" ? withRunSlot(executeJob) : executeJob())
@@ -167,5 +176,6 @@ export function createScheduler({ path, run, withRunSlot, trackTask = (task) => 
 
 function summary({ id, kind, text, schedule, nextAt, last, cancelled, delivery = "here" }) {
   // Rows from before configurable delivery keep their original destination.
-  return { id, kind, preview: text.replace(/\s+/g, " ").slice(0, 72), schedule, nextAt, last, cancelled, delivery };
+  const preview = kind === "shell" ? "Command hidden" : text.replace(/\s+/g, " ").slice(0, 72);
+  return { id, kind, preview, schedule, nextAt, last, cancelled, delivery };
 }

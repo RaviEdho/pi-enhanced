@@ -29,7 +29,8 @@ Importing them does not connect to Discord, spawn Pi, or install process handler
 | `session-ui.mjs` | Own one session's prompt card, deferred answer edits, and working-status messages. |
 | `interactions.mjs` | Own active prompt tokens, text replies, interaction authorization, and cancellation. |
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
-| `scheduled-jobs.mjs` | Authorize schedule commands and tools, keep agent runs scoped to the origin, and resolve and reauthorize notification destinations. |
+| `scheduled-jobs.mjs` | Authorize schedule commands and tools, scope runs to the origin, and reauthorize notification destinations. |
+| `scheduled-shell.mjs` | Run unattended commands with no Pi session or captured output; handle timeout and shutdown cleanup. |
 | `schedule-time.mjs`, `scheduler.mjs` | Parse one-time, interval, and timezone-aware cron schedules; own private storage, polling, durable claims, cancellation, and bounded outcomes. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
 | `agent-replies.mjs` | Send completed assistant text with ordered table-only images and text fallback. |
@@ -261,6 +262,11 @@ callbacks where commands and lifecycle depend on each other.
   override use `channelSessions.timezone`, even if rollover is disabled. Resolve
   `tomorrow HH:MM` by the local calendar date, not by adding 24 hours. Reject local
   times skipped or repeated by DST; an explicit offset disambiguates a repeated
+  Shell jobs share Agent permissions, capture and revalidate the workspace, and
+  bypass Pi and its run slots. The scheduler allows up to two concurrent shell
+  jobs within its four-job cap. Post only status after reauthorization; discard
+  process output and omit commands from job listings. Stop active shells during
+  immediate shutdown and wait for their cleanup before the daemon exits.
   time. Persist the effective timezone and run time so settings changes do not
   shift existing jobs.
 - A mention in an allowlisted server channel starts either a thread or a direct channel reply,

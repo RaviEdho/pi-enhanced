@@ -89,13 +89,13 @@ export function createLifecycle({ client, config, paths, daemonPath, sessions, i
     const failureMessage = exitCode !== 0 ? gatewayStatus.lastError || "Gateway process terminated unexpectedly." : undefined;
     clearInterval(idleCleanupTimer);
     clearInterval(restartRequestPollTimer);
-    closeScheduler();
+    const schedulerClosed = closeScheduler();
     closeConfigWatch();
     if (!restart) updateStatus("stopping", { lastError: undefined });
     log(`Shutting down (${reason})`);
     interactions.close();
     closeCommands();
-    await sessions.close();
+    await Promise.all([schedulerClosed, sessions.close()]);
 
     if (restart && exitCode === 0) {
       if (supervised || restart === "handoff") {

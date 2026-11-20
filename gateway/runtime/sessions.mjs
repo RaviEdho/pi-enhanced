@@ -204,7 +204,7 @@ export function createSessionManager({
   async function closeLeastRecentlyUsedIdleSession() {
     let candidate;
     for (const [key, session] of sessions) {
-      if (!session.running && (!candidate || session.lastUsedAt < candidate.session.lastUsedAt)) {
+      if (!openingSessions.has(key) && !sessionQueues.has(key) && !session.running && (!candidate || session.lastUsedAt < candidate.session.lastUsedAt)) {
         candidate = { key, session };
       }
     }
@@ -217,7 +217,7 @@ export function createSessionManager({
   async function closeIdle() {
     const now = Date.now();
     for (const [key, session] of sessions) {
-      if (!session.running && now - session.lastUsedAt >= sessionIdleMs) {
+      if (!openingSessions.has(key) && !sessionQueues.has(key) && !session.running && now - session.lastUsedAt >= sessionIdleMs) {
         sessions.delete(key);
         await stopSession(session);
       }
@@ -243,12 +243,12 @@ export function createSessionManager({
     stopRunning,
     closeIdle,
     hasWork: () => activeRuns > 0 || sessionQueues.size > 0,
-    close() {
+    close({ force = false } = {}) {
       if (closePromise) return closePromise;
       closing = true;
       for (const waiter of runQueue.splice(0)) waiter.reject(new Error("Pi session manager is stopping"));
       closePromise = Promise.all([
-        ...[...sessions.values()].map((session) => stopSession(session)),
+        ...[...sessions.values()].map((session) => stopSession(session, force)),
         ...[...freshSessions].map((session) => stopSession(session, true)),
       ]).then(() => sessions.clear());
       return closePromise;
