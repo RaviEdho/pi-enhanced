@@ -62,6 +62,11 @@ export function replyParts(text, maxLength = 3500) {
   return parts;
 }
 
+async function markRead(socket, key) {
+  try { await socket.readMessages([key]); }
+  catch { /* receipt failures must not delay or fail a Pi turn */ }
+}
+
 function startTyping(socket, destination, mayDeliver, isLatest) {
   let stopped = false;
   let inFlight = false;
@@ -184,6 +189,8 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
           stopTyping();
           void sessions.stopRunning(sessionKey).catch(() => log("WhatsApp could not stop a timed-out Pi turn."));
         }, RUN_TIMEOUT);
+        // Baileys respects the linked account's read-receipt privacy setting.
+        void markRead(connection.socket, entry.key);
         // Prefix avoids treating arbitrary DM text as a local Pi slash command.
         reply = await session.promptAndWait(`WhatsApp DM from authorized sender ${address.phone}:\n${entry.text}`, interaction);
       } catch {

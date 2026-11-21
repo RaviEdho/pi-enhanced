@@ -4,7 +4,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { execGit, isGitRepository } from "./git.js";
-import { resolveGitAgentModel } from "./model.js";
+import { resolveGitAgentOptions } from "./model.js";
 import { GitSummaryDialog, type GitSummaryAction } from "./summary-dialog.js";
 import { createSummaryProposalTool, createSummaryTools } from "./summary-tools.js";
 import type { GitSummaryProposal } from "./types.js";
@@ -54,8 +54,9 @@ export async function handleSummaryCommand(ctx: ExtensionCommandContext, pi: Ext
       ctx.ui.notify(`No ${kind} changes to summarize.`, "info");
       return;
     }
-    const model = resolveGitAgentModel(ctx);
-    if (!model) return;
+    const agentOptions = resolveGitAgentOptions(ctx);
+    if (!agentOptions) return;
+    const { model, thinkingLevel } = agentOptions;
     ctx.ui.setWorkingMessage?.(`Summarizing ${kind} changes…`);
     const diff = await execGit(["diff", ...(kind === "staged" ? ["--cached"] : []), "--no-ext-diff", "--no-color", "--"], root);
     const untracked = kind === "unstaged" ? changes.untracked : [];
@@ -65,7 +66,7 @@ export async function handleSummaryCommand(ctx: ExtensionCommandContext, pi: Ext
     const resourceLoader = new DefaultResourceLoader({ cwd: root, agentDir: getAgentDir(), settingsManager });
     ({ session } = await createAgentSession({
       cwd: root, agentDir: getAgentDir(), sessionManager: SessionManager.inMemory(), settingsManager,
-      resourceLoader, modelRuntime: (ctx.modelRegistry as any)?.runtime, model,
+      resourceLoader, modelRuntime: (ctx.modelRegistry as any)?.runtime, model, thinkingLevel,
       tools: tools.map((tool) => tool.name), customTools: tools,
     }));
     const prompt = `Summarize these ${kind} Git changes in concise, human-readable Markdown.

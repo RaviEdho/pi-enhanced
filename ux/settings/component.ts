@@ -23,6 +23,7 @@ import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { DialogFrame, renderDialogActions } from "../dialog.js";
 import { ModelPickerComponent } from "../model-picker.js";
+import { formatThinkingOverride, getThinkingLevelOptions, SESSION_THINKING_LABEL, SESSION_THINKING_VALUE, THINKING_LEVELS } from "../thinking-levels.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
   TOOL_CACHE_SETTINGS,
@@ -35,7 +36,9 @@ import {
   MODEL_SETTING_SESSION_LABEL,
   MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
+  THINKING_SETTING_MODEL_KEYS,
   isModelSetting,
+  isThinkingSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
   type SettingDefinition,
@@ -80,7 +83,7 @@ export class EnhancedSettingsComponent implements Component {
     theme: any,
     onDone: () => void,
     ctx?: ExtensionCommandContext,
-    availableModels: readonly Model<Api>[] = [],
+    private readonly availableModels: readonly Model<Api>[] = [],
     private readonly keybindings?: KeybindingsManager
   ) {
     this.tui = tui;
@@ -165,6 +168,8 @@ export class EnhancedSettingsComponent implements Component {
           this.modelMenu = picker;
           return picker;
         };
+      } else if (isThinkingSetting(def.key)) {
+        ({ currentValue, values: options } = this.getThinkingItemState(def.key));
       } else if (def.key === "scout.interceptShell" && !scoutActive) {
         description =
           "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
@@ -535,11 +540,30 @@ export class EnhancedSettingsComponent implements Component {
 
     if (isModelSetting(key)) {
       this.store.set(key, newValue === MODEL_SETTING_SESSION_LABEL ? MODEL_SETTING_SESSION_VALUE : newValue);
+      for (const item of this.items) {
+        const id = item.id as EnhancedSettingKey;
+        if (isThinkingSetting(id) && THINKING_SETTING_MODEL_KEYS[id] === key) {
+          Object.assign(item, this.getThinkingItemState(id));
+        }
+      }
+    } else if (isThinkingSetting(key)) {
+      const value = newValue === SESSION_THINKING_LABEL ? SESSION_THINKING_VALUE : THINKING_LEVELS.find((level) => level === newValue);
+      if (value) this.store.set(key, value);
     } else if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
       this.applyBooleanSetting(key, enabled);
     }
+  }
+
+  private getThinkingItemState(key: keyof typeof THINKING_SETTING_MODEL_KEYS) {
+    const modelRef = this.store.get(THINKING_SETTING_MODEL_KEYS[key]);
+    const { model, levels } = getThinkingLevelOptions(this.availableModels, modelRef === MODEL_SETTING_SESSION_VALUE ? undefined : modelRef);
+    const saved = this.store.get(key);
+    return {
+      currentValue: saved === SESSION_THINKING_VALUE ? SESSION_THINKING_LABEL : formatThinkingOverride(saved, model),
+      values: [SESSION_THINKING_LABEL, ...levels],
+    };
   }
 
   private applyBooleanSetting(key: BooleanSettingKey, enabled: boolean): void {

@@ -1,18 +1,20 @@
-import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { findAvailablePickerModel } from "../../ux/available-models.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { MODEL_SETTING_SESSION_VALUE } from "../../ux/settings/types.js";
+import { resolveSessionThinkingLevel } from "../../ux/thinking-levels.js";
 import type { SubagentRunOptions } from "./types.js";
 
 type ModelOptions = Pick<SubagentRunOptions, "model" | "thinkingLevel" | "modelRuntime">;
 
-/** Snapshot the saved model at launch without mutating the parent session. */
+/** Snapshot the model and thinking preference without mutating the parent session. */
 export async function resolveSubagentModelOptions(
   ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "thinkingLevel">,
   signal?: AbortSignal,
 ): Promise<{ options: ModelOptions } | { error: string }> {
-  const configured = EnhancedSettingsStore.getInstance().get("subagent.model");
+  const store = EnhancedSettingsStore.getInstance();
+  const configured = store.get("subagent.model");
+  const thinking = store.get("subagent.thinkingLevel");
   const inheritModel = configured === MODEL_SETTING_SESSION_VALUE;
   const model = inheritModel
     ? ctx.model
@@ -30,7 +32,7 @@ export async function resolveSubagentModelOptions(
   return {
     options: {
       model,
-      thinkingLevel: clampThinkingLevel(model, ctx.thinkingLevel ?? "off"),
+      thinkingLevel: resolveSessionThinkingLevel(model, thinking, ctx.thinkingLevel),
       modelRuntime: (ctx.modelRegistry as any).runtime,
     },
   };

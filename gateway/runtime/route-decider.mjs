@@ -203,7 +203,7 @@ export function createRouteDecider({ config, loadModels = loadPiModels, loadDefa
       ]);
       const response = await Promise.race([runtime.completeSimple(model, {
         messages: [{ role: "user", content: [{ type: "text", text: buildRoutingPrompt({ ...routingContext, content, author, isReply, imageCount, embedContext }) }] }],
-      }, { maxTokens: MAX_OUTPUT_TOKENS, signal: controller.signal, timeoutMs: Math.max(1, DECISION_TIMEOUT_MS - (now() - started)) }), deadline]);
+      }, { reasoning: "off", maxTokens: MAX_OUTPUT_TOKENS, signal: controller.signal, timeoutMs: Math.max(1, DECISION_TIMEOUT_MS - (now() - started)) }), deadline]);
       const latencyMs = now() - started;
       // Providers that reject the request still return a message; never trust it.
       if (response.stopReason === "error" || response.stopReason === "aborted") {

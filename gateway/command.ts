@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { refreshProviderCatalogs } from "../providers/refresh.js";
 import { getAvailablePickerModels } from "../ux/available-models.js";
 import { DiscordConfirmationDialog, type DiscordConfirmationDialogOptions } from "./confirm-dialog.js";
+import { defaultThinkingSetting } from "./default-thinking.js";
 import { DiscordInputDialog } from "./input-dialog.js";
 import { withDiscordDialogSession } from "./dialog-session.js";
 import { selectDiscordModel } from "./model-dialog.js";
@@ -292,6 +293,10 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
       openSetting("picker", "default-model", "Default model", config.model ? `${config.model.provider}/${config.model.id}` : "Pi default",
         "Choose the model used when gateway Pi sessions start, or follow Pi's configured default.",
         () => configureDefaultModel(ctx, config)),
+      defaultThinkingSetting(ctx, config.model, config.thinkingLevel,
+        "Changes reload automatically; saved conversations keep their settings.",
+        (thinkingLevel) => saveGatewayConfig(ctx, config, { thinkingLevel },
+          `Discord default thinking set to ${thinkingLevel ?? "Pi default"} for new conversations.`)),
       openSetting("group", "access", "Message access", `DMs ${onOff(config.allowDirectMessages)} · Servers ${onOff(config.allowServerMessages)}`,
         "Enable or disable direct messages and server messages independently. User and channel allowlists still apply.",
         () => configureAccessPaths(ctx, config)),

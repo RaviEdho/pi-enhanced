@@ -41,7 +41,7 @@ import {
 } from "./format.js";
 import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
-import { resolveGitAgentModel } from "./model.js";
+import { resolveGitAgentOptions } from "./model.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -91,9 +91,10 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         }
       }
 
-      // 2. Resolve the shared Git agent model.
-      const model = resolveGitAgentModel(ctx);
-      if (!model) return;
+      // 2. Resolve the shared Git agent model and thinking level.
+      const agentOptions = resolveGitAgentOptions(ctx);
+      if (!agentOptions) return;
+      const { model, thinkingLevel } = agentOptions;
 
       // 3. Check working tree status (staged and unstaged)
       let { staged, unstaged } = await getWorkingTreeStatus(cwd);
@@ -580,7 +581,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           settingsManager,
           modelRuntime,
           model,
-          thinkingLevel: ctx.thinkingLevel ?? "off",
+          thinkingLevel,
           sessionManager: SessionManager.inMemory(cwd),
           resourceLoader,
           tools: ["git_overview", "git_file_diff", "propose_commit", "propose_commits"],

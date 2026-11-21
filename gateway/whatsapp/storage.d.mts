@@ -1,9 +1,11 @@
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+
 export interface WhatsAppConfig {
   version: 1;
   cwd: string;
   allowedPhones: string[];
   model?: { provider: string; id: string };
-  thinkingLevel?: string;
+  thinkingLevel?: ModelThinkingLevel;
 }
 export const PHONE: RegExp;
 export const PAIR_TIMEOUT_MS: number;

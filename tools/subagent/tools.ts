@@ -53,7 +53,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
     name: "subagent",
     label: "subagent",
     description:
-      "Delegate a task to an isolated subagent with its own clean context window. Uses the configured subagent model (the parent session model by default) and inherits the parent's thinking effort where supported. Runs in the background by default (non-blocking, returns jobId) or synchronously (blocking with background: false).",
+      "Delegate a task to an isolated subagent with its own clean context window. Uses the configured subagent model (the parent session model by default) and thinking level (inherits the parent's effort by default). Runs in the background by default (non-blocking, returns jobId) or synchronously (blocking with background: false).",
     parameters: SubagentParametersSchema,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!isSubagentActive()) {

@@ -42,11 +42,13 @@ Configurable options include:
 - `subagent.enabled`: Subagent Tools - isolated in-process subagent execution (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
 - `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
 - `subagent.model`: Subagent Model - one saved model for the `subagent` tool and `/subagent` (an available `provider/model` or `session`, the default)
+- `subagent.thinkingLevel` (Subagent Thinking): Thinking level for both background and synchronous runs; defaults to `session` (inherit the parent session's thinking)
 - `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
 - `scout.respectGitIgnore`: Honor Git ignore rules in workspace search (`enabled` / `disabled`, default `enabled`)
 - `scout.includeHidden`: Index hidden workspace directories, retaining fixed exclusions (`enabled` / `disabled`, default `disabled`)
 - `compressor.enabled`: Output Compressor - terminal noise reduction for bash/powershell (`enabled` / `disabled`)
 - `git.commitModel` (Git Agent Model): Model used by `/commit`, `/git commit`, and `/git summary` (choose an available model or `session`; defaults to the active session model)
+- `git.thinkingLevel` (Git Agent Thinking): Thinking level shared by those commands; defaults to `session`
 - `usage.showFooter`: Live quota bars and elapsed time progress in footer (`enabled` / `disabled`). On narrow terminals, line 2 hides the account first, then balances and quota statuses. Starting with the shortest window, it drops each reset timer before hiding the window. After hiding the longest window's timer, it drops cache hit rate, cached token counts, input/output counts together, then cost. The longest window keeps its label, bar, and percentage as long as they fit alongside context usage, which takes priority at the narrowest widths.
 - `usage.contextFormat`: Context usage format in footer (`pi-enhanced` tokens e.g. 45k/200k, `pi` percentage e.g. 23.5%/200k, or `off`)
 - `timer.showSummary`: Settled turn telemetry in transcript (`enabled` / `disabled`)
@@ -57,7 +59,7 @@ Configurable options include:
 - `balancer.failoverOn429`: Automatic failover on HTTP 429 rate limits (`enabled` / `disabled`)
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
 
-Settings persist to `~/.pi/agent/enhanced-settings.json`. Use `/settings-enhanced set git.commitModel session` to restore the default session model.
+Settings persist to `~/.pi/agent/enhanced-settings.json`. Model and thinking settings are independent: for example, `/settings-enhanced set git.thinkingLevel low` sets the effort without changing the model. Use `session` to inherit either setting. With a specific model selected, the thinking control only offers levels it supports. Changing models retains the saved preference; Pi adjusts it at runtime if needed.
 
 At 10,000 context tokens or more, the settings dialog asks for confirmation before enabling or disabling Scout Search, Web Access, Subagent, or Ask User tools. Both changes can invalidate the prompt cache. The explicit `set` command warns and applies the change without prompting.
 
@@ -169,7 +171,7 @@ The tool is enabled by default, but can be completely disabled via `/settings-en
 - **Terminal Output Compressor (`tools/compressor/`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, reducing raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Caches uncompressed tool-result text for `/recall <id>`. Conservative command routing protects chained/script output; diagnostic blocks and warning reports are retained, and a never-worse guard includes recall-hint overhead. Includes dedicated Bun/Deno and Go NDJSON handling.
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Uses the saved **Subagent Model** from `/settings-enhanced` (the active parent model by default), inherits the parent's thinking effort where supported, and executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
 
-Set the model with `/settings-enhanced set subagent.model <provider/model>` or choose **Subagent Model** in the settings picker. Set it to `session` to inherit the parent model again. The setting applies to new background and synchronous runs without changing the parent model or jobs already running. If the saved model becomes unavailable, new runs stop with an error rather than silently using a different model.
+Set the model with `/settings-enhanced set subagent.model <provider/model>` or choose **Subagent Model** in the settings picker. Set it to `session` to inherit the parent model again. Choose **Subagent Thinking** to override the parent's thinking level. These settings apply to new background and synchronous runs without changing the parent session or jobs already running. If the saved model becomes unavailable, new runs stop with an error rather than silently using a different model.
 
 ## Session shortcuts and telemetry
 

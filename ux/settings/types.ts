@@ -1,3 +1,5 @@
+import { SESSION_THINKING_VALUE, THINKING_LEVELS, type SessionThinkingSetting } from "../thinking-levels.js";
+
 export type SubagentExecutionMode = "background" | "sync";
 export type ContextUsageFormat = "pi" | "pi-enhanced" | "off";
 
@@ -6,6 +8,15 @@ export const MODEL_SETTING_SESSION_LABEL = "Use session model";
 
 export function isModelSetting(key: EnhancedSettingKey): key is "git.commitModel" | "session.titleModel" | "subagent.model" {
   return key === "git.commitModel" || key === "session.titleModel" || key === "subagent.model";
+}
+
+export const THINKING_SETTING_MODEL_KEYS = {
+  "subagent.thinkingLevel": "subagent.model",
+  "git.thinkingLevel": "git.commitModel",
+} as const;
+
+export function isThinkingSetting(key: EnhancedSettingKey): key is keyof typeof THINKING_SETTING_MODEL_KEYS {
+  return Object.hasOwn(THINKING_SETTING_MODEL_KEYS, key);
 }
 
 export interface EnhancedSettings {
@@ -25,12 +36,16 @@ export interface EnhancedSettings {
   "subagent.defaultMode": SubagentExecutionMode;
   /** Model used by new subagents, or "session" for the active Pi model. */
   "subagent.model": string;
+  /** Thinking effort used by new subagents, or "session" to inherit it. */
+  "subagent.thinkingLevel": SessionThinkingSetting;
   /** Allow LLM to ask user clarification questions and 3 choices interactively. */
   "feedback.askUser": boolean;
   /** Enable token output compressor for noisy bash/powershell outputs. */
   "compressor.enabled": boolean;
   /** Model used by the autonomous Git commit assistant, or "session" for the active Pi model. */
   "git.commitModel": string;
+  /** Thinking effort for commit and summary, or "session" to inherit it. */
+  "git.thinkingLevel": SessionThinkingSetting;
 
   /** Display live quota consumption and time progress bars in status footer. */
   "usage.showFooter": boolean;
@@ -129,6 +144,14 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: MODEL_SETTING_SESSION_VALUE,
     options: [MODEL_SETTING_SESSION_VALUE],
   },
+  "subagent.thinkingLevel": {
+    key: "subagent.thinkingLevel",
+    label: "Subagent Thinking",
+    category: "Agent Tools",
+    description: "Thinking level for the subagent tool and /subagent. The saved level is adjusted to what the model supports",
+    defaultValue: SESSION_THINKING_VALUE,
+    options: [SESSION_THINKING_VALUE, ...THINKING_LEVELS],
+  },
   "feedback.askUser": {
     key: "feedback.askUser",
     label: "Ask User Tools",
@@ -152,6 +175,15 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     description: "Model for /commit, /git commit, and /git summary; choose Use session model to follow the active Pi model",
     defaultValue: MODEL_SETTING_SESSION_VALUE,
     options: [MODEL_SETTING_SESSION_VALUE],
+  },
+
+  "git.thinkingLevel": {
+    key: "git.thinkingLevel",
+    label: "Git Agent Thinking",
+    category: "Agent Tools",
+    description: "Thinking level for /commit, /git commit, and /git summary. The saved level is adjusted to what the model supports",
+    defaultValue: SESSION_THINKING_VALUE,
+    options: [SESSION_THINKING_VALUE, ...THINKING_LEVELS],
   },
 
   // ── UX & Telemetry ──
@@ -240,9 +272,11 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "subagent.enabled": SETTING_DEFINITIONS["subagent.enabled"].defaultValue,
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,
   "subagent.model": SETTING_DEFINITIONS["subagent.model"].defaultValue,
+  "subagent.thinkingLevel": SETTING_DEFINITIONS["subagent.thinkingLevel"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
   "git.commitModel": SETTING_DEFINITIONS["git.commitModel"].defaultValue,
+  "git.thinkingLevel": SETTING_DEFINITIONS["git.thinkingLevel"].defaultValue,
   "usage.showFooter": SETTING_DEFINITIONS["usage.showFooter"].defaultValue,
   "usage.contextFormat": SETTING_DEFINITIONS["usage.contextFormat"].defaultValue,
   "timer.showSummary": SETTING_DEFINITIONS["timer.showSummary"].defaultValue,

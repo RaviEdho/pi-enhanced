@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { refreshProviderCatalogs } from "../../providers/refresh.js";
 import { getAvailablePickerModels } from "../../ux/available-models.js";
+import { defaultThinkingSetting } from "../default-thinking.js";
 import { withDiscordDialogSession } from "../dialog-session.js";
 import { DiscordInputDialog } from "../input-dialog.js";
 import { selectDiscordModel } from "../model-dialog.js";
@@ -187,12 +188,8 @@ async function showSettings(ctx: ExtensionCommandContext, paths: Paths) {
           if (selected && !model) return;
           save({ model: model ? { provider: model.provider, id: model.id } : undefined }, `WhatsApp default model updated. ${restartHint}`);
         } },
-      { kind: "inline", id: "thinking", label: "Default thinking", currentValue: config.thinkingLevel ?? "Pi default",
-        description: `Set a thinking level for new conversations. Pi clamps it to the model's supported levels. ${restartHint}`,
-        values: ["Pi default", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
-        change(value: string) {
-          save({ thinkingLevel: value === "Pi default" ? undefined : value }, `WhatsApp default thinking updated. ${restartHint}`);
-        } },
+      defaultThinkingSetting(ctx, config.model, config.thinkingLevel, restartHint,
+        (thinkingLevel) => save({ thinkingLevel }, `WhatsApp default thinking updated. ${restartHint}`)),
     ];
   });
 }

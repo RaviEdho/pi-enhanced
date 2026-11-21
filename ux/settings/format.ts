@@ -1,7 +1,9 @@
+import { SESSION_THINKING_VALUE } from "../thinking-levels.js";
 import {
   MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
   isModelSetting,
+  isThinkingSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
   type SettingDefinition,
@@ -74,6 +76,9 @@ export function formatSettingValue(key: EnhancedSettingKey, value: any): string 
   }
   if (isModelSetting(key) && value === MODEL_SETTING_SESSION_VALUE) {
     return "same as session model";
+  }
+  if (isThinkingSetting(key) && value === SESSION_THINKING_VALUE) {
+    return "same as session thinking";
   }
   return String(value);
 }

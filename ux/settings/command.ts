@@ -5,6 +5,7 @@ import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { refreshProviderCatalogs } from "../../providers/refresh.js";
 import { findAvailablePickerModel, getAvailablePickerModels } from "../available-models.js";
+import { getThinkingLevelOptions, SESSION_THINKING_VALUE, THINKING_LEVELS } from "../thinking-levels.js";
 import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
@@ -17,7 +18,9 @@ import {
 import {
   MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
+  THINKING_SETTING_MODEL_KEYS,
   isModelSetting,
+  isThinkingSetting,
   type EnhancedSettingKey,
 } from "./types.js";
 
@@ -143,6 +146,20 @@ export async function handleSettingsEnhancedCommand(
         else console.error(msg);
         return;
       }
+    } else if (isThinkingSetting(key)) {
+      const modelRef = store.get(THINKING_SETTING_MODEL_KEYS[key]);
+      const levels = modelRef === MODEL_SETTING_SESSION_VALUE
+        ? THINKING_LEVELS
+        : getThinkingLevelOptions(ctx.modelRegistry.getAll(), modelRef).levels;
+      const allowed = [SESSION_THINKING_VALUE, ...levels] as const;
+      const value = allowed.find((level) => level === rawVal);
+      if (!value) {
+        const msg = `Invalid value for ${key}. Allowed: ${allowed.join(", ")}`;
+        if (ctx.hasUI) ctx.ui.notify(msg, "error");
+        else console.error(msg);
+        return;
+      }
+      store.set(key, value);
     } else if (typeof def.defaultValue === "boolean") {
       const isEnabling = rawVal === "true" || rawVal === "enabled" || rawVal === "1" || rawVal === "on";
       const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
