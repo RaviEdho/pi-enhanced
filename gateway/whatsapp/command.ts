@@ -5,7 +5,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { refreshProviderCatalogs } from "../../providers/refresh.js";
+import { getAvailablePickerModels } from "../../ux/available-models.js";
+import { withDiscordDialogSession } from "../dialog-session.js";
 import { DiscordInputDialog } from "../input-dialog.js";
+import { selectDiscordModel } from "../model-dialog.js";
+import { runGatewaySettingsPage } from "../settings-page.js";
 import { readGatewayPid, resolvePiInvocation } from "../runtime/process.js";
 import { PairingQrView } from "./qr.js";
 import { acquireLock, gatewayPaths, PAIR_TIMEOUT_MS, PHONE, prepareDirectory, readConfig, readJson, removeAuth, writeJson, type WhatsAppConfig } from "./storage.mjs";
@@ -69,18 +74,17 @@ async function manage(ctx: ExtensionCommandContext, paths: Paths, action: string
     return;
   }
   const existing = readConfig(paths.config);
-  if (action === "setup" || action === "configure") {
-    if (action === "configure" && !existing) throw new UserError("Run /whatsapp setup first.");
-    if (action === "setup" && (process.env.PI_TUI_WRITE_LOG || process.env.PI_TUI_DEBUG_REDRAW === "1" || process.env.PI_TUI_DEBUG === "1")) {
+  if (action === "configure") {
+    if (!existing) throw new UserError("Run /whatsapp setup first.");
+    await withDiscordDialogSession(ctx, (dialogCtx) => showSettings(dialogCtx, paths));
+    return;
+  }
+  if (action === "setup") {
+    if (process.env.PI_TUI_WRITE_LOG || process.env.PI_TUI_DEBUG_REDRAW === "1" || process.env.PI_TUI_DEBUG === "1") {
       throw new UserError("Disable Pi terminal debugging before displaying a pairing QR code.");
     }
     const config = await chooseConfig(ctx, existing);
     if (!config) return;
-    if (action === "configure") {
-      writeJson(paths.config, config);
-      output(ctx, "WhatsApp settings saved. The allowlist takes effect immediately; restart for workspace and Pi defaults for new conversations.");
-      return;
-    }
     if (!await ctx.ui.confirm("Pair a WhatsApp linked device?", "Baileys is unofficial and may put the linked account at risk. Setup replaces any saved link; unlink the old device in WhatsApp if needed. Only scan from the account you want Pi to use.")) return;
     await stop(paths);
     await clearLink(paths);
@@ -102,29 +106,95 @@ function input(ctx: ExtensionCommandContext, title: string, instruction: string,
     new DiscordInputDialog(tui, theme, title, instruction, initialValue, "", done, keys));
 }
 
-async function chooseConfig(ctx: ExtensionCommandContext, existing?: WhatsAppConfig): Promise<WhatsAppConfig | undefined> {
-  const cwd = await input(ctx, "WhatsApp gateway workspace", "This is a starting directory, not a sandbox.", existing?.cwd ?? "~/pi-workspaces/whatsapp-gateway");
-  if (cwd === undefined) return undefined;
-  const value = cwd.trim() || existing?.cwd || "~/pi-workspaces/whatsapp-gateway";
-  const absolute = resolve(ctx.cwd, value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value);
-  const current = existing?.allowedPhones.map((phone) => `+${phone}`).join(", ") ?? "";
-  const allowlist = await input(ctx, "Allowed WhatsApp numbers", "Comma-separated with country codes; blank blocks everyone.", current);
+async function chooseAllowedPhones(ctx: ExtensionCommandContext, current: string[] = [], confirmAll = false) {
+  const allowlist = await input(ctx, "Allowed WhatsApp numbers", "Comma-separated with country codes; blank blocks everyone.", current.map((phone) => `+${phone}`).join(", "));
   if (allowlist === undefined) return undefined;
   const allowedPhones = [...new Set(allowlist.split(/[,\s]+/).filter(Boolean).map((phone) => phone.replace(/^\+/, "")))];
   if (allowedPhones.length > 100 || !allowedPhones.every((phone) => PHONE.test(phone))) {
     throw new UserError("Use up to 100 international phone numbers with digits and an optional leading +. Wildcards are not supported.");
   }
-  if (allowedPhones.length && !await ctx.ui.confirm("Grant Pi tool access to these senders?", "Allowed senders can ask Pi to run shell commands and edit local files with your OS permissions. Only allow people you trust with that access.")) return undefined;
+  if (allowedPhones.some((phone) => confirmAll || !current.includes(phone)) && !await ctx.ui.confirm("Grant Pi tool access to these senders?", "Allowed senders can ask Pi to run shell commands and edit local files with your OS permissions. Only allow people you trust with that access.")) return undefined;
+  return allowedPhones;
+}
+
+async function resolveWorkspace(ctx: ExtensionCommandContext, value: string) {
+  const absolute = resolve(ctx.cwd, value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value);
   if (!existsSync(absolute)) {
     if (!await ctx.ui.confirm("Create workspace?", absolute)) return undefined;
     mkdirSync(absolute, { recursive: true, mode: 0o700 });
   }
   if (!statSync(absolute).isDirectory()) throw new UserError("The workspace must be a directory.");
+  return realpathSync(absolute);
+}
+
+async function chooseConfig(ctx: ExtensionCommandContext, existing?: WhatsAppConfig): Promise<WhatsAppConfig | undefined> {
+  const defaultWorkspace = existing?.cwd ?? "~/pi-workspaces/whatsapp-gateway";
+  const value = await input(ctx, "WhatsApp gateway workspace", "This is a starting directory, not a sandbox.", defaultWorkspace);
+  if (value === undefined) return undefined;
+  const allowedPhones = await chooseAllowedPhones(ctx, existing?.allowedPhones, true);
+  if (!allowedPhones) return undefined;
+  const cwd = await resolveWorkspace(ctx, value.trim() || defaultWorkspace);
+  if (!cwd) return undefined;
   return {
-    version: 1, cwd: realpathSync(absolute), allowedPhones,
+    version: 1, cwd, allowedPhones,
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
   };
+}
+
+async function showSettings(ctx: ExtensionCommandContext, paths: Paths) {
+  const restartHint = "Run /whatsapp restart to apply this to new conversations; saved conversations keep their settings.";
+  function save(update: Partial<WhatsAppConfig>, message: string) {
+    const current = readConfig(paths.config);
+    if (!current) throw new UserError("Run /whatsapp setup first.");
+    writeJson(paths.config, { ...current, ...update });
+    output(ctx, message);
+  }
+
+  await runGatewaySettingsPage(ctx, { title: "WhatsApp Settings", gatewayLabel: "WhatsApp gateway", searchable: true }, () => {
+    const config = readConfig(paths.config);
+    if (!config) return undefined;
+    const selectedModel = config.model ? `${config.model.provider}/${config.model.id}` : "";
+    return [
+      { kind: "input", id: "users", label: "Allowed users",
+        currentValue: config.allowedPhones.length ? `${config.allowedPhones.length} allowed` : "none (blocked)",
+        description: "Only these phone numbers can send DMs to Pi. Changes apply immediately; blank blocks everyone.",
+        async open() {
+          const allowedPhones = await chooseAllowedPhones(ctx, config.allowedPhones);
+          if (allowedPhones && allowedPhones.join() !== config.allowedPhones.join()) save({ allowedPhones }, "WhatsApp allowlist updated.");
+        } },
+      { kind: "input", id: "workspace", label: "Workspace", currentValue: config.cwd,
+        description: `Starting directory, not a filesystem sandbox. ${restartHint}`,
+        async open() {
+          const value = await input(ctx, "WhatsApp gateway workspace", "Leave blank to keep the current workspace.", config.cwd);
+          if (!value?.trim()) return;
+          const cwd = await resolveWorkspace(ctx, value.trim());
+          if (cwd && cwd !== config.cwd) save({ cwd }, `WhatsApp workspace updated. ${restartHint}`);
+        } },
+      { kind: "picker", id: "default-model", label: "Default model", currentValue: selectedModel || "Pi default",
+        description: `Choose a model for new WhatsApp conversations or follow Pi's default. ${restartHint}`,
+        async open() {
+          const refresh = refreshProviderCatalogs(ctx);
+          const models = (await getAvailablePickerModels(ctx))
+            .map((model) => ({ value: `${model.provider}/${model.id}`, model }))
+            .sort((a, b) => a.value.localeCompare(b.value));
+          const choices = [{ value: "", label: "Pi default", description: "Use Pi's configured default at startup" },
+            ...models.map(({ value, model }) => ({ value, label: value, description: model.name }))];
+          const selected = await selectDiscordModel(ctx, choices, selectedModel, refresh,
+            { title: "WhatsApp Default Model", description: "Used when new WhatsApp conversations start." });
+          if (selected === undefined || selected === selectedModel) return;
+          const model = models.find(({ value }) => value === selected)?.model;
+          if (selected && !model) return;
+          save({ model: model ? { provider: model.provider, id: model.id } : undefined }, `WhatsApp default model updated. ${restartHint}`);
+        } },
+      { kind: "inline", id: "thinking", label: "Default thinking", currentValue: config.thinkingLevel ?? "Pi default",
+        description: `Set a thinking level for new conversations. Pi clamps it to the model's supported levels. ${restartHint}`,
+        values: ["Pi default", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        change(value: string) {
+          save({ thinkingLevel: value === "Pi default" ? undefined : value }, `WhatsApp default thinking updated. ${restartHint}`);
+        } },
+    ];
+  });
 }
 
 async function stop(paths: Paths) {

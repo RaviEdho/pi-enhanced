@@ -23,10 +23,11 @@ interface PageOptions {
   title: string;
   description?: string;
   searchable?: boolean;
+  gatewayLabel?: string;
 }
 
 /** Keep the native list instance (selection, scroll position, and search) across child dialogs. */
-export async function runDiscordSettingsPage(
+export async function runGatewaySettingsPage(
   ctx: ExtensionCommandContext,
   options: PageOptions,
   getRows: () => DiscordSettingRow[] | undefined,
@@ -35,7 +36,7 @@ export async function runDiscordSettingsPage(
   let canUseCustom = ctx.mode === "tui" && typeof ctx.ui.custom === "function";
   let lastId: string | undefined;
   const reportError = (row: DiscordSettingRow, error: unknown) => {
-    ctx.ui.notify(`Discord gateway · ${row.label}: ${error instanceof Error ? error.message : String(error)}`, "error");
+    ctx.ui.notify(`${options.gatewayLabel ?? "Discord gateway"} · ${row.label}: ${error instanceof Error ? error.message : String(error)}`, "error");
   };
   const change = (row: Extract<DiscordSettingRow, { kind: "inline" }>, value: string) => {
     try { row.change(value); } catch (error) { reportError(row, error); }
@@ -152,7 +153,7 @@ class DiscordSettingsPage implements Component, Focusable {
     if (lastId) this.list.selectItem(lastId);
     this.focused = this.hasFocus;
     this.container = new Container();
-    this.container.addChild(new DynamicBorder());
+    this.container.addChild(new DynamicBorder((line) => this.theme.fg("border", line)));
     this.container.addChild(new Text(this.theme.bold(this.theme.fg("accent", this.options.title)), 0, 0));
     if (this.options.description) {
       this.container.addChild(new Spacer(1));
@@ -160,7 +161,7 @@ class DiscordSettingsPage implements Component, Focusable {
     }
     this.container.addChild(new Spacer(1));
     this.container.addChild(this.list);
-    this.container.addChild(new DynamicBorder());
+    this.container.addChild(new DynamicBorder((line) => this.theme.fg("border", line)));
   }
 
   invalidate(): void { this.container.invalidate(); }

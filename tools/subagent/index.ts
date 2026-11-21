@@ -66,9 +66,9 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
     return;
   }
 
-  const isForeground = /\b(--sync|-s|--fg|-f|--foreground)\b/i.test(args);
+  const isForeground = /(?<!\S)(--sync|-s|--fg|-f|--foreground)(?!\S)/i.test(args);
   const task = args
-    .replace(/\b(--sync|-s|--fg|-f|--foreground|--bg|-b|--background)\b/gi, "")
+    .replace(/(?<!\S)(--sync|-s|--fg|-f|--foreground|--bg|-b|--background)(?!\S)/gi, "")
     .trim();
 
   if (!task) {

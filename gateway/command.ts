@@ -22,7 +22,7 @@ import { selectDiscordModel } from "./model-dialog.js";
 import { gatewayPidRecord, readGatewayPid, resolvePiInvocation } from "./runtime/process.js";
 import { createGatewayBootService } from "./systemd.js";
 import { discordSelectItems, DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
-import { runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
+import { runGatewaySettingsPage as runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
 import { timezoneLabel, timezoneOffsetGroups } from "./timezones.js";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
