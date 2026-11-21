@@ -372,7 +372,7 @@ function renderFooterLine2(
   const elapsed = primary ? bucketTimeElapsed(primary, now) : undefined;
   let bar = primary ? makeProgressBar(primary.usedFraction, 10, elapsed) : "";
   let compact = false;
-  let gap = 2;
+  const gap = 2;
 
   const secondary = (usage?.secondary ?? []).map((bucket) => ({
     text: `${bucketWindowLabel(bucket)}: ${Math.round(bucket.usedFraction * 100)}%`,
@@ -416,7 +416,6 @@ function renderFooterLine2(
       for (let size = 9; size >= 4 && !fits(); size--) bar = makeProgressBar(primary.usedFraction, size, elapsed);
       if (!fits()) {
         compact = true;
-        gap = 1;
         for (let size = 4; size >= 1; size--) {
           bar = makeProgressBar(primary.usedFraction, size, elapsed);
           if (fits()) break;

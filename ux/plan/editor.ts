@@ -14,20 +14,22 @@ import { PlanModeManager } from "./manager.js";
 
 type EditorStatus = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
 const TRAILING_BORDER = "──";
+const STATUS_PREFIX = "── ";
+const STATUS_BORDER_WIDTH = STATUS_PREFIX.length + " ──".length;
 
 /** Compact only Pi Enhanced's known telemetry format, not arbitrary loader messages. */
 function workingVariants(message: string): string[] | undefined {
   if (message === "Working") return [""];
-  const match = /^Working \((\d+[hms](?: \d+[ms])*)(?: · (↑[\d.kM]+(?: ↓[\d.kM]+)?|↓[\d.kM]+))?(?: · (TTFT [\d.]+m?s))?(?: · ([\d.]+ tok\/s))?\)$/.exec(message);
+  const match = /^Working \((\d+[hms](?: \d+[ms])*)(?: · (↑[\d.kM]+(?: ↓[\d.kM]+)?|↓[\d.kM]+))?(?: · (TTFT [\d.]+m?s))?(?: · ([\d.]+ tps))?\)$/.exec(message);
   if (!match) return;
   const [, elapsed, tokens = "", ttft, rate] = match;
-  const [input, output] = tokens.startsWith("↓") ? ["", tokens] : tokens.split(" ");
-  const counts = [elapsed, input, output].filter(Boolean).join(" ");
+  const output = tokens.startsWith("↓") ? tokens : tokens.split(" ")[1];
+  const counts = [elapsed, tokens].filter(Boolean).join(" · ");
   return [
     [counts, ttft, rate].filter(Boolean).join(" · "),
     [counts, rate].filter(Boolean).join(" · "),
     counts,
-    [elapsed, output].filter(Boolean).join(" "),
+    [elapsed, output].filter(Boolean).join(" · "),
     elapsed,
     "",
   ];
@@ -111,7 +113,7 @@ export class PlanModeEditor extends CustomEditor {
     if (visibleWidth(hint) + spinnerWidth + 1 > width) hint = hiddenLineCount > 0 ? ` ↑${hiddenLineCount}` : "";
     if (visibleWidth(hint) + spinnerWidth + 1 > width) hint = "";
     const statusSpace = width - visibleWidth(hint);
-    const normalSpace = statusSpace - 5; // `── ` before status, ` ─` after
+    const normalSpace = statusSpace - STATUS_BORDER_WIDTH;
     const titleWidth = name ? visibleWidth(name) + 2 + TRAILING_BORDER.length : 0;
     const indicatorText = stripVTControlCharacters(spinner);
     const plain = stripVTControlCharacters(status);
@@ -138,7 +140,7 @@ export class PlanModeEditor extends CustomEditor {
     }
 
     const remaining = statusSpace - visibleWidth(status) - visibleWidth(title);
-    const prefix = remaining >= 5 && visibleWidth(status) ? "── " : "";
+    const prefix = remaining >= STATUS_BORDER_WIDTH && visibleWidth(status) ? STATUS_PREFIX : "";
     const fillWidth = remaining - visibleWidth(prefix);
     const fill = fillWidth > 0 && visibleWidth(status) ? ` ${"─".repeat(fillWidth - 1)}` : "─".repeat(fillWidth);
     const suffix = fill + hint + title;

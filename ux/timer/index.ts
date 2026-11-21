@@ -220,10 +220,10 @@ export function buildWorkingMessage(run: RunMetrics, now: number): string {
   }
 
   if (liveDecodeMs > 0 && liveTokens > 0) {
-    parts.push(`${formatTokenRate((liveTokens / liveDecodeMs) * 1000)} tok/s`);
+    parts.push(`${formatTokenRate((liveTokens / liveDecodeMs) * 1000)} tps`);
   } else if (run.totalModelMs >= 200 && run.output > 0) {
     // Non-streaming / fallback turnaround rate
-    parts.push(`${formatTokenRate((run.output / run.totalModelMs) * 1000)} tok/s`);
+    parts.push(`${formatTokenRate((run.output / run.totalModelMs) * 1000)} tps`);
   }
 
   return `Working (${parts.join(" · ")})`;
@@ -279,7 +279,7 @@ export function formatTurnSummary(summary: TurnSummary): string {
     parts.push(`TTFT avg ${formatLatency(summary.avgTtftMs)}`);
   }
   if (summary.avgTps !== undefined) {
-    parts.push(`${formatTokenRate(summary.avgTps)} tok/s avg`);
+    parts.push(`${formatTokenRate(summary.avgTps)} tps avg`);
   }
 
   return parts.join(" · ");
@@ -309,7 +309,7 @@ export function registerTurnSummaryRenderer(pi: ExtensionAPI): void {
         Math.abs(summary.e2eTps - summary.avgTps) >= 1
       ) {
         details.push(
-          `decode: ${formatTokenRate(summary.avgTps)} tok/s · e2e: ${formatTokenRate(summary.e2eTps)} tok/s`
+          `decode: ${formatTokenRate(summary.avgTps)} tps · e2e: ${formatTokenRate(summary.e2eTps)} tps`
         );
       }
       lines.push(theme.fg("dim", details.join(" · ")));
@@ -322,7 +322,7 @@ export function registerTurnSummaryRenderer(pi: ExtensionAPI): void {
 /**
  * Registers an agent timer hook that updates the working status text above the
  * input box with elapsed time and live turn telemetry, e.g.
- * `Working (20s · ↑15.2k ↓3.1k · TTFT 0.9s · 38 tok/s)`.
+ * `Working (20s · ↑15.2k ↓3.1k · TTFT 0.9s · 38 tps)`.
  *
  * Token totals sum across every turn and call of the current agent run and are
  * shown while the model is still working. Blocking UI prompt time is excluded
