@@ -1,8 +1,12 @@
 export type SubagentExecutionMode = "background" | "sync";
 export type ContextUsageFormat = "pi" | "pi-enhanced" | "off";
 
-export const COMMIT_MODEL_SESSION_VALUE = "session";
-export const COMMIT_MODEL_SESSION_LABEL = "Use session model";
+export const MODEL_SETTING_SESSION_VALUE = "session";
+export const MODEL_SETTING_SESSION_LABEL = "Use session model";
+
+export function isModelSetting(key: EnhancedSettingKey): key is "git.commitModel" | "session.titleModel" | "subagent.model" {
+  return key === "git.commitModel" || key === "session.titleModel" || key === "subagent.model";
+}
 
 export interface EnhancedSettings {
   /** In-memory code search engine exposing find and grep tools. */
@@ -19,6 +23,8 @@ export interface EnhancedSettings {
   "subagent.enabled": boolean;
   /** Default execution mode for /subagent tasks (background or sync). */
   "subagent.defaultMode": SubagentExecutionMode;
+  /** Model used by new subagents, or "session" for the active Pi model. */
+  "subagent.model": string;
   /** Allow LLM to ask user clarification questions and 3 choices interactively. */
   "feedback.askUser": boolean;
   /** Enable token output compressor for noisy bash/powershell outputs. */
@@ -63,7 +69,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     key: "scout.enabled",
     label: "Scout Search Tools",
     category: "Agent Tools",
-    description: "In-memory search tools (find, grep). Disabling mid-session drops schemas & busts cache",
+    description: "In-memory search tools (find, grep). Toggling mid-session can invalidate the prompt cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -95,7 +101,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     key: "web.enabled",
     label: "Web Access Tools",
     category: "Agent Tools",
-    description: "Multi-provider web search & extraction (web_search, web_fetch). Disabling drops schemas & busts cache",
+    description: "Multi-provider web search & extraction (web_search, web_fetch). Toggling mid-session can invalidate the prompt cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -103,7 +109,7 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     key: "subagent.enabled",
     label: "Subagent Tools",
     category: "Agent Tools",
-    description: "Autonomous isolated subagent execution (subagent, /subagent, /jobs). Disabling mid-session drops schemas & busts cache",
+    description: "Autonomous isolated subagent execution (subagent, /subagent, /jobs). Toggling mid-session can invalidate the prompt cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -115,11 +121,19 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     defaultValue: "background",
     options: ["background", "sync"],
   },
+  "subagent.model": {
+    key: "subagent.model",
+    label: "Subagent Model",
+    category: "Agent Tools",
+    description: "Model for the subagent tool and /subagent; choose Use session model to follow the active Pi model",
+    defaultValue: MODEL_SETTING_SESSION_VALUE,
+    options: [MODEL_SETTING_SESSION_VALUE],
+  },
   "feedback.askUser": {
     key: "feedback.askUser",
     label: "Ask User Tools",
     category: "Agent Tools",
-    description: "Allow LLM to prompt user for feedback and 3 choices. Disabling mid-session drops schema & busts cache",
+    description: "Allow LLM to prompt user for feedback and 3 choices. Toggling mid-session can invalidate the prompt cache",
     defaultValue: true,
     options: ["enabled", "disabled"],
   },
@@ -136,8 +150,8 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     label: "Git Agent Model",
     category: "Agent Tools",
     description: "Model for /commit, /git commit, and /git summary; choose Use session model to follow the active Pi model",
-    defaultValue: COMMIT_MODEL_SESSION_VALUE,
-    options: [COMMIT_MODEL_SESSION_VALUE],
+    defaultValue: MODEL_SETTING_SESSION_VALUE,
+    options: [MODEL_SETTING_SESSION_VALUE],
   },
 
   // ── UX & Telemetry ──
@@ -194,8 +208,8 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     label: "Title Generation Model",
     category: "UX & Telemetry",
     description: "Model for automatic session titles; choose Use session model to follow the active Pi model",
-    defaultValue: COMMIT_MODEL_SESSION_VALUE,
-    options: [COMMIT_MODEL_SESSION_VALUE],
+    defaultValue: MODEL_SETTING_SESSION_VALUE,
+    options: [MODEL_SETTING_SESSION_VALUE],
   },
 
   // ── Multi-Account ──
@@ -225,6 +239,7 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "web.enabled": SETTING_DEFINITIONS["web.enabled"].defaultValue,
   "subagent.enabled": SETTING_DEFINITIONS["subagent.enabled"].defaultValue,
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,
+  "subagent.model": SETTING_DEFINITIONS["subagent.model"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,
   "compressor.enabled": SETTING_DEFINITIONS["compressor.enabled"].defaultValue,
   "git.commitModel": SETTING_DEFINITIONS["git.commitModel"].defaultValue,

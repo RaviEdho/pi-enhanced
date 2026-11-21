@@ -133,7 +133,7 @@ function buildEscalationResult(
 
 /**
  * Executes a task in an isolated in-process subagent session.
- * Inherits the parent agent's model and thinking level.
+ * Uses the model and thinking level resolved at launch.
  */
 export async function runSubagent(options: SubagentRunOptions): Promise<SubagentResult> {
   const startTime = Date.now();

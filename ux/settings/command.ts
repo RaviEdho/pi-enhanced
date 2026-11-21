@@ -4,13 +4,20 @@ import { isScoutActive } from "../../tools/scout/register.js";
 import { isSubagentActive } from "../../tools/subagent/index.js";
 import { isWebActive } from "../../tools/web/index.js";
 import { refreshProviderCatalogs } from "../../providers/refresh.js";
-import { getAvailablePickerModels } from "../available-models.js";
+import { findAvailablePickerModel, getAvailablePickerModels } from "../available-models.js";
 import { EnhancedSettingsComponent } from "./component.js";
 import { formatEnhancedSettings, formatSettingValue } from "./format.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
-  COMMIT_MODEL_SESSION_VALUE,
+  TOOL_CACHE_SETTINGS,
+  TOOL_CACHE_WARNING_TOKENS,
+  describeToolCacheChange,
+  isToolCacheSetting,
+} from "./tool-cache.js";
+import {
+  MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
+  isModelSetting,
   type EnhancedSettingKey,
 } from "./types.js";
 
@@ -125,14 +132,11 @@ export async function handleSettingsEnhancedCommand(
     }
 
     const def = SETTING_DEFINITIONS[key];
-    if (key === "git.commitModel" || key === "session.titleModel") {
-      if (rawVal === COMMIT_MODEL_SESSION_VALUE) {
-        store.set(key, COMMIT_MODEL_SESSION_VALUE as any);
-      } else if (
-        rawValue &&
-        (await getAvailablePickerModels(ctx)).some((model) => `${model.provider}/${model.id}` === rawValue)
-      ) {
-        store.set(key, rawValue as any);
+    if (isModelSetting(key)) {
+      if (rawVal === MODEL_SETTING_SESSION_VALUE) {
+        store.set(key, MODEL_SETTING_SESSION_VALUE);
+      } else if (rawValue && await findAvailablePickerModel(ctx, rawValue, ctx.signal).catch(() => undefined)) {
+        store.set(key, rawValue);
       } else {
         const msg = "Choose 'session' or an available provider/model from /settings-enhanced.";
         if (ctx.hasUI) ctx.ui.notify(msg, "error");
@@ -143,48 +147,27 @@ export async function handleSettingsEnhancedCommand(
       const isEnabling = rawVal === "true" || rawVal === "enabled" || rawVal === "1" || rawVal === "on";
       const isDisabling = rawVal === "false" || rawVal === "disabled" || rawVal === "0" || rawVal === "off";
 
-      if (isEnabling) {
-        store.set(key, true as any);
-        if (key === "scout.interceptShell" && !isScoutActive()) {
-          const note = "Set scout.interceptShell = enabled (Note: interceptor remains dormant while Scout search tools are disabled).";
-          if (ctx.hasUI) ctx.ui.notify(note, "info");
-          else console.log(note);
-          return;
-        }
-      } else if (isDisabling) {
-        if (
-          key === "feedback.askUser" ||
-          key === "scout.enabled" ||
-          key === "subagent.enabled" ||
-          key === "web.enabled"
-        ) {
-          const usage = ctx.getContextUsage?.();
-          const tokens = usage?.tokens ?? 0;
-          if (tokens >= 10_000) {
-            const kTok = (tokens / 1000).toFixed(1);
-            let toolName: string;
-            if (key === "feedback.askUser") {
-              toolName = "Ask User Tools ('ask_user')";
-            } else if (key === "scout.enabled") {
-              toolName = "Scout Search Tools ('find', 'grep')";
-            } else if (key === "web.enabled") {
-              toolName = "Web Access Tools ('web_search', 'web_fetch')";
-            } else {
-              toolName = "Subagent Tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
-            }
-            const warn = `⚠ Warning: Active context has ~${kTok}k tokens. Disabling ${toolName} mid-session modifies tool definitions and busts your prefix prompt cache, which may increase latency and token costs on subsequent requests.`;
-            if (ctx.hasUI) {
-              ctx.ui.notify(warn, "warning");
-            } else {
-              console.warn(`\x1b[33m${warn}\x1b[0m`);
-            }
-          }
-        }
-        store.set(key, false as any);
-      } else {
+      if (!isEnabling && !isDisabling) {
         const msg = `Invalid value for ${key}. Expected 'enabled' or 'disabled'.`;
         if (ctx.hasUI) ctx.ui.notify(msg, "error");
         else console.error(msg);
+        return;
+      }
+
+      const changesTools = isToolCacheSetting(key) && TOOL_CACHE_SETTINGS[key].isActive() !== isEnabling;
+      if (changesTools) {
+        const tokens = ctx.getContextUsage?.()?.tokens ?? 0;
+        if (tokens >= TOOL_CACHE_WARNING_TOKENS) {
+          const warn = `⚠ Warning: Active context has ~${(tokens / 1000).toFixed(1)}k tokens. ${describeToolCacheChange(key, isEnabling)} Cache misses may increase latency and token costs.`;
+          if (ctx.hasUI) ctx.ui.notify(warn, "warning");
+          else console.warn(`\x1b[33m${warn}\x1b[0m`);
+        }
+      }
+      store.set(key, isEnabling, { notifyIfUnchanged: changesTools });
+      if (isEnabling && key === "scout.interceptShell" && !isScoutActive()) {
+        const note = "Set scout.interceptShell = enabled (Note: interceptor remains dormant while Scout search tools are disabled).";
+        if (ctx.hasUI) ctx.ui.notify(note, "info");
+        else console.log(note);
         return;
       }
     } else if (def.options.includes(rawVal)) {

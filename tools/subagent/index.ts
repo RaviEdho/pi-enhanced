@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { resolveSessionToolState } from "../../ux/settings/session.js";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { jobManager, renderSubagentReportMessage } from "./jobs.js";
+import { resolveSubagentModelOptions } from "./model.js";
 import { runSubagent } from "./run.js";
 import {
   createSubagentCancelToolDefinition,
@@ -82,15 +83,13 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
     return;
   }
 
-  const model = ctx.model;
-  if (!model) {
-    if (ctx.hasUI) {
-      ctx.ui.notify("No active model selected in Pi session. Please select a model first.", "error");
-    } else {
-      process.stderr.write("No active model selected in Pi session.\n");
-    }
+  const selection = await resolveSubagentModelOptions(ctx, ctx.signal);
+  if ("error" in selection) {
+    if (ctx.hasUI) ctx.ui.notify(selection.error, "error");
+    else process.stderr.write(`${selection.error}\n`);
     return;
   }
+  const options = { task, cwd: ctx.cwd, ...selection.options };
 
   jobManager.setUIContext(ctx.ui);
 
@@ -99,11 +98,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
   const isBackground = isForeground ? false : defaultMode === "background";
   if (isBackground) {
     const startResult = jobManager.startJob({
-      task,
-      cwd: ctx.cwd,
-      model,
-      thinkingLevel: ctx.thinkingLevel ?? "off",
-      modelRuntime: (ctx.modelRegistry as any)?.runtime,
+      ...options,
       deliverAsFollowUp: true,
     });
 
@@ -141,11 +136,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
       };
 
       runSubagent({
-        task,
-        cwd: ctx.cwd,
-        model,
-        thinkingLevel: ctx.thinkingLevel ?? "off",
-        modelRuntime: (ctx.modelRegistry as any)?.runtime,
+        ...options,
         signal: abortController.signal,
         onUpdate: (prog) => {
           const toolInfo = prog.currentTool ? ` (${prog.currentTool})` : "";
@@ -169,11 +160,7 @@ async function handleSubagentCommand(args: string, ctx: ExtensionCommandContext)
     }
     try {
       result = await runSubagent({
-        task,
-        cwd: ctx.cwd,
-        model,
-        thinkingLevel: ctx.thinkingLevel ?? "off",
-        modelRuntime: (ctx.modelRegistry as any)?.runtime,
+        ...options,
         signal: abortController.signal,
         onUpdate: (prog) => {
           if (!ctx.hasUI) {

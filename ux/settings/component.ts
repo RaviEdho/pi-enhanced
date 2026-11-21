@@ -25,18 +25,31 @@ import { DialogFrame, renderDialogActions } from "../dialog.js";
 import { ModelPickerComponent } from "../model-picker.js";
 import { EnhancedSettingsStore } from "./store.js";
 import {
-  COMMIT_MODEL_SESSION_LABEL,
-  COMMIT_MODEL_SESSION_VALUE,
+  TOOL_CACHE_SETTINGS,
+  TOOL_CACHE_WARNING_TOKENS,
+  describeToolCacheChange,
+  isToolCacheSetting,
+  type ToolCacheSettingKey,
+} from "./tool-cache.js";
+import {
+  MODEL_SETTING_SESSION_LABEL,
+  MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
+  isModelSetting,
   type EnhancedSettingKey,
+  type EnhancedSettings,
   type SettingDefinition,
 } from "./types.js";
 
+type BooleanSettingKey = {
+  [K in EnhancedSettingKey]: EnhancedSettings[K] extends boolean ? K : never;
+}[EnhancedSettingKey];
+
 interface CacheWarningState {
-  settingKey: "feedback.askUser" | "scout.enabled" | "subagent.enabled" | "web.enabled";
-  toolLabel: string;
+  settingKey: ToolCacheSettingKey;
   contextTokens: number;
-  selectedOption: number; // 0 = Keep enabled (recommended), 1 = Proceed and disable
+  enabled: boolean;
+  selectedOption: number; // 0 = Keep current state, 1 = Apply change
 }
 
 /**
@@ -80,38 +93,18 @@ export class EnhancedSettingsComponent implements Component {
     const feedbackActive = isFeedbackToolActive();
     const subagentActive = isSubagentActive();
     const webActive = isWebActive();
-    const configuredCommitModel = this.store.get("git.commitModel");
-    const configuredTitleModel = this.store.get("session.titleModel");
     const modelChoices: SelectItem[] = [
       {
-        value: COMMIT_MODEL_SESSION_LABEL,
-        label: COMMIT_MODEL_SESSION_LABEL,
+        value: MODEL_SETTING_SESSION_LABEL,
+        label: MODEL_SETTING_SESSION_LABEL,
         description: "Follow the model currently selected in the Pi session",
       },
+      ...availableModels.map((model) => ({
+        value: `${model.provider}/${model.id}`,
+        label: `${model.provider}/${model.id}`,
+        description: model.name,
+      })).sort((a, b) => a.label.localeCompare(b.label)),
     ];
-    try {
-      modelChoices.push(...availableModels
-        .map((model) => ({
-          value: `${model.provider}/${model.id}`,
-          label: `${model.provider}/${model.id}`,
-          description: model.name,
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label)));
-    } catch {
-      // Keep the session-model option available if the registry cannot be read.
-    }
-    for (const configuredModel of [configuredCommitModel, configuredTitleModel]) {
-      if (
-        configuredModel !== COMMIT_MODEL_SESSION_VALUE &&
-        !modelChoices.some((choice) => choice.value === configuredModel)
-      ) {
-        modelChoices.push({
-          value: configuredModel,
-          label: `${configuredModel} (unavailable)`,
-          description: "This saved model is not currently available",
-        });
-      }
-    }
 
     // Build setting items mapped from definitions
     this.items = (
@@ -141,26 +134,32 @@ export class EnhancedSettingsComponent implements Component {
       let description = def.description;
       let submenu: SettingItem["submenu"];
 
-      if (def.key === "git.commitModel" || def.key === "session.titleModel") {
-        const isTitleModel = def.key === "session.titleModel";
+      if (isModelSetting(def.key)) {
         options = [];
-        const selectedValue = String(currentRaw) === COMMIT_MODEL_SESSION_VALUE
-          ? COMMIT_MODEL_SESSION_LABEL
+        currentValue = currentRaw === MODEL_SETTING_SESSION_VALUE
+          ? MODEL_SETTING_SESSION_LABEL
           : String(currentRaw);
-        const selectedChoice = modelChoices.find((choice) => choice.value === selectedValue);
-        currentValue = selectedChoice?.label ?? selectedValue;
+        const unavailableChoice = modelChoices.some((choice) => choice.value === currentValue)
+          ? undefined
+          : {
+              value: currentValue,
+              label: `${currentValue} (unavailable)`,
+              description: "This saved model is not currently available",
+            };
+        if (unavailableChoice) currentValue = unavailableChoice.label;
         submenu = (currentValue, done) => {
+          const unavailable = unavailableChoice?.label === currentValue ? unavailableChoice : undefined;
           const picker = new ModelPickerComponent(this.tui, this.theme,
             this.keybindings ?? { matches: (data, action) => getKeybindings().matches(data, action as any) }, {
-              title: isTitleModel ? "Select Title Generation Model" : "Select Git Commit Model",
-              choices: modelChoices,
-              currentValue: modelChoices.find((choice) => choice.label === currentValue)?.value ?? currentValue,
+              title: `Select ${def.label}`,
+              choices: unavailable ? [...modelChoices, unavailable] : modelChoices,
+              currentValue: unavailable?.value ?? currentValue,
               refresh: this.ctx ? refreshProviderCatalogs(this.ctx) : undefined,
               bordered: false,
             }, (value) => {
               picker.dispose();
               this.modelMenu = undefined;
-              done(value);
+              done(value === unavailable?.value ? undefined : value);
             });
           picker.focused = this.hasFocus;
           this.modelMenu = picker;
@@ -230,14 +229,17 @@ export class EnhancedSettingsComponent implements Component {
         content.push(...wrapTextWithAnsi(this.theme.fg(color, text), innerWidth)
           .map((line) => `  ${line}`));
       };
-      paragraph(`Active context has ~${(warning.contextTokens / 1000).toFixed(1)}k tokens (≥ 10k threshold).`, "warning");
+      paragraph(`Active context has ~${(warning.contextTokens / 1000).toFixed(1)}k tokens (≥ ${TOOL_CACHE_WARNING_TOKENS / 1000}k threshold).`, "warning");
       content.push("");
-      paragraph(`Disabling ${warning.toolLabel} mid-session removes tool definitions and busts your prefix prompt cache.`, "text");
+      paragraph(describeToolCacheChange(warning.settingKey, warning.enabled), "text");
       content.push("");
-      paragraph("Subsequent requests will incur cache misses, increasing turnaround latency and token costs.", "dim");
-      const actions = renderDialogActions(["Keep enabled (recommended)", "Proceed and disable anyway"], warning.selectedOption, width);
+      paragraph("Cache misses may increase latency and token costs on subsequent requests.", "dim");
+      const labels = warning.enabled
+        ? ["Keep disabled (recommended)", "Proceed and enable anyway"]
+        : ["Keep enabled (recommended)", "Proceed and disable anyway"];
+      const actions = renderDialogActions(labels, warning.selectedOption, width);
       const actionFocusLine = warning.selectedOption;
-      this.resetScrollForDetails(`warning:${warning.settingKey}`);
+      this.resetScrollForDetails(`warning:${warning.settingKey}:${warning.enabled}`);
       return this.frame.render(width, {
         title: "Prompt Cache Invalidation Warning",
         content,
@@ -277,7 +279,6 @@ export class EnhancedSettingsComponent implements Component {
         data === "\x1b" ||
         data === "\x03"
       ) {
-        this.settingsList.updateValue(this.cacheWarning.settingKey, "enabled");
         this.cacheWarning = undefined;
         this.tui.requestRender();
         return true;
@@ -299,19 +300,12 @@ export class EnhancedSettingsComponent implements Component {
       }
 
       if (matchesKey(data, "enter") || data === "\r" || data === "\n" || data === " ") {
-        if (this.cacheWarning.selectedOption === 0) {
-          // Revert to enabled
-          this.settingsList.updateValue(this.cacheWarning.settingKey, "enabled");
-        } else {
-          // Proceed with disabling
-          this.store.set(this.cacheWarning.settingKey, false);
-          if (this.cacheWarning.settingKey === "scout.enabled") {
-            this.syncScoutInterceptorItem(false);
-          } else if (this.cacheWarning.settingKey === "subagent.enabled") {
-            this.syncSubagentModeItem(false);
-          }
-        }
+        const { settingKey, enabled, selectedOption } = this.cacheWarning;
         this.cacheWarning = undefined;
+        if (selectedOption === 1) {
+          this.settingsList.updateValue(settingKey, enabled ? "enabled" : "disabled");
+          this.applyBooleanSetting(settingKey, enabled);
+        }
         this.tui.requestRender();
         return true;
       }
@@ -527,54 +521,36 @@ export class EnhancedSettingsComponent implements Component {
       return;
     }
 
-    // Check mid-run prompt cache invalidation warning for ask_user, scout tools, subagent tools, or web tools
-    if (
-      (key === "feedback.askUser" ||
-        key === "scout.enabled" ||
-        key === "subagent.enabled" ||
-        key === "web.enabled") &&
-      newValue === "disabled"
-    ) {
+    const enabled = newValue === "enabled";
+    if (isToolCacheSetting(key) && TOOL_CACHE_SETTINGS[key].isActive() !== enabled) {
       const tokens = this.getContextTokens();
-      if (tokens >= 10_000) {
-        let toolLabel: string;
-        if (key === "feedback.askUser") {
-          toolLabel = "Ask User Tools ('ask_user')";
-        } else if (key === "scout.enabled") {
-          toolLabel = "Scout Search Tools ('find', 'grep')";
-        } else if (key === "web.enabled") {
-          toolLabel = "Web Access Tools ('web_search', 'web_fetch')";
-        } else {
-          toolLabel = "Subagent Tools ('subagent', 'subagent_status', 'subagent_list', 'subagent_cancel')";
-        }
-
-        this.cacheWarning = {
-          settingKey: key,
-          toolLabel,
-          contextTokens: tokens,
-          selectedOption: 0,
-        };
+      if (tokens >= TOOL_CACHE_WARNING_TOKENS) {
+        // SettingsList previews the new value before calling us. Keep the old value until confirmed.
+        this.settingsList.updateValue(key, enabled ? "disabled" : "enabled");
+        this.cacheWarning = { settingKey: key, contextTokens: tokens, enabled, selectedOption: 0 };
         this.tui.requestRender();
         return;
       }
     }
 
-    if (key === "git.commitModel" || key === "session.titleModel") {
-      this.store.set(
-        key,
-        (newValue === COMMIT_MODEL_SESSION_LABEL ? COMMIT_MODEL_SESSION_VALUE : newValue) as any
-      );
+    if (isModelSetting(key)) {
+      this.store.set(key, newValue === MODEL_SETTING_SESSION_LABEL ? MODEL_SETTING_SESSION_VALUE : newValue);
     } else if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
-      const enabled = newValue === "enabled";
-      this.store.set(key, enabled as any);
+      this.applyBooleanSetting(key, enabled);
+    }
+  }
 
-      if (key === "scout.enabled") {
-        this.syncScoutInterceptorItem(enabled);
-      } else if (key === "subagent.enabled") {
-        this.syncSubagentModeItem(enabled);
-      }
+  private applyBooleanSetting(key: BooleanSettingKey, enabled: boolean): void {
+    // A resumed session can have a different active tool state from the saved default.
+    this.store.set(key, enabled, {
+      notifyIfUnchanged: isToolCacheSetting(key) && TOOL_CACHE_SETTINGS[key].isActive() !== enabled,
+    });
+    if (key === "scout.enabled") {
+      this.syncScoutInterceptorItem(enabled);
+    } else if (key === "subagent.enabled") {
+      this.syncSubagentModeItem(enabled);
     }
   }
 

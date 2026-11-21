@@ -1,6 +1,7 @@
 import {
-  COMMIT_MODEL_SESSION_VALUE,
+  MODEL_SETTING_SESSION_VALUE,
   SETTING_DEFINITIONS,
+  isModelSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
   type SettingDefinition,
@@ -71,10 +72,7 @@ export function formatSettingValue(key: EnhancedSettingKey, value: any): string 
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
   }
-  if (
-    (key === "git.commitModel" || key === "session.titleModel") &&
-    value === COMMIT_MODEL_SESSION_VALUE
-  ) {
+  if (isModelSetting(key) && value === MODEL_SETTING_SESSION_VALUE) {
     return "same as session model";
   }
   return String(value);

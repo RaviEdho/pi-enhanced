@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import {
   DEFAULT_ENHANCED_SETTINGS,
   SETTING_DEFINITIONS,
+  isModelSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
 } from "./types.js";
@@ -63,9 +64,16 @@ export class EnhancedSettingsStore {
   /**
    * Updates a single setting and persists to disk.
    */
-  public set<K extends EnhancedSettingKey>(key: K, value: EnhancedSettings[K]): void {
+  public set<K extends EnhancedSettingKey>(
+    key: K,
+    value: EnhancedSettings[K],
+    options: { notifyIfUnchanged?: boolean } = {},
+  ): void {
     this.checkExternalChanges(true);
-    if (this.settings[key] === value) return;
+    if (this.settings[key] === value) {
+      if (options.notifyIfUnchanged) this.notify(key);
+      return;
+    }
 
     this.settings[key] = value;
     this.save();
@@ -141,7 +149,7 @@ export class EnhancedSettingsStore {
                 target[key] = false;
               }
             } else if (
-              (key === "git.commitModel" || key === "session.titleModel") &&
+              isModelSetting(key) &&
               typeof rawVal === "string" &&
               rawVal.trim()
             ) {

@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { isSubagentActive } from "./index.js";
 import { jobManager } from "./jobs.js";
+import { resolveSubagentModelOptions } from "./model.js";
 import { runSubagent } from "./run.js";
 import {
   type BackgroundJob,
@@ -52,7 +53,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
     name: "subagent",
     label: "subagent",
     description:
-      "Delegate a task to an isolated subagent with its own clean context window. Inherits the current model and thinking effort of the parent session. Runs in the background by default (non-blocking, returns jobId) or synchronously (blocking with background: false).",
+      "Delegate a task to an isolated subagent with its own clean context window. Uses the configured subagent model (the parent session model by default) and inherits the parent's thinking effort where supported. Runs in the background by default (non-blocking, returns jobId) or synchronously (blocking with background: false).",
     parameters: SubagentParametersSchema,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (!isSubagentActive()) {
@@ -68,18 +69,23 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
         };
       }
 
-      if (!ctx.model) {
+      const selection = await resolveSubagentModelOptions(ctx, signal);
+      if ("error" in selection) {
         return {
-          content: [
-            {
-              type: "text",
-              text: "Subagent error: No active model selected in Pi session. Please select a model first.",
-            },
-          ],
+          content: [{ type: "text", text: `Subagent error: ${selection.error}` }],
           details: undefined,
           isError: true,
         };
       }
+      const options = {
+        task: params.task,
+        description: params.description,
+        tools: params.tools,
+        maxTurns: params.maxTurns,
+        timeoutMs: params.timeoutMs,
+        cwd: ctx.cwd,
+        ...selection.options,
+      };
 
       jobManager.setUIContext(ctx.ui);
 
@@ -90,15 +96,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       // Non-blocking background execution
       if (isBackground) {
         const startResult = jobManager.startJob({
-          task: params.task,
-          description: params.description,
-          tools: params.tools,
-          maxTurns: params.maxTurns,
-          timeoutMs: params.timeoutMs,
-          cwd: ctx.cwd,
-          model: ctx.model,
-          thinkingLevel: ctx.thinkingLevel ?? "off",
-          modelRuntime: (ctx.modelRegistry as any)?.runtime,
+          ...options,
           deliverAsFollowUp: true,
         });
 
@@ -125,15 +123,7 @@ export function createSubagentToolDefinition(): ToolDefinition<typeof SubagentPa
       // Synchronous blocking execution
       try {
         const result = await runSubagent({
-          task: params.task,
-          description: params.description,
-          tools: params.tools,
-          maxTurns: params.maxTurns,
-          timeoutMs: params.timeoutMs,
-          cwd: ctx.cwd,
-          model: ctx.model,
-          thinkingLevel: ctx.thinkingLevel ?? "off",
-          modelRuntime: (ctx.modelRegistry as any)?.runtime,
+          ...options,
           signal,
           onUpdate: (prog) => {
             onUpdate?.({

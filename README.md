@@ -28,7 +28,7 @@ When you’re ready to make changes, use `/implement` with your instructions. Af
 | Check account limits | `/usage` shows quotas, reset times, or balances where the provider reports them. |
 | See what’s filling the context window | `/context` breaks down messages, tool output, and remaining space. |
 | Search without flooding the chat | Ask Pi to find a symbol or search the web. Terminal output is condensed; `/recall <id>` retrieves the original. |
-| Delegate a side task | `/subagent` starts an isolated task; `/jobs` shows background work. |
+| Delegate a side task | `/subagent` starts an isolated task; `/jobs` shows background work. Pick a **Subagent Model** in `/settings-enhanced` or inherit the parent model. |
 | Work from chat | See the [Discord](docs/discord.md) and [WhatsApp](docs/whatsapp.md) gateway guides. Only allow people you trust with your local files and shell. |
 | Tune the extension | `/settings-enhanced` controls search, compression, session titles, telemetry, and more. |
 

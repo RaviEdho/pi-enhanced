@@ -41,6 +41,7 @@ Configurable options include:
 - `web.enabled`: Web Access Tools - multi-provider search & extraction (`web_search`, `web_fetch`) with session cache memory (`enabled` / `disabled`)
 - `subagent.enabled`: Subagent Tools - isolated in-process subagent execution (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
 - `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
+- `subagent.model`: Subagent Model - one saved model for the `subagent` tool and `/subagent` (an available `provider/model` or `session`, the default)
 - `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
 - `scout.respectGitIgnore`: Honor Git ignore rules in workspace search (`enabled` / `disabled`, default `enabled`)
 - `scout.includeHidden`: Index hidden workspace directories, retaining fixed exclusions (`enabled` / `disabled`, default `disabled`)
@@ -57,6 +58,8 @@ Configurable options include:
 - `balancer.paceBalancing`: Quota pace balancing across multiple accounts (`enabled` / `disabled`)
 
 Settings persist to `~/.pi/agent/enhanced-settings.json`. Use `/settings-enhanced set git.commitModel session` to restore the default session model.
+
+At 10,000 context tokens or more, the settings dialog asks for confirmation before enabling or disabling Scout Search, Web Access, Subagent, or Ask User tools. Both changes can invalidate the prompt cache. The explicit `set` command warns and applies the change without prompting.
 
 ## Safe Plan Mode & Implement Mode (`/plan`, `/implement`)
 
@@ -158,13 +161,15 @@ The tool is enabled by default, but can be completely disabled via `/settings-en
 ```
 - When disabled, the tool definition is completely removed from the model's active tool list and prompt instructions.
 - **Session Memory & Cache Protection**: Just like Pi remembers model selections on past sessions, toggling `feedback.askUser` applies to **future/new sessions**. Resuming an existing long session automatically remembers its initial tool configuration, preserving 100% prefix prompt cache hits on past conversations!
-- **Prompt Cache Warning Gate**: If you explicitly disable `ask_user` mid-session when the active context has at least 10,000 tokens (`≥ 10k`), an explicit warning modal prompts for confirmation to prevent accidental prefix prompt cache invalidation and token cost spikes.
+- Turning `ask_user` on or off is covered by the prompt-cache warning in Enhanced Settings.
 
 ## Search, output and background jobs
 
 - **Codebase Scout Search Engine (`tools/scout/`, `/scout-health`, `/scout-rescan`)**: 100% pure TypeScript port of FFF concepts. Replaces standard `find` and `grep` with memory-cached, typo-tolerant search tools (`find`, `grep`). Indexes the workspace on the first search (or `/scout-rescan`), not while Pi opens a session. Features typo-tolerant fuzzy matching, declared-symbol-aware definition ranking, stable bounded top-K filename ranking, unified single and multi-pattern (`patterns: [...]`) OR search in a single pass, git recency awareness, and strict output budgeting with match-centered line truncation (`…match…`) to prevent context blowup.
 - **Terminal Output Compressor (`tools/compressor/`, `/recall`)**: Native in-process port of RTK (Rust Token Killer) features without requiring external binaries or command rewriting. Hooks into Pi's `tool_result` event, reducing raw terminal noise (collapsing passing test suites, condensing git status/push/diff, pruning linter squiggles, stripping progress meters, and deduplicating repetitive logs). Caches uncompressed tool-result text for `/recall <id>`. Conservative command routing protects chained/script output; diagnostic blocks and warning reports are retained, and a never-worse guard includes recall-hint overhead. Includes dedicated Bun/Deno and Go NDJSON handling.
-- **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Automatically inherits the active model and thinking effort of the parent session, executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
+- **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Uses the saved **Subagent Model** from `/settings-enhanced` (the active parent model by default), inherits the parent's thinking effort where supported, and executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
+
+Set the model with `/settings-enhanced set subagent.model <provider/model>` or choose **Subagent Model** in the settings picker. Set it to `session` to inherit the parent model again. The setting applies to new background and synchronous runs without changing the parent model or jobs already running. If the saved model becomes unavailable, new runs stop with an error rather than silently using a different model.
 
 ## Session shortcuts and telemetry
 
