@@ -12,6 +12,7 @@ import { PiRpcSession } from "./runtime/pi-rpc.mjs";
 import { createMessageRouter } from "./runtime/router.mjs";
 import { createRouteDecider } from "./runtime/route-decider.mjs";
 import { createScheduledJobs } from "./runtime/scheduled-jobs.mjs";
+import { createScheduledReplyRegistry } from "./runtime/scheduled-replies.mjs";
 import { createSessionManager } from "./runtime/sessions.mjs";
 import { createChannelSessionRegistry } from "./runtime/channel-sessions.mjs";
 import { createThreadRegistry } from "./runtime/threads.mjs";
@@ -61,9 +62,10 @@ const configWatch = watchGatewayConfig({
 const channelSessions = createChannelSessionRegistry({
   sessionRoot: paths.sessionRoot, sessions, getSettings: () => config.channelSessions,
 });
+const scheduledReplies = createScheduledReplyRegistry(paths.sessionRoot);
 const scheduledJobs = createScheduledJobs({
   client, configPath: paths.configPath, path: join(dirname(paths.configPath), "schedules.json"),
-  sessions, lifecycle, threads, channelSessions,
+  sessions, lifecycle, threads, channelSessions, scheduledReplies,
 });
 const commands = createCommandHandlers({
   client, config, configPath: paths.configPath,
@@ -72,7 +74,7 @@ const commands = createCommandHandlers({
 const routeDecider = createRouteDecider({ config });
 const router = createMessageRouter({
   client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle,
-  routeDecider, channelSessions,
+  routeDecider, channelSessions, scheduledReplies,
 });
 
 client.on("clientReady", (readyClient) => {

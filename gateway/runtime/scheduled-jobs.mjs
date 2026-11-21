@@ -72,7 +72,7 @@ export async function authorizeScheduleDestination({ client, configPath, scope, 
   } catch { throw accessDenied(); }
 }
 
-export function createScheduledJobs({ client, configPath, path, sessions, lifecycle, threads, channelSessions }) {
+export function createScheduledJobs({ client, configPath, path, sessions, lifecycle, threads, channelSessions, scheduledReplies }) {
   const toolCalls = new WeakMap();
   const shellShutdown = new AbortController();
   const activeShells = new Set();
@@ -109,7 +109,7 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
       };
       if (scope.channelId !== origin.channelId || home) await authorize({ fetchedChannel: channel });
       checkSelection();
-      return { authorize, target: scope.guildId === null ? "dm" : scope.channelId };
+      return { authorize, channelId: scope.channelId, target: scope.guildId === null ? "dm" : scope.channelId };
     } catch { throw deliveryUnavailable(); }
   }
 
@@ -129,7 +129,13 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
         configFor(configPath, job);
         return destination;
       };
-      const target = { send: async (payload) => (await authorizeDelivery({ attachFiles: !!payload.files?.length })).send(payload) };
+      const replyKey = job.kind === "agent" ? scheduledReplies?.start(delivery.channelId) : undefined;
+      const onMessageSent = replyKey ? (sent) => scheduledReplies.remember(delivery.channelId, replyKey, sent) : undefined;
+      const target = { send: async (payload) => {
+        const sent = await (await authorizeDelivery({ attachFiles: !!payload.files?.length })).send(payload);
+        onMessageSent?.(sent);
+        return sent;
+      } };
       if (job.kind === "reminder") {
         await sendText(target, `**Reminder**\n${job.text}`);
         return "sent";
@@ -155,7 +161,7 @@ export function createScheduledJobs({ client, configPath, path, sessions, lifecy
           };
           const audience = delivery.target === "dm" ? "a DM to the requester" : `Discord channel or thread ID ${delivery.target}`;
           const text = await session.promptAndWait(`Scheduled task set by Discord user ID ${job.userId} (job ${job.id}). This is a fresh unattended run; there is no earlier conversation. Results and images go to ${audience}. Do not disclose sensitive information to a shared audience.\n\n${job.text}`, {
-            channel: current, channelId: job.channelId, userId: job.userId, historyScope,
+            channel: current, channelId: job.channelId, userId: job.userId, historyScope, onMessageSent,
             authorizeScheduledOrigin: whileRunning(authorizeOrigin),
             authorizeScheduledDelivery: whileRunning(authorizeDelivery),
           });

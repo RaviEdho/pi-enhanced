@@ -41,6 +41,7 @@ session persistence and RPC framing.
 | `commands.mjs` | Register slash commands and model/thinking autocomplete; handle live steering, force cancellation, commit workflows, setting changes, and home-channel configuration. |
 | `scheduled-jobs.mjs` | Authorize schedule commands and tools, scope runs to the origin, and reauthorize notification destinations. |
 | `scheduled-shell.mjs` | Run unattended commands with no Pi session or captured output; handle timeout and shutdown cleanup. |
+| `scheduled-replies.mjs` | Map delivered agent results and their follow-up replies to independent interactive sessions. |
 | `schedule-time.mjs`, `scheduler.mjs` | Parse one-time, interval, and timezone-aware cron schedules; own private storage, polling, durable claims, cancellation, and bounded outcomes. |
 | `components.mjs` | Render Discord controls and cards without performing I/O or managing sessions. |
 | `agent-replies.mjs` | Send completed assistant text with ordered table-only images and text fallback. |
@@ -330,6 +331,13 @@ callbacks where commands and lifecycle depend on each other.
   captured active interaction's `onMessageSent` hook after sending too. Mapping
   failures must be logged without retrying an already-delivered message. Do not
   expire reply records automatically or load the entire index to find a message.
+- Scheduled agent sends (text chunks, tables and image tools) and follow-up sends
+  use destination-scoped links under `scheduled-replies/`. Each occurrence has a
+  separate interactive key. Direct replies still require destination/user access,
+  but skip normal routing and need no ping. Use the quote, not ambient recent
+  messages or the unattended session's prompt, workspace, or history. A legacy
+  scheduled result header from this bot can restore a missing link on a reply in
+  a server channel. Never use the header's job ID to read the schedule store.
 - A direct reply to a tracked bot response resumes its original logical session's
   latest history, not a rewind/fork, and bypasses classifier/follow-up routing.
   A reply to an untracked bot response or unavailable original session explicitly

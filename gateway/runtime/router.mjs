@@ -9,6 +9,7 @@ import { getThreadSessionKey, makeThreadName } from "./threads.mjs";
 import { log, safeErrorName, summarizeDiscordError } from "./logging.mjs";
 import { getChannelSessionKey, trackChannelReplies } from "./channel-sessions.mjs";
 import { DECISION_TIMEOUT_MS } from "./route-decider.mjs";
+import { isLegacyScheduledAgentResult } from "./scheduled-replies.mjs";
 export { getChannelSessionKey } from "./channel-sessions.mjs";
 
 /** Tools that mean a channel reply did real work, so the topic needs a thread. */
@@ -36,26 +37,27 @@ function contextCount(setting) {
 }
 
 /** Authorization and Discord-to-Pi conversation routing. */
-export function createMessageRouter({ client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle, routeDecider, channelSessions }) {
+export function createMessageRouter({ client, config, allowedUsers, allowedChannels, threads, sessions, interactions, lifecycle, routeDecider, channelSessions, scheduledReplies }) {
   const seenMessages = new Set();
   const lastChannelReplyAt = new Map();
   const lastDeliveredMessage = new Map();
 
   function classifyMessage(message) {
-    if (message.guildId == null) return config.allowDirectMessages !== false ? { kind: "dm" } : undefined;
+    const scheduledKey = hasDiscordReply(message) ? scheduledReplies?.lookup(message.channelId, message.reference.messageId) : undefined;
+    const affinity = scheduledKey ? { scheduledKey } : undefined;
+    if (message.guildId == null) return config.allowDirectMessages !== false ? { kind: "dm", ...affinity } : undefined;
     if (config.allowServerMessages === false) return undefined;
     const channel = message.channel;
     if (typeof channel?.isThread === "function" && channel.isThread()) {
       const registration = threads.get(message.channelId);
-      if (!registration || (!allowedChannels.has("*") && !allowedChannels.has(registration.parentChannelId))) return undefined;
-      return {
-        kind: "thread", parentChannelId: registration.parentChannelId,
-        sessionKey: getThreadSessionKey(message.channelId, registration),
-      };
+      const parentChannelId = registration?.parentChannelId ?? (scheduledKey ? channel.parentId : undefined);
+      if (!parentChannelId || (!allowedChannels.has("*") && !allowedChannels.has(parentChannelId))) return undefined;
+      return { kind: "thread", parentChannelId, ...affinity,
+        sessionKey: registration ? getThreadSessionKey(message.channelId, registration) : undefined };
     }
     if (!allowedChannels.has("*") && !allowedChannels.has(message.channelId)) return undefined;
-    if (!client.user || !message.mentions?.users?.has(client.user.id)) return undefined;
-    return { kind: "new-thread" };
+    if (!client.user || (!scheduledKey && !message.mentions?.users?.has(client.user.id))) return undefined;
+    return { kind: "new-thread", ...affinity };
   }
 
   function rememberChannelReply(sessionKey, userId) {
@@ -153,7 +155,9 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
     // prompt must not intercept mentions/replies belonging to another session.
     let answerScope;
     let answerKey;
-    if (route.kind === "new-thread" && channelSessions) {
+    if (route.scheduledKey) {
+      answerScope = { session: sessions.peek(route.scheduledKey), replyToMessageId: message.reference.messageId };
+    } else if (route.kind === "new-thread" && channelSessions) {
       const reply = hasDiscordReply(message);
       answerKey = reply
         ? channelSessions.replySession(message.guildId, message.channelId, message.reference.messageId)
@@ -233,23 +237,20 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       });
       return { replyContext, recentContext };
     };
-    const defaultSessionKey = route.kind === "new-thread"
-      ? channelSessions?.current(message.guildId, message.channelId, acceptedAt, turnConfig.channelSessions) ?? getChannelSessionKey(message.guildId, message.channelId)
-      : undefined;
+    let scheduledKey = route.scheduledKey;
     let linkedSessionKey;
     let missingSessionNotice;
-    if (route.kind === "new-thread" && isReply && channelSessions) {
+    if (!scheduledKey && route.kind === "new-thread" && isReply && channelSessions) {
       linkedSessionKey = channelSessions.replySession(message.guildId, message.channelId, message.reference.messageId);
       if (linkedSessionKey && !sessions.canResume(linkedSessionKey)) {
         linkedSessionKey = channelSessions.standalone(message.guildId, message.channelId);
         missingSessionNotice = "The original conversation is unavailable. Starting a separate fresh session using the quoted message; the channel's default conversation is unchanged.";
       } else if (!linkedSessionKey) {
-        // Discord usually supplies the reply author's identity in the event.
-        // Fall back to the memoized quote read only when that metadata is absent;
-        // session selection and classification still share the six-second budget.
-        let authorId = message.mentions?.repliedUser?.id
-          ?? message.channel.messages?.cache?.get(message.reference.messageId)?.author?.id;
-        if (!authorId) {
+        const cachedReply = message.channel.messages?.cache?.get(message.reference.messageId);
+        const authorId = message.mentions?.repliedUser?.id ?? cachedReply?.author?.id;
+        // Older scheduled posts have no persisted link. Read the bot's own
+        // result header within the existing routing budget before falling back.
+        if ((!authorId || (scheduledReplies && authorId === client.user?.id)) && !cachedReply) {
           let timer;
           try {
             await Promise.race([getReplyContext(), new Promise((resolve) => {
@@ -257,21 +258,35 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
               timer.unref?.();
             })]);
           } finally { clearTimeout(timer); }
-          authorId = repliedMessage?.author?.id;
         }
-        if (authorId === client.user?.id) {
+        const referenced = repliedMessage ?? cachedReply;
+        if (scheduledReplies && isLegacyScheduledAgentResult(referenced, client.user?.id)) {
+          // Earlier replies may have already registered it while this message
+          // waited in the routing queue.
+          scheduledKey = scheduledReplies.lookup(message.channelId, referenced.id);
+          if (!scheduledKey) {
+            scheduledKey = scheduledReplies.start(message.channelId);
+            scheduledReplies.remember(message.channelId, scheduledKey, referenced);
+          }
+        } else if (client.user && (authorId ?? referenced?.author?.id) === client.user.id) {
           linkedSessionKey = channelSessions.standalone(message.guildId, message.channelId);
           missingSessionNotice = "This bot message has no saved conversation link (it may predate reply tracking). Starting a separate fresh session using the quoted message; the channel's default conversation is unchanged.";
         }
       }
     }
+    const defaultSessionKey = route.kind === "new-thread" && !scheduledKey
+      ? channelSessions?.current(message.guildId, message.channelId, acceptedAt, turnConfig.channelSessions) ?? getChannelSessionKey(message.guildId, message.channelId)
+      : undefined;
     let target = message.channel;
     let sessionKey;
     let conversationLabel;
     let replyToMessageId = message.id;
     let channelConversation = false;
     let forkSourceKey;
-    if (route.kind === "dm") {
+    if (scheduledKey) {
+      sessionKey = scheduledKey;
+      conversationLabel = `a scheduled result follow-up in Discord channel ${message.channelId}`;
+    } else if (route.kind === "dm") {
       sessionKey = `dm:${message.channelId}:${message.author.id}`;
       conversationLabel = `DM with ${message.author.username}`;
     } else if (route.kind === "thread") {
@@ -310,8 +325,8 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         }
       }
     }
-    const onMessageSent = channelConversation && channelSessions
-      ? (sent) => {
+    const onMessageSent = scheduledKey ? (sent) => scheduledReplies.remember(message.channelId, scheduledKey, sent)
+      : channelConversation && channelSessions ? (sent) => {
         try { channelSessions.rememberReply(message.guildId, message.channelId, sessionKey, sent); }
         catch (error) { log(`Could not save channel reply affinity: ${safeErrorName(error)}`); }
       }
@@ -341,7 +356,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         }
         const result = await sessions.withRunSlot(async () => {
           const replyContext = await getReplyContext();
-          const recentContext = contextMessageCount > 0
+          const recentContext = !scheduledKey && contextMessageCount > 0
             ? await loadRecentContext(message.channel, {
               beforeId: contextBeforeId,
               replyAnchored: isReply,
@@ -376,19 +391,19 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
           session ??= await sessions.get(sessionKey);
           // Initialize before the first user turn so inherited titles/old user
           // messages cannot win the automatic-title race in a forked session.
-          if (route.kind === "new-thread" && !channelConversation) {
+          if (!scheduledKey && route.kind === "new-thread" && !channelConversation) {
             await threads.initializeThreadTitle(target, session, `${messageContent}${embedContext}${replyContext}${recentContext}`);
           }
           // Observe background title generation during the run, not just after it.
-          if (!channelConversation) threads.watchThreadTitle(target, session);
+          if (!scheduledKey && !channelConversation) threads.watchThreadTitle(target, session);
           const result = await session.promptAndWait(prompt, {
             channel: target, userId: message.author.id, channelId: target.id, replyToMessageId, typing, onMessageSent,
-            allowNoReply: route.kind === "thread",
+            allowNoReply: !scheduledKey && route.kind === "thread",
             historyScope: route.kind === "dm" ? { kind: "dm", channelId: message.channelId, userId: message.author.id } : { kind: "thread", guildId: message.guildId, parentChannelId: route.kind === "thread" ? route.parentChannelId : message.channelId },
           }, images, { turnConfig });
           if (!session.forceStopped && result?.disposition === "no_reply") return undefined;
           // Retry if the early watch expired before the title became available.
-          if (!channelConversation) threads.watchThreadTitle(target, session);
+          if (!scheduledKey && !channelConversation) threads.watchThreadTitle(target, session);
           return {
             text: session.forceStopped ? "The agent run was cancelled." : result,
             escalate: channelConversation && decidePerMessage && escalateChannelReplies && usesEscalatingTool(session.lastRunTools),
