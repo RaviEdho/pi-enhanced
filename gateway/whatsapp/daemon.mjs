@@ -9,6 +9,7 @@ import { createSessionManager } from "../runtime/sessions.mjs";
 import { validateWorkspaceDirectory } from "../runtime/workspace.mjs";
 import { openAuthStore } from "./auth.mjs";
 import { createWhatsAppConnection } from "./connection.mjs";
+import { createDmSessionRollover } from "./dm-sessions.mjs";
 import { createDmRouter } from "./dms.mjs";
 import { whatsappPiTransport } from "./pi-ui.mjs";
 import { acquireLock, gatewayPaths, PAIR_TIMEOUT_MS, prepareDirectory, readConfig, readJson, removeAuth, writeJson } from "./storage.mjs";
@@ -125,7 +126,8 @@ async function main() {
     createSession: (directory) => new PiRpcSession(directory, { config, piExecutable, piArgs, extensionRoot, transport: whatsappPiTransport }),
   });
   const router = createDmRouter({
-    paths, sessions, isCurrent: (link) => connection.isLive(link),
+    paths, sessions, rollover: createDmSessionRollover({ sessionRoot: paths.sessions, sessions }),
+    isCurrent: (link) => connection.isLive(link),
     canAccept: (link) => !stopping && connection.isLive(link),
   });
   connection = createWhatsAppConnection({

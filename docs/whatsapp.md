@@ -23,6 +23,12 @@ The WhatsApp gateway connects private text DMs to Pi. It uses the same saved-ses
 
 `/whatsapp teardown` stops the daemon and deletes local pairing credentials and config, keeping Pi conversations and logs. It does **not** revoke the device on your phone: unlink it in WhatsApp as well. If you cancel after scanning a QR, check Linked Devices and remove that device.
 
+## Idle context rollover
+
+Open `/whatsapp configure` → **DM sessions** to turn **Overnight rollover** on or off and set the **Timezone**, **Reset hour**, and **Inactivity window**. It is on by default, with the machine's timezone, a **04:00** reset, and **6 hours** of inactivity. Like Discord, the timezone picker asks for a UTC offset first, then a city whose local daylight saving rules apply. Run `/whatsapp restart` once if the gateway was already running before this feature was installed. After that, settings changes apply to incoming DMs without a restart.
+
+The gateway checks each sender's conversation the next time they message. The check uses inactivity **before the daily reset hour**, not before the new message. If a DM arrived exactly at the inactivity cutoff, or a turn was still running or queued at the reset hour, that day's reset is skipped. On an eligible day, the next DM starts with fresh context and keeps the previous session's workspace, model (if still available), and thinking level. Old Pi session files and WhatsApp messages are not deleted, and quoting an old reply does not reopen the previous Pi session. Existing conversations establish their rollover baseline on the first accepted DM after upgrading.
+
 ## What gets through
 
 - Fresh plain-text DMs only. No groups, media, chat history import, quote text, commands in chat, schedules, or Discord controls. Offline or stale messages aren't replayed: resend when the gateway is ready. A turn interrupted by a disconnect may not receive a reply.

@@ -1,3 +1,6 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { selectGatewayOption } from "./select-dialog.js";
+
 interface TimezoneChoice {
   id: string;
   city: string;
@@ -60,4 +63,33 @@ export function timezoneOffsetGroups(current: string, at = new Date()): Timezone
     if (examples.length) group.label = `${group.offset} (${examples.slice(0, 2).join(", ")})`;
     return group;
   });
+}
+
+export async function selectGatewayTimezone(ctx: ExtensionCommandContext, current: string): Promise<string | undefined> {
+  const groups = timezoneOffsetGroups(current);
+  const currentGroup = groups.find((group) => group.zones.some(({ id }) => id === current));
+  let selectedOffset = currentGroup?.offset;
+  while (true) {
+    selectedOffset = await selectGatewayOption(ctx, {
+      title: "Timezone · Choose a UTC offset",
+      description: "Offsets are shown for now. The city you choose follows its local time rules, including daylight saving.",
+      options: groups.map(({ offset, label }) => ({ value: offset, label, current: offset === currentGroup?.offset })),
+      selectedOption: selectedOffset,
+    });
+    const group = groups.find(({ offset }) => offset === selectedOffset);
+    if (!group) return;
+
+    const cityCounts = new Map<string, number>();
+    for (const { city } of group.zones) cityCounts.set(city, (cityCounts.get(city) ?? 0) + 1);
+    const zone = await selectGatewayOption(ctx, {
+      title: `Timezone · ${group.offset} · Choose a city`,
+      options: group.zones.map(({ id, city }) => ({
+        value: id,
+        label: cityCounts.get(city) === 1 ? city : `${city} (${id})`,
+        description: id === city ? undefined : id,
+        current: id === current,
+      })),
+    });
+    if (zone !== undefined) return zone;
+  }
 }

@@ -101,7 +101,7 @@ function startTyping(socket, destination, mayDeliver, isLatest) {
   };
 }
 
-export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = () => Math.floor(Date.now() / 1000) }) {
+export function createDmRouter({ paths, sessions, rollover, isCurrent, canAccept, now = () => Math.floor(Date.now() / 1000) }) {
   const stored = readJson(paths.recent, { maxBytes: 256 * 1024 });
   if (stored !== undefined && (!Array.isArray(stored) || stored.length > MAX_RECENT_IDS || stored.some((entry) =>
     !Array.isArray(entry) || !/^[a-f0-9]{64}$/.test(entry[0]) || !Number.isSafeInteger(entry[1])))) {
@@ -114,9 +114,11 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
   let intake = 0;
   let ordering = Promise.resolve();
 
-  function isAllowed(phone) {
-    try { return readConfig(paths.config)?.allowedPhones.includes(phone) === true; }
-    catch { return false; }
+  function allowedConfig(phone) {
+    try {
+      const config = readConfig(paths.config);
+      return config?.allowedPhones.includes(phone) ? config : undefined;
+    } catch { return undefined; }
   }
 
   async function accept(connection, message) {
@@ -126,11 +128,15 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
     const resolveAddress = () => identifyDm(entry.key, (jid) => connection.socket.signalRepository.lidMapping.getPNForLID(jid));
     const address = await resolveAddress();
     if (!address || address.phone === connection.account.phone || (connection.account.lid && address.destination === `${connection.account.lid}@lid`) ||
-        !canAccept(connection) || !isAllowed(address.phone) || now() - entry.timestamp > MAX_AGE_SECONDS) return;
-    const sessionKey = `whatsapp:${connection.account.key}:${address.phone}`;
-    if (pendingRuns >= MAX_PENDING_RUNS || (pending.get(sessionKey) ?? 0) >= MAX_PENDING_PER_DM) return;
-    // A linked-device replay must never rerun tools, even across a daemon crash.
-    const id = createHash("sha256").update(JSON.stringify([sessionKey, entry.key.id])).digest("hex");
+        !canAccept(connection) || now() - entry.timestamp > MAX_AGE_SECONDS) return;
+    const config = allowedConfig(address.phone);
+    if (!config) return;
+    const dmKey = `whatsapp:${connection.account.key}:${address.phone}`;
+    const queued = pending.get(dmKey) ?? 0;
+    if (pendingRuns >= MAX_PENDING_RUNS || queued >= MAX_PENDING_PER_DM) return;
+    // Deduplication is tied to the DM, not the current Pi session. A linked-device
+    // replay must never rerun tools, even across a rollover or daemon crash.
+    const id = createHash("sha256").update(JSON.stringify([dmKey, entry.key.id])).digest("hex");
     for (const [key, expires] of recent) if (expires < now()) recent.delete(key);
     if (recent.has(id) || recent.size >= MAX_RECENT_IDS) return;
     recent.set(id, entry.timestamp + MAX_AGE_SECONDS);
@@ -141,12 +147,20 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
       return;
     }
 
+    let turnSession;
+    try { turnSession = rollover.begin(dmKey, config.dmSessions, queued > 0); }
+    catch {
+      log("WhatsApp could not select a saved DM session; ignored the message without running Pi.");
+      return;
+    }
+    const { sessionKey, finish } = turnSession;
+
     async function mayDeliver() {
-      if (!isCurrent(connection) || !isAllowed(address.phone)) return false;
+      if (!isCurrent(connection) || !allowedConfig(address.phone)) return false;
       try {
         const verified = await resolveAddress();
         return verified?.phone === address.phone && verified.destination === address.destination &&
-          isCurrent(connection) && isAllowed(address.phone);
+          isCurrent(connection) && Boolean(allowedConfig(address.phone));
       } catch { return false; }
     }
     const interaction = {
@@ -171,13 +185,13 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
     };
 
     pendingRuns += 1;
-    pending.set(sessionKey, (pending.get(sessionKey) ?? 0) + 1);
+    pending.set(dmKey, queued + 1);
     void sessions.enqueue(sessionKey, () => sessions.withRunSlot(async () => {
       if (!await mayDeliver() || now() - entry.timestamp > MAX_AGE_SECONDS) return;
       const turn = Symbol();
-      typingTurns.set(sessionKey, turn);
+      typingTurns.set(dmKey, turn);
       const stopTyping = startTyping(connection.socket, address.destination, mayDeliver,
-        () => !typingTurns.has(sessionKey) || typingTurns.get(sessionKey) === turn);
+        () => !typingTurns.has(dmKey) || typingTurns.get(dmKey) === turn);
       let reply;
       let timedOut = false;
       let timer;
@@ -208,12 +222,13 @@ export function createDmRouter({ paths, sessions, isCurrent, canAccept, now = ()
         : text;
       await interaction.send(trimmed + note);
     })).catch(() => log("WhatsApp turn was interrupted or its reply could not be delivered.")).finally(() => {
+      try { finish(); } catch { log("WhatsApp could not record DM turn completion."); }
       pendingRuns -= 1;
-      const count = pending.get(sessionKey) - 1;
-      if (count) pending.set(sessionKey, count);
+      const count = pending.get(dmKey) - 1;
+      if (count) pending.set(dmKey, count);
       else {
-        pending.delete(sessionKey);
-        typingTurns.delete(sessionKey);
+        pending.delete(dmKey);
+        typingTurns.delete(dmKey);
       }
     });
   }

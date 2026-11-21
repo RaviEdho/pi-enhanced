@@ -22,9 +22,9 @@ import { withDiscordDialogSession } from "./dialog-session.js";
 import { selectDiscordModel } from "./model-dialog.js";
 import { gatewayPidRecord, readGatewayPid, resolvePiInvocation } from "./runtime/process.js";
 import { createGatewayBootService } from "./systemd.js";
-import { discordSelectItems, DiscordSelectDialog, type DiscordSelectDialogOptions } from "./select-dialog.js";
+import { selectGatewayOption as selectDiscordOption } from "./select-dialog.js";
 import { runGatewaySettingsPage as runDiscordSettingsPage, type DiscordSettingRow } from "./settings-page.js";
-import { timezoneLabel, timezoneOffsetGroups } from "./timezones.js";
+import { selectGatewayTimezone, timezoneLabel } from "./timezones.js";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_DISCORD_CHANNEL_SESSIONS,
@@ -736,35 +736,6 @@ function resetHourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
-async function selectGatewayTimezone(ctx: ExtensionCommandContext, current: string): Promise<string | undefined> {
-  const groups = timezoneOffsetGroups(current);
-  const currentGroup = groups.find((group) => group.zones.some(({ id }) => id === current));
-  let selectedOffset = currentGroup?.offset;
-  while (true) {
-    selectedOffset = await selectDiscordOption(ctx, {
-      title: "Timezone · Choose a UTC offset",
-      description: "Offsets are shown for now. The city you choose follows its local time rules, including daylight saving.",
-      options: groups.map(({ offset, label }) => ({ value: offset, label, current: offset === currentGroup?.offset })),
-      selectedOption: selectedOffset,
-    });
-    const group = groups.find(({ offset }) => offset === selectedOffset);
-    if (!group) return;
-
-    const cityCounts = new Map<string, number>();
-    for (const { city } of group.zones) cityCounts.set(city, (cityCounts.get(city) ?? 0) + 1);
-    const zone = await selectDiscordOption(ctx, {
-      title: `Timezone · ${group.offset} · Choose a city`,
-      options: group.zones.map(({ id, city }) => ({
-        value: id,
-        label: cityCounts.get(city) === 1 ? city : `${city} (${id})`,
-        description: id === city ? undefined : id,
-        current: id === current,
-      })),
-    });
-    if (zone !== undefined) return zone;
-  }
-}
-
 async function configureChannelSessions(ctx: ExtensionCommandContext): Promise<void> {
   await runDiscordSettingsPage(ctx, {
     title: "Channel sessions",
@@ -918,28 +889,6 @@ function saveGatewayConfig(
       ? " Run /discord restart to reconnect with the new bot token."
       : " The gateway will reload this setting automatically.";
   notify(ctx, `${message}${applyMessage}`, "info");
-}
-
-async function selectDiscordOption(
-  ctx: ExtensionCommandContext,
-  options: DiscordSelectDialogOptions
-): Promise<string | undefined> {
-  if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
-    try {
-      return await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
-        new DiscordSelectDialog(tui, theme, options, done, keybindings)
-      );
-    } catch {
-      // Fall back to Pi's native selector if custom rendering is unavailable.
-    }
-  }
-
-  const items = discordSelectItems(options);
-  const selected = await ctx.ui.select(
-    options.description ? `${options.title}\n${options.description}` : options.title,
-    items.map((item) => item.label),
-  );
-  return items.find((item) => item.label === selected)?.value;
 }
 
 async function promptDiscordInput(

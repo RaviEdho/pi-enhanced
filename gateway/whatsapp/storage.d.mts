@@ -1,4 +1,5 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { SessionRolloverPolicy } from "../runtime/session-rollover.mjs";
 
 export interface WhatsAppConfig {
   version: 1;
@@ -6,6 +7,7 @@ export interface WhatsAppConfig {
   allowedPhones: string[];
   model?: { provider: string; id: string };
   thinkingLevel?: ModelThinkingLevel;
+  dmSessions?: Partial<SessionRolloverPolicy>;
 }
 export const PHONE: RegExp;
 export const PAIR_TIMEOUT_MS: number;

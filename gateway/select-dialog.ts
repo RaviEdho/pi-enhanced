@@ -4,6 +4,7 @@ import {
   DynamicBorder,
   getSelectListTheme,
   keyHint,
+  type ExtensionCommandContext,
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -30,6 +31,28 @@ export function discordSelectItems(options: DiscordSelectDialogOptions) {
   return options.options.map((option) => typeof option === "string"
     ? { value: option, label: option }
     : { value: option.value ?? option.label, label: currentChoiceLabel(option.label, !!option.current), description: option.description });
+}
+
+export async function selectGatewayOption(
+  ctx: ExtensionCommandContext,
+  options: DiscordSelectDialogOptions,
+): Promise<string | undefined> {
+  if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
+    try {
+      return await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
+        new DiscordSelectDialog(tui, theme, options, done, keybindings)
+      );
+    } catch {
+      // Fall back to Pi's native selector if custom rendering is unavailable.
+    }
+  }
+
+  const items = discordSelectItems(options);
+  const selected = await ctx.ui.select(
+    options.description ? `${options.title}\n${options.description}` : options.title,
+    items.map((item) => item.label),
+  );
+  return items.find((item) => item.label === selected)?.value;
 }
 
 /** A plain choice or action picker; settings pages have their own native SettingsList. */

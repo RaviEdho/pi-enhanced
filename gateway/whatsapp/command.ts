@@ -12,7 +12,9 @@ import { withDiscordDialogSession } from "../dialog-session.js";
 import { DiscordInputDialog } from "../input-dialog.js";
 import { selectDiscordModel } from "../model-dialog.js";
 import { runGatewaySettingsPage } from "../settings-page.js";
+import { selectGatewayTimezone, timezoneLabel } from "../timezones.js";
 import { readGatewayPid, resolvePiInvocation } from "../runtime/process.js";
+import { DEFAULT_SESSION_ROLLOVER, isValidSessionRollover, type SessionRolloverPolicy } from "../runtime/session-rollover.mjs";
 import { PairingQrView } from "./qr.js";
 import { acquireLock, gatewayPaths, PAIR_TIMEOUT_MS, PHONE, prepareDirectory, readConfig, readJson, removeAuth, writeJson, type WhatsAppConfig } from "./storage.mjs";
 
@@ -140,6 +142,7 @@ async function chooseConfig(ctx: ExtensionCommandContext, existing?: WhatsAppCon
     version: 1, cwd, allowedPhones,
     ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : existing?.model ? { model: existing.model } : {}),
     ...(ctx.thinkingLevel ? { thinkingLevel: ctx.thinkingLevel } : existing?.thinkingLevel ? { thinkingLevel: existing.thinkingLevel } : {}),
+    ...(existing?.dmSessions ? { dmSessions: existing.dmSessions } : {}),
   };
 }
 
@@ -156,6 +159,7 @@ async function showSettings(ctx: ExtensionCommandContext, paths: Paths) {
     const config = readConfig(paths.config);
     if (!config) return undefined;
     const selectedModel = config.model ? `${config.model.provider}/${config.model.id}` : "";
+    const dmSessions = { ...DEFAULT_SESSION_ROLLOVER, ...config.dmSessions };
     return [
       { kind: "input", id: "users", label: "Allowed users",
         currentValue: config.allowedPhones.length ? `${config.allowedPhones.length} allowed` : "none (blocked)",
@@ -190,6 +194,58 @@ async function showSettings(ctx: ExtensionCommandContext, paths: Paths) {
         } },
       defaultThinkingSetting(ctx, config.model, config.thinkingLevel, restartHint,
         (thinkingLevel) => save({ thinkingLevel }, `WhatsApp default thinking updated. ${restartHint}`)),
+      { kind: "group", id: "dm-sessions", label: "DM sessions",
+        currentValue: dmSessions.enabled ? `${resetHourLabel(dmSessions.resetHour)} · ${dmSessions.timezone} · ${dmSessions.idleHours}h quiet` : "overnight rollover off",
+        description: "Configure when an idle DM starts with fresh context. Changes apply to incoming DMs without a restart.",
+        open: () => showDmSessionSettings(ctx, paths, (settings) =>
+          save({ dmSessions: settings }, "WhatsApp DM session settings updated. No restart is needed.")) },
+    ];
+  });
+}
+
+function resetHourLabel(hour: number): string {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+async function showDmSessionSettings(
+  ctx: ExtensionCommandContext, paths: Paths, save: (settings: Partial<SessionRolloverPolicy>) => void,
+) {
+  await runGatewaySettingsPage(ctx, {
+    title: "DM sessions", gatewayLabel: "WhatsApp gateway",
+    description: "The next DM starts with fresh context after a quiet daily boundary. A busy boundary is skipped for the day. Old session files are kept.",
+  }, () => {
+    const config = readConfig(paths.config);
+    if (!config) return undefined;
+    const saved = config.dmSessions;
+    const current = { ...DEFAULT_SESSION_ROLLOVER, ...saved };
+    function update(patch: Partial<SessionRolloverPolicy>) {
+      const next = { ...saved, ...patch };
+      if (!isValidSessionRollover(next)) throw new UserError("Use a valid timezone, a reset hour from 0 to 23, and an inactivity window from 1 to 168 hours.");
+      save(next);
+    }
+    async function editNumber(field: "resetHour" | "idleHours", title: string, instruction: string) {
+      const value = await input(ctx, title, instruction, String(current[field]));
+      if (value !== undefined) {
+        const next = /^\d+$/.test(value.trim()) ? Number(value) : Number.NaN;
+        if (next !== current[field]) update({ [field]: next });
+      }
+    }
+    return [
+      { kind: "inline", id: "rollover", label: "Overnight rollover", currentValue: current.enabled ? "on" : "off",
+        description: "Start with fresh context after a quiet daily boundary instead of resuming the previous conversation.",
+        values: ["on", "off"], change: (value) => update({ enabled: value === "on" }) },
+      { kind: "picker", id: "timezone", label: "Timezone", currentValue: timezoneLabel(current.timezone),
+        description: `Sets the local timezone for rollover. If unset, uses the machine timezone (${DEFAULT_SESSION_ROLLOVER.timezone}).`,
+        async open() {
+          const timezone = await selectGatewayTimezone(ctx, current.timezone);
+          if (timezone !== undefined && timezone !== current.timezone) update({ timezone });
+        } },
+      { kind: "input", id: "reset-hour", label: "Reset hour", currentValue: resetHourLabel(current.resetHour),
+        description: "Local hour at which each day's rollover eligibility is evaluated.",
+        open: () => editNumber("resetHour", "Reset hour", "Whole hour in the selected timezone (0–23).") },
+      { kind: "input", id: "idle-hours", label: "Inactivity window", currentValue: `${current.idleHours}h`,
+        description: "Required quiet time before the daily boundary. Activity exactly at the cutoff skips that day's rollover.",
+        open: () => editNumber("idleHours", "Inactivity window", "Whole hours without accepted DMs (1–168).") },
     ];
   });
 }

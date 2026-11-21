@@ -63,7 +63,7 @@ export function forkConversationForWorkspace(sourceFile, targetCwd, directory) {
   return { file, id };
 }
 
-/** Keep workspace/model/thinking, but no conversation, when rotating a channel. */
+/** Keep workspace/model/thinking, but no conversation, when rotating a gateway session. */
 export function createFreshConversation(sourceFile, sourceDirectory, targetDirectory, cwd) {
   const source = validateConversationFile(sourceFile, sourceDirectory);
   if (statSync(source).size > 64 * 1024 * 1024) throw new Error("Conversation is too large to inspect");
@@ -94,7 +94,13 @@ export function createFreshConversation(sourceFile, sourceDirectory, targetDirec
     parentId = entryId;
   }
   writeFileSync(file, `${fresh.map((record) => JSON.stringify(record)).join("\n")}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  saveWorkspace(targetDirectory, { cwd, sessionFile: file });
+  saveWorkspace(targetDirectory, {
+    cwd, sessionFile: file,
+    rolloverSelection: model || thinking ? {
+      model: model && { provider: model.provider, id: model.modelId },
+      thinkingLevel: thinking?.thinkingLevel,
+    } : undefined,
+  });
   return file;
 }
 
@@ -108,6 +114,7 @@ export function loadWorkspace(directory) {
     cwd: state.cwd,
     sessionFile: validateConversationFile(state.sessionFile, directory),
     appliedRequestId: state.appliedRequestId,
+    ...(state.rolloverSelection ? { rolloverSelection: state.rolloverSelection } : {}),
   };
 }
 

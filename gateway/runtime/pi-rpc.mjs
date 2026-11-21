@@ -114,7 +114,13 @@ export class PiRpcSession {
         this.replacingChild = false;
       }
     } else {
-      await this.startChild({ cwd, sessionFile: saved?.sessionFile });
+      const state = await this.startChild({ cwd, sessionFile: saved?.sessionFile });
+      // Pi only restores selections from sessions that already contain messages.
+      // A rollover intentionally has none, so restore them before its first turn.
+      if (saved?.rolloverSelection && state?.messageCount === 0) {
+        this.rolloverSelection = saved.rolloverSelection;
+        await this.restoreSelection(saved.rolloverSelection, state, "session rollover");
+      }
     }
     if (pending) clearWorkspaceRequest(this.sessionDirectory);
   }
@@ -225,6 +231,7 @@ export class PiRpcSession {
     if (!this.sessionFile || !existsSync(this.sessionFile)) return;
     saveWorkspace(this.sessionDirectory, {
       cwd: this.cwd, sessionFile: this.sessionFile, appliedRequestId: this.appliedRequestId,
+      rolloverSelection: this.rolloverSelection,
     });
   }
 
@@ -301,23 +308,26 @@ export class PiRpcSession {
     }
   }
 
-  /** Session replacement restores the CLI's initial selection; keep the active one. */
-  async restoreSelection(previous, state) {
+  /** Session replacement may restore the CLI defaults; keep the prior selection. */
+  async restoreSelection(previous, state, operation = "workspace switch") {
+    let switchedModel = false;
     if (previous.model?.provider && previous.model?.id &&
         (state.model?.provider !== previous.model.provider || state.model?.id !== previous.model.id)) {
       try {
         const restored = await this.request("set_model", { provider: previous.model.provider, modelId: previous.model.id });
-        if (!restored.success) log(`Could not restore model after workspace switch: ${restored.error ?? "unknown error"}`);
+        switchedModel = restored.success;
+        if (!restored.success) log(`Could not restore model after ${operation}.`);
       } catch (error) {
-        log(`Could not restore model after workspace switch: ${safeErrorName(error)}`);
+        log(`Could not restore model after ${operation}: ${safeErrorName(error)}`);
       }
     }
-    if (previous.thinkingLevel && state.thinkingLevel !== previous.thinkingLevel) {
+    // A model switch can change Pi's thinking level, even if it matched before.
+    if (previous.thinkingLevel && (switchedModel || state.thinkingLevel !== previous.thinkingLevel)) {
       try {
         const restored = await this.request("set_thinking_level", { level: previous.thinkingLevel });
-        if (!restored.success) log(`Could not restore thinking level after workspace switch: ${restored.error ?? "unknown error"}`);
+        if (!restored.success) log(`Could not restore thinking level after ${operation}.`);
       } catch (error) {
-        log(`Could not restore thinking level after workspace switch: ${safeErrorName(error)}`);
+        log(`Could not restore thinking level after ${operation}: ${safeErrorName(error)}`);
       }
     }
   }

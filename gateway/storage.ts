@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DEFAULT_SESSION_ROLLOVER, isValidSessionRollover, type SessionRolloverPolicy } from "./runtime/session-rollover.mjs";
 
 export interface DiscordChannelReplies {
   mode: DiscordChannelReplyMode;
@@ -17,16 +18,8 @@ export interface DiscordChannelReplies {
 
 export type DiscordChannelReplyMode = "always-thread" | "channel" | "auto";
 
-export interface DiscordChannelSessions {
-  enabled: boolean;
-  timezone: string;
-  resetHour: number;
-  idleHours: number;
-}
-
-export const DEFAULT_DISCORD_CHANNEL_SESSIONS: DiscordChannelSessions = {
-  enabled: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", resetHour: 4, idleHours: 6,
-};
+export type DiscordChannelSessions = SessionRolloverPolicy;
+export const DEFAULT_DISCORD_CHANNEL_SESSIONS = DEFAULT_SESSION_ROLLOVER;
 
 export interface DiscordToolCallVisibility {
   channels: boolean;
@@ -201,18 +194,7 @@ function isValidTableRendering(value: unknown): boolean {
   return [entry.enabled, entry.showTitleFooter, entry.attachMarkdown].every((setting) => setting === undefined || typeof setting === "boolean");
 }
 
-export function isValidDiscordChannelSessions(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Partial<DiscordChannelSessions>;
-  if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") return false;
-  if (entry.resetHour !== undefined && (!Number.isInteger(entry.resetHour) || entry.resetHour < 0 || entry.resetHour > 23)) return false;
-  if (entry.idleHours !== undefined && (!Number.isInteger(entry.idleHours) || entry.idleHours < 1 || entry.idleHours > 168)) return false;
-  if (entry.timezone !== undefined) {
-    if (typeof entry.timezone !== "string" || !entry.timezone.trim()) return false;
-    try { new Intl.DateTimeFormat("en", { timeZone: entry.timezone }); } catch { return false; }
-  }
-  return true;
-}
+export const isValidDiscordChannelSessions = isValidSessionRollover;
 
 function isValidChannelReplies(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;

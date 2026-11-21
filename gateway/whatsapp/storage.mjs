@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSyn
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import lockfile from "proper-lockfile";
+import { isValidSessionRollover } from "../runtime/session-rollover.mjs";
 
 export const PHONE = /^[1-9]\d{6,14}$/;
 export const PAIR_TIMEOUT_MS = 90_000;
@@ -84,7 +85,8 @@ export function readConfig(path) {
       !value.allowedPhones.every((phone) => typeof phone === "string" && PHONE.test(phone)) ||
       (value.model !== undefined && (typeof value.model?.provider !== "string" || !value.model.provider ||
         typeof value.model.id !== "string" || !value.model.id)) ||
-      (value.thinkingLevel !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value.thinkingLevel))) {
+      (value.thinkingLevel !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value.thinkingLevel)) ||
+      (value.dmSessions !== undefined && !isValidSessionRollover(value.dmSessions))) {
     throw new Error("Invalid WhatsApp gateway configuration. Fix config.json or use /whatsapp teardown to start over.");
   }
   return value;
