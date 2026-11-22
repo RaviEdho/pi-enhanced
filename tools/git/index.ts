@@ -10,14 +10,16 @@ import { GIT_COMMAND_FINISHED } from "./events.js";
 export function registerGitCommands(pi: ExtensionAPI): void {
   let isGitBusy = false;
 
-  // Durable transcript output without adding the summary to the model's context.
-  pi.registerEntryRenderer<{ title: string; summary: string }>("git-summary", (entry, _options, theme) => {
-    if (!entry.data) return undefined;
-    const content = new Container();
-    content.addChild(new Text(theme.fg("accent", theme.bold(entry.data.title)), 1, 0));
-    content.addChild(new Markdown(entry.data.summary, 1, 1, getMarkdownTheme()));
-    return content;
-  });
+  // Durable transcript output without adding the draft or summary to the model's context.
+  for (const type of ["git-summary", "git-pr"]) {
+    pi.registerEntryRenderer<{ title: string; summary: string }>(type, (entry, _options, theme) => {
+      if (!entry.data) return undefined;
+      const content = new Container();
+      content.addChild(new Text(theme.fg("accent", theme.bold(entry.data.title)), 1, 0));
+      content.addChild(new Markdown(entry.data.summary, 1, 1, getMarkdownTheme()));
+      return content;
+    });
+  }
 
   // Direct first-class /commit command (backward-compatible)
   pi.registerCommand("commit", {
@@ -40,7 +42,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
 
   // Comprehensive /git command suite
   pi.registerCommand("git", {
-    description: "Intelligent Git assistant: init, commit, pr, branch, worktree, resolve, release, sync, undo, unstage, discard, status, summary",
+    description: "Intelligent Git assistant: init, commit, pr, pr review, branch, worktree, resolve, release, sync, undo, unstage, discard, status, summary",
     handler: async (args, ctx) => {
       if (isGitBusy) {
         ctx.ui.notify("A git operation is already in progress.", "warning");
@@ -66,8 +68,14 @@ export function registerGitCommands(pi: ExtensionAPI): void {
             break;
           }
           case "pr": {
-            const { handlePrCommand } = await import("./pr-runner.js");
-            await handlePrCommand(subArgs, ctx);
+            const review = /^review(?:\s+([\s\S]*))?$/i.exec(subArgs);
+            if (review) {
+              const { handlePrReviewCommand } = await import("./pr-review-runner.js");
+              await handlePrReviewCommand(review[1]?.trim() ?? "", ctx, pi);
+            } else {
+              const { handlePrCommand } = await import("./pr-runner.js");
+              await handlePrCommand(subArgs, ctx, pi);
+            }
             break;
           }
           case "resolve": {
