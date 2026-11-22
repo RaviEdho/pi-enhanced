@@ -302,7 +302,13 @@ callbacks where commands and lifecycle depend on each other.
   request. Never reuse a conversation child, because overlapping prompts are refused.
   Keep the task framing in the user turn, not the system prompt, omit `temperature`
   (subscription transports reject it),
-  cap output tokens, and never log message text or the returned prose.
+  cap output tokens, and never log the returned prose or the current message body.
+  With `channelReplies.logContext: true` (default false), emit one JSON diagnostic
+  after each classifier attempt with the outcome, model, timing, message IDs, and
+  length/truncation metadata for the same bounded history fields supplied to the
+  classifier. Log only shorter, best-effort redacted excerpts; prefer the newest
+  recent messages. Do not re-fetch history or emit diagnostics if the prompt was
+  never constructed. Turning logging off does not delete older log entries.
 - Auto routing includes the direct reply quote (up to 2,000 characters) and an independent
   same-channel window configured by `channelReplies.contextMessages` (default 5, 0–25;
   `0` disables recent history but not the direct quote). Both router and agent anchor
@@ -391,6 +397,12 @@ callbacks where commands and lifecycle depend on each other.
   one-shot and existing registered thread names are not retroactively regenerated.
 - `toolCallVisibility` independently gates tool activity/failure reports and assistant
   narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
+  Codex thread-title requests allow up to 256 output tokens for reasoning overhead;
+  the prompt still asks for a short, single-line title.
+  The Discord child reports structured title outcomes (including skips, completion
+  failures, and success) over a reserved RPC status key. The gateway logs the thread
+  ID, model, elapsed time, and an optional fixed provider failure category. Never log
+  the prompt, title text, or raw provider error in this diagnostic; it is not sent to Discord.
   values default to channels off, threads and DMs on, including legacy configurations.
   Do not classify by `historyScope`: direct server-channel replies also use a thread-shaped
   history authorization scope. `toolCallVerbosity` still controls the detail level where

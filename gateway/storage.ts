@@ -10,6 +10,8 @@ export interface DiscordChannelReplies {
   routerModel?: "pi-default" | "gateway-default" | { provider: string; id: string };
   /** Recent channel messages for each routing decision (0–25; defaults to 5). */
   contextMessages?: number;
+  /** Log redacted router context excerpts and metadata; off by default. */
+  logContext?: boolean;
   /** Escalate a channel reply that used editing, shell, or delegation tools. */
   escalate: boolean;
   /** Escalate a repeat mention from the same participant in the same channel. */
@@ -202,6 +204,7 @@ function isValidChannelReplies(value: unknown): boolean {
   if (entry.mode !== undefined && !["always-thread", "channel", "auto"].includes(entry.mode)) return false;
   if (entry.escalate !== undefined && typeof entry.escalate !== "boolean") return false;
   if (entry.followUp !== undefined && typeof entry.followUp !== "boolean") return false;
+  if (entry.logContext !== undefined && typeof entry.logContext !== "boolean") return false;
   if (entry.contextMessages !== undefined &&
       (!Number.isInteger(entry.contextMessages) || entry.contextMessages < 0 || entry.contextMessages > 25)) return false;
   if (entry.routerModel !== undefined && entry.routerModel !== "pi-default" &&
@@ -220,6 +223,7 @@ function readChannelReplies(value: unknown): DiscordChannelReplies {
   return {
     mode: entry.mode ?? "always-thread",
     contextMessages: entry.contextMessages ?? 5,
+    logContext: entry.logContext === true,
     ...(entry.routerModel === "pi-default" || entry.routerModel === "gateway-default" || isModelChoice(entry.routerModel)
       ? { routerModel: entry.routerModel } : {}),
     escalate: entry.escalate !== false,

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { log, safeErrorName } from "./logging.mjs";
+import { THREAD_TITLE_DIAGNOSTIC_KEY, parseThreadTitleDiagnostic } from "./thread-title-diagnostics.mjs";
 import { createHistoryIpc } from "./history.mjs";
 import { formatModelFailure, modelFailure, modelIdentity, modelLabel, sameModel, summarizeModelFailure } from "./model-failures.mjs";
 import {
@@ -451,6 +452,14 @@ export class PiRpcSession {
       return;
     }
     if (record?.type === "extension_ui_request") {
+      if (!this.transport && record.method === "setStatus" && record.statusKey === THREAD_TITLE_DIAGNOSTIC_KEY) {
+        // Internal diagnostic only; never forward it to Discord as UI output.
+        const diagnostic = parseThreadTitleDiagnostic(record.statusText);
+        if (diagnostic && this.titleThreadId) {
+          log(`Discord thread title: ${JSON.stringify({ threadId: this.titleThreadId, ...diagnostic })}`);
+        }
+        return;
+      }
       void this.ui.handleRequest(record).catch(() => {
         this.sendUiResponse(record.id, { cancelled: true });
       });

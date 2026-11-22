@@ -80,7 +80,7 @@ export function readGatewayConfig(configPath) {
     toolCallVisibility: withDefaults({ channels: false, threads: true, dms: true }, config.toolCallVisibility),
     tableRendering: withDefaults({ enabled: false, showTitleFooter: false, attachMarkdown: false }, config.tableRendering),
     channelReplies: {
-      ...withDefaults({ mode: "always-thread", escalate: true, followUp: true, contextMessages: 5 }, config.channelReplies),
+      ...withDefaults({ mode: "always-thread", escalate: true, followUp: true, contextMessages: 5, logContext: false }, config.channelReplies),
       routerModel: isModelChoice(config.channelReplies?.routerModel)
         ? { provider: config.channelReplies.routerModel.provider, id: config.channelReplies.routerModel.id }
         : config.channelReplies?.routerModel,
@@ -204,6 +204,7 @@ export function isValidChannelReplies(value) {
   if (value.mode !== undefined && !["always-thread", "channel", "auto"].includes(value.mode)) return false;
   if (value.escalate !== undefined && typeof value.escalate !== "boolean") return false;
   if (value.followUp !== undefined && typeof value.followUp !== "boolean") return false;
+  if (value.logContext !== undefined && typeof value.logContext !== "boolean") return false;
   if (value.contextMessages !== undefined &&
       (!Number.isInteger(value.contextMessages) || value.contextMessages < 0 || value.contextMessages > 25)) return false;
   if (value.routerModel !== undefined && value.routerModel !== "pi-default" && value.routerModel !== "gateway-default") {

@@ -3,6 +3,13 @@ import type {
   ExtensionContext,
   MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import {
+  THREAD_TITLE_DIAGNOSTIC_KEY,
+  threadTitleDiagnostic,
+  threadTitleFailureCause,
+  type ThreadTitleFailureCause,
+  type ThreadTitleOutcome,
+} from "../gateway/runtime/thread-title-diagnostics.mjs";
 import { EnhancedSettingsStore } from "./settings/store.js";
 import { MODEL_SETTING_SESSION_VALUE } from "./settings/types.js";
 
@@ -96,7 +103,8 @@ async function generateTitle(
   prompt: string,
   isCurrentSession: (sessionId: string) => boolean,
   systemPrompt = AUTO_TITLE_SYSTEM_PROMPT
-): Promise<boolean> {
+): Promise<TitleResult> {
+  let saving = false;
   try {
     // Ollama's OpenAI-compatible endpoint can ignore developer instructions for
     // some models, so send the title prompt as a system message instead.
@@ -114,6 +122,8 @@ async function generateTitle(
             timestamp: Date.now(),
           },
         ],
+type TitleResult = { outcome: ThreadTitleOutcome; cause?: ThreadTitleFailureCause };
+
       },
       {
         // Reasoning models may spend output tokens thinking even when "off"
@@ -127,15 +137,11 @@ async function generateTitle(
       }
     );
 
-    if (
-      result.stopReason === "error" ||
-      result.stopReason === "aborted" ||
-      result.stopReason === "length" ||
-      !EnhancedSettingsStore.getInstance().get("session.autoTitle") ||
-      !isCurrentSession(sessionId) ||
-      pi.getSessionName()?.trim()
-    ) {
-      return false;
+    if (result.stopReason === "error" || result.stopReason === "aborted") {
+      return {
+        outcome: result.stopReason === "error" ? "completion-error" : "completion-aborted",
+        cause: threadTitleFailureCause(result.errorMessage),
+      };
     }
 
     const title = cleanTitle(
@@ -144,12 +150,13 @@ async function generateTitle(
         .map((part) => part.text)
         .join("\n")
     );
-    if (!title) return false;
+    if (!title) return { outcome: "empty-title" };
+    saving = true;
     pi.setSessionName(title);
-    return true;
-  } catch {
+    return { outcome: "generated" };
+  } catch (error) {
     // Automatic titles are best-effort and should never interfere with the user's turn.
-    return false;
+    return saving ? { outcome: "save-error" } : { outcome: "completion-error", cause: threadTitleFailureCause(error) };
   }
 }
 
@@ -165,6 +172,10 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     activeSessionId = undefined;
   });
+    if (result.stopReason === "length") return { outcome: "output-limit" };
+    if (!EnhancedSettingsStore.getInstance().get("session.autoTitle")) return { outcome: "auto-title-disabled" };
+    if (!isCurrentSession(sessionId)) return { outcome: "session-inactive" };
+    if (pi.getSessionName()?.trim()) return { outcome: "title-already-set" };
 
   // The gateway initializes a new thread before sending its first agent prompt.
   // Keep the source out of agent context, but persist it for retries/resumes.
@@ -201,16 +212,35 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
 
   function requestTitle(ctx: ExtensionContext, prompt: string, systemPrompt = AUTO_TITLE_SYSTEM_PROMPT): void {
     const sessionId = ctx.sessionManager.getSessionId();
-    if (!EnhancedSettingsStore.getInstance().get("session.autoTitle") ||
-      !sessionId || sessionId !== activeSessionId || attemptedSessions.has(sessionId) ||
-      pi.getSessionName()?.trim()) return;
-    const model = resolveTitleModel(ctx);
-    if (!prompt || !model) return;
+    if (attemptedSessions.has(sessionId) || pi.getSessionName()?.trim()) return;
+    const settings = EnhancedSettingsStore.getInstance();
+    const configuredModel = settings.get("session.titleModel");
+    const startedAt = performance.now();
+    const report = ({ outcome, cause }: TitleResult, modelLabel = configuredModel) => {
+      if (systemPrompt !== DISCORD_TITLE_SYSTEM_PROMPT) return;
+      try {
+        const diagnostic = threadTitleDiagnostic(outcome, modelLabel, Math.round(performance.now() - startedAt), cause);
+        if (diagnostic) ctx.ui.setStatus(THREAD_TITLE_DIAGNOSTIC_KEY, JSON.stringify(diagnostic));
+      } catch { /* Diagnostics must not interfere with title generation. */ }
+    };
+
+    if (!settings.get("session.autoTitle")) return report({ outcome: "auto-title-disabled" });
+    if (!sessionId || sessionId !== activeSessionId) return report({ outcome: "session-inactive" });
+    if (!prompt) return report({ outcome: "empty-source" });
+    let model: ExtensionContext["model"];
+    try {
+      model = resolveTitleModel(ctx, configuredModel);
+    } catch {
+      return report({ outcome: "model-lookup-error" });
+    }
+    if (!model) return report({ outcome: "model-unavailable" });
+    const modelLabel = `${model.provider}/${model.id}`;
     attemptedSessions.add(sessionId);
     void generateTitle(pi, ctx, model, sessionId, prompt, (id) => activeSessionId === id, systemPrompt)
-      .then((success) => {
+      .then((result) => {
         // Retry on a later user message after failures, but never overlap requests.
-        if (!success) attemptedSessions.delete(sessionId);
+        if (result.outcome !== "generated") attemptedSessions.delete(sessionId);
+        report(result, modelLabel);
       });
   }
 

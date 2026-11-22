@@ -26,12 +26,13 @@ export function createThreadRegistry({ threadsPath }) {
   async function initializeThreadTitle(channel, session, starter) {
     const registration = threadRegistry[channel.id];
     if (!registration) return;
+    session.titleThreadId = channel.id;
     // Do not let the watcher copy an inherited name if initialization fails.
     registration.titleInitialized = false;
     writeThreadRegistry();
     try {
       const response = await session.request("prompt", {
-        message: `/discord-thread-title ${JSON.stringify(starter)}`,
+        message: `/discord-thread-title ${JSON.stringify(source)}`,
       });
       if (!response.success || response.data?.disposition !== "handled") {
         throw new Error("Thread title initialization failed");
@@ -56,6 +57,8 @@ export function createThreadRegistry({ threadsPath }) {
       return;
     }
 
+    // Associate diagnostics on resumed threads too, before their next prompt.
+    session.titleThreadId = channel.id;
     pendingThreadTitleRenames.add(channel.id);
     void (async () => {
       const deadline = Date.now() + THREAD_TITLE_WAIT_MS;
@@ -80,7 +83,7 @@ export function createThreadRegistry({ threadsPath }) {
         }
         await delay(Math.min(THREAD_TITLE_POLL_MS, Math.max(0, deadline - Date.now())));
       }
-      // A silent title provider failure otherwise looks like a normal thread name.
+      // Report the Discord-side wait separately from the Pi title outcome.
       log(`Discord thread ${channel.id} kept its name: no generated session title within ${Math.round(THREAD_TITLE_WAIT_MS / 1000)}s`);
     })()
       .catch((error) => {

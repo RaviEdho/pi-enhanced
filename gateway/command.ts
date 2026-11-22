@@ -327,6 +327,11 @@ async function showConfigureMenu(ctx: ExtensionCommandContext): Promise<void> {
           "Use the cheapest authenticated model, Pi's default, the gateway's default, or a specific model. Each routing decision costs one model call; failures start a thread.",
           () => configureRoutingModel(ctx, config)),
         contextSetting(ctx, config, true),
+        toggleSetting("routing-context-logs", "Routing context logs", replies.logContext === true,
+          "Save redacted excerpts of quoted Discord history and routing metadata to the local gateway log. Redaction is best effort; turn it off after troubleshooting.",
+          (logContext) => saveGatewayConfig(ctx, config, { channelReplies: { ...replies, logContext } }, logContext
+            ? "Routing context logs enabled. Quoted Discord text may contain private details."
+            : "Routing context logs disabled. Previously logged excerpts remain on disk.")),
         toggleSetting("tool-escalation", "Tool escalation", replies.escalate,
           "Open a thread when a channel reply uses editing, shell, or delegation tools. Read-only replies stay in the channel; the thread inherits the conversation.",
           (value) => saveGatewayConfig(ctx, config, { channelReplies: { ...replies, escalate: value } }, `Tool escalation turned ${onOff(value)}.`)),
