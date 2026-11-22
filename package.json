@@ -1,6 +1,6 @@
 {
   "name": "pi-enhanced",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Enhanced Pi extension package with providers, tools, and persistent Discord and WhatsApp gateways.",
   "type": "module",
   "license": "MIT",
