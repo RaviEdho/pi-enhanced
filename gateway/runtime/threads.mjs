@@ -23,7 +23,7 @@ export function createThreadRegistry({ threadsPath }) {
     watchThreadTitle,
   };
 
-  async function initializeThreadTitle(channel, session, starter) {
+  async function initializeThreadTitle(channel, session, source) {
     const registration = threadRegistry[channel.id];
     if (!registration) return;
     session.titleThreadId = channel.id;

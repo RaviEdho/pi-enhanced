@@ -108,13 +108,16 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       author: message.author.username,
       isReply,
       imageCount: attachments.images.length,
+      messageId: message.id,
+      channelId: message.channelId,
+      replyToMessageId: isReply ? message.reference.messageId : undefined,
       loadContext, startedAt, routingConfig: turnConfig,
     });
     return { target: decision.target === "channel" ? "channel" : "thread", reason: decision.reason };
   }
 
   /** Move an over-deep channel reply into a thread, carrying its conversation history. */
-  async function escalateToThread({ message, content, session, titleStarter }) {
+  async function escalateToThread({ message, content, session, titleSource }) {
     if (typeof message.startThread !== "function") return;
     try {
       const thread = await message.startThread({ name: makeThreadName(message.author.username, content), autoArchiveDuration: 1440 });
@@ -135,7 +138,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
       const key = getThreadSessionKey(thread.id, registration);
       await sessions.enqueue(key, () => sessions.withRunSlot(async () => {
         const threadSession = await sessions.get(key);
-        await threads.initializeThreadTitle(thread, threadSession, titleStarter);
+        await threads.initializeThreadTitle(thread, threadSession, titleSource);
         threads.watchThreadTitle(thread, threadSession);
       }));
       await sendText(thread, `Continuing here so this work does not take over <#${message.channelId}>.`);
@@ -356,6 +359,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         }
         const result = await sessions.withRunSlot(async () => {
           const replyContext = await getReplyContext();
+          let titleRecentMessages;
           const recentContext = !scheduledKey && contextMessageCount > 0
             ? await loadRecentContext(message.channel, {
               beforeId: contextBeforeId,
@@ -364,6 +368,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
               limit: contextMessageCount,
               botUserId: client.user?.id,
               cachedMessages: await getRecentMessages(),
+              onMessages: route.kind === "new-thread" ? (messages) => { titleRecentMessages = messages; } : undefined,
             })
             : "";
           const uploads = attachments.files.length ? await loadDiscordFiles(attachments.files) : [];
@@ -388,11 +393,17 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
             : "";
           const fileContext = formatDiscordFileContext({ files, skippedCount: attachments.files.length - files.length });
           const prompt = `Discord message from ${message.author.username} (user ID ${message.author.id}) in ${conversationLabel}:\n\n${messageContent}${imageNote}${fileContext}${embedContext}${replyContext}${recentContext}`;
+          const titleSource = {
+            starter: messageContent,
+            directReply: repliedMessage?.content?.trim() || replyContext,
+            recentMessages: titleRecentMessages,
+            previews: embedContext,
+          };
           session ??= await sessions.get(sessionKey);
           // Initialize before the first user turn so inherited titles/old user
           // messages cannot win the automatic-title race in a forked session.
           if (!scheduledKey && route.kind === "new-thread" && !channelConversation) {
-            await threads.initializeThreadTitle(target, session, `${messageContent}${embedContext}${replyContext}${recentContext}`);
+            await threads.initializeThreadTitle(target, session, titleSource);
           }
           // Observe background title generation during the run, not just after it.
           if (!scheduledKey && !channelConversation) threads.watchThreadTitle(target, session);
@@ -408,7 +419,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
             text: session.forceStopped ? "The agent run was cancelled." : result,
             escalate: channelConversation && decidePerMessage && escalateChannelReplies && usesEscalatingTool(session.lastRunTools),
             session,
-            titleStarter: `${messageContent}${embedContext}${replyContext}${recentContext}`,
+            titleSource,
           };
         });
         if (!result) return;
@@ -416,7 +427,7 @@ export function createMessageRouter({ client, config, allowedUsers, allowedChann
         if (result.text.trim()) await sendAgentReply(target, result.text, replyToMessageId, { tableRendering: turnConfig.tableRendering });
         else await sendText(target, "The agent finished without a text response.", replyToMessageId);
         if (channelConversation && escalateFollowUps) rememberChannelReply(sessionKey, message.author.id);
-        if (result.escalate) await escalateToThread({ message, content, session: result.session, titleStarter: result.titleStarter });
+        if (result.escalate) await escalateToThread({ message, content, session: result.session, titleSource: result.titleSource });
       } catch (error) {
         log(`Pi run failed: ${safeErrorName(error)}`);
         await sendText(target, "The agent couldn't complete that request. Check the gateway logs and your Pi model/provider configuration.", replyToMessageId);

@@ -19,10 +19,11 @@ Start with an imperative verb. Capitalize only the first word unless the user's 
 Preserve ticket references exactly. Write in the user's language.
 Do not use quotes, markdown, or trailing punctuation. Do not answer the request.`;
 const MAX_SOURCE_BYTES = 960;
+const CODEX_DISCORD_TITLE_MAX_TOKENS = 256;
 const TITLE_TIMEOUT_MS = 40_000;
 const DISCORD_TITLE_SOURCE = "discord-thread-title-source";
 const DISCORD_TITLE_SYSTEM_PROMPT = `${AUTO_TITLE_SYSTEM_PROMPT}
-Name the new thread's task, prioritizing its starter. Use recent conversation only to resolve references; do not name an older task instead.`;
+Name the new thread's task, prioritizing its starter. To resolve references, prefer the direct reply and newest channel messages over inherited Pi conversation. Do not name an older task instead.`;
 
 function extractUserText(message: { role: string; content?: unknown }): string {
   if (message.role !== "user") return "";
@@ -58,6 +59,39 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return truncated;
 }
 
+type DiscordTitleSource = {
+  starter?: unknown;
+  directReply?: unknown;
+  recentMessages?: unknown;
+  previews?: unknown;
+};
+
+function buildDiscordTitlePrompt(input: unknown, inherited: string): string {
+  // An older gateway may still send a plain string until it restarts.
+  const source = typeof input === "string" ? { starter: input }
+    : input && typeof input === "object" ? input as DiscordTitleSource : {};
+  if (typeof source.starter !== "string" || !source.starter.trim()) throw new Error("Missing thread starter");
+  let prompt = `Thread starter:\n${truncateUtf8(source.starter.trim(), 480)}`;
+  const add = (label: string, value: unknown, limit = MAX_SOURCE_BYTES) => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const header = `\n\n${label}:\n`;
+    const remaining = MAX_SOURCE_BYTES - Buffer.byteLength(prompt) - Buffer.byteLength(header);
+    const excerpt = truncateUtf8(value.trim(), Math.min(limit, remaining)).trimEnd();
+    if (excerpt) prompt += header + excerpt;
+  };
+  add("Direct reply (quoted)", source.directReply, 280);
+  if (Array.isArray(source.recentMessages)) {
+    // The gateway supplies chronological order. Trim the tail only after
+    // reversing, so the oldest messages are the first ones to lose space.
+    const newestFirst = source.recentMessages.slice(-25).reverse()
+      .filter((line): line is string => typeof line === "string" && Boolean(line.trim())).join("\n");
+    add("Recent channel messages (newest first; quoted)", newestFirst);
+  }
+  add("Current link previews (quoted)", source.previews, 160);
+  add("Inherited Pi conversation (newest first; quoted)", inherited, 400);
+  return prompt;
+}
+
 function cleanTitle(text: string): string | undefined {
   let title = text.split(/\r?\n/, 1)[0]?.trim() ?? "";
   title = title
@@ -82,18 +116,12 @@ function firstUserPrompt(ctx: ExtensionContext, currentMessage: MessageEndEvent[
   return extractUserText(currentMessage).trim();
 }
 
-function resolveTitleModel(ctx: ExtensionContext): NonNullable<ExtensionContext["model"]> | undefined {
-  const configuredModel = EnhancedSettingsStore.getInstance().get("session.titleModel");
+function resolveTitleModel(ctx: ExtensionContext, configuredModel: string): ExtensionContext["model"] {
   if (configuredModel === MODEL_SETTING_SESSION_VALUE) return ctx.model;
-
-  try {
-    return ctx.modelRegistry.getAvailable().find(
-      (model) => `${model.provider}/${model.id}` === configuredModel
-    );
-  } catch {
-    return undefined;
-  }
+  return ctx.modelRegistry.getAvailable().find((model) => `${model.provider}/${model.id}` === configuredModel);
 }
+
+type TitleResult = { outcome: ThreadTitleOutcome; cause?: ThreadTitleFailureCause };
 
 async function generateTitle(
   pi: ExtensionAPI,
@@ -111,6 +139,12 @@ async function generateTitle(
     const titleModel = model.provider === "ollama-cloud"
       ? { ...model, compat: { ...model.compat, supportsDeveloperRole: false } }
       : model;
+    // The Codex response budget includes reasoning, not just the visible title.
+    const maxTokens = model.provider === "ollama-cloud" && model.reasoning
+      ? Math.min(model.maxTokens, 4096)
+      : model.provider === "openai-codex" && systemPrompt === DISCORD_TITLE_SYSTEM_PROMPT
+        ? Math.min(model.maxTokens, CODEX_DISCORD_TITLE_MAX_TOKENS)
+        : 48;
     const result = await ctx.modelRegistry.complete(
       titleModel,
       {
@@ -122,15 +156,9 @@ async function generateTitle(
             timestamp: Date.now(),
           },
         ],
-type TitleResult = { outcome: ThreadTitleOutcome; cause?: ThreadTitleFailureCause };
-
       },
       {
-        // Reasoning models may spend output tokens thinking even when "off"
-        // is not supported by their provider. Leave room for the actual title.
-        maxTokens: model.provider === "ollama-cloud" && model.reasoning
-          ? Math.min(model.maxTokens, 4096)
-          : 48,
+        maxTokens,
         maxRetries: 0,
         reasoning: "off",
         timeoutMs: TITLE_TIMEOUT_MS,
@@ -143,6 +171,10 @@ type TitleResult = { outcome: ThreadTitleOutcome; cause?: ThreadTitleFailureCaus
         cause: threadTitleFailureCause(result.errorMessage),
       };
     }
+    if (result.stopReason === "length") return { outcome: "output-limit" };
+    if (!EnhancedSettingsStore.getInstance().get("session.autoTitle")) return { outcome: "auto-title-disabled" };
+    if (!isCurrentSession(sessionId)) return { outcome: "session-inactive" };
+    if (pi.getSessionName()?.trim()) return { outcome: "title-already-set" };
 
     const title = cleanTitle(
       result.content
@@ -172,10 +204,6 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
   pi.on("session_shutdown", () => {
     activeSessionId = undefined;
   });
-    if (result.stopReason === "length") return { outcome: "output-limit" };
-    if (!EnhancedSettingsStore.getInstance().get("session.autoTitle")) return { outcome: "auto-title-disabled" };
-    if (!isCurrentSession(sessionId)) return { outcome: "session-inactive" };
-    if (pi.getSessionName()?.trim()) return { outcome: "title-already-set" };
 
   // The gateway initializes a new thread before sending its first agent prompt.
   // Keep the source out of agent context, but persist it for retries/resumes.
@@ -183,8 +211,7 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
     pi.registerCommand("discord-thread-title", {
       description: "Initialize a new Discord thread's automatic title",
       handler: async (args, ctx) => {
-        const starter: unknown = JSON.parse(args);
-        if (typeof starter !== "string" || !starter.trim()) throw new Error("Missing thread starter");
+        const source: unknown = JSON.parse(args);
         const sessionId = ctx.sessionManager.getSessionId();
         if (ctx.sessionManager.getBranch().some((entry) =>
           entry.type === "custom" && entry.customType === DISCORD_TITLE_SOURCE &&
@@ -200,7 +227,7 @@ export function registerAutomaticSessionTitle(pi: ExtensionAPI): void {
             const text = extractUserText({ ...message, role: "user" });
             return `${message.role}: ${truncateUtf8(text.trim(), 160)}`;
           }).join("\n");
-        const prompt = `Thread starter:\n${truncateUtf8(starter.trim(), 480)}\n\nRecent conversation (newest first):\n${truncateUtf8(recent, 400)}`;
+        const prompt = buildDiscordTitlePrompt(source, recent);
         pi.appendEntry(DISCORD_TITLE_SOURCE, { sessionId, prompt });
         // A fork may already carry the channel's title. Clear only this new
         // thread's copy, never the parent session or a resumed thread's title.

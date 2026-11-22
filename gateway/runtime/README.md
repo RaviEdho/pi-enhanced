@@ -387,22 +387,24 @@ callbacks where commands and lifecycle depend on each other.
 - Initialize every new thread's title before its first agent prompt using the child-only
   `/discord-thread-title` command, including tool-escalated threads (open their fork
   immediately for naming). Clear only the new fork's inherited session name. The title
-  source prioritizes the actual Discord thread starter (up to 480 UTF-8 bytes), plus
-  a recent user/assistant snapshot (up to 400 bytes, newest first, at most six messages);
-  tools/thinking are excluded. Attached reply/recent Discord context can also fit in
-  the starter budget. Persist the bounded source as session-scoped custom metadata,
+  prompt has a 960 UTF-8 byte budget, spent on the Discord starter (up to 480 bytes),
+  direct reply (up to 280 bytes), and recent parent-channel messages from the same
+  selected snapshot as the agent. Include the newest messages first, dropping the
+  oldest as the budget fills. Current link previews and inherited Pi conversation
+  use only spare space; inherited context is limited to 400 bytes and six recent
+  user/assistant messages, without tools or thinking. Persist the bounded prompt as session-scoped custom metadata,
   not an agent message, for retries/resumes. Leave ordinary Pi naming unchanged.
   Do not rename from an inherited title when initialization fails. Watch for up to
   45 seconds to cover the title provider's 40-second timeout; generated names remain
   one-shot and existing registered thread names are not retroactively regenerated.
-- `toolCallVisibility` independently gates tool activity/failure reports and assistant
-  narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
   Codex thread-title requests allow up to 256 output tokens for reasoning overhead;
   the prompt still asks for a short, single-line title.
   The Discord child reports structured title outcomes (including skips, completion
   failures, and success) over a reserved RPC status key. The gateway logs the thread
   ID, model, elapsed time, and an optional fixed provider failure category. Never log
   the prompt, title text, or raw provider error in this diagnostic; it is not sent to Discord.
+- `toolCallVisibility` independently gates tool activity/failure reports and assistant
+  narration by the actual Discord destination (`channels`, `threads`, `dms`). Missing
   values default to channels off, threads and DMs on, including legacy configurations.
   Do not classify by `historyScope`: direct server-channel replies also use a thread-shaped
   history authorization scope. `toolCallVerbosity` still controls the detail level where
