@@ -113,7 +113,7 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 
 # Instant Routine Helpers (0 LLM Tokens)
 /git release npm              # Review and start the GitHub Actions npm staging workflow
-/git release npm bump [patch|minor|major] # Review and create a local npm version commit
+/git release npm bump [patch|minor|major] # Review the version bump, then commit or commit and push
 /git release ship             # Pick a version, review optional notes, then approve the release
 /git release ship patch       # Same flow, skipping the version picker
 /git release push v0.2.3      # Retry a local release tag without bumping again

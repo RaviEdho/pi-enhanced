@@ -6,6 +6,7 @@ import { isDeepStrictEqual, promisify } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
 import { execGit, isGitRepository } from "./git.js";
+import { startGitProgress } from "./progress.js";
 
 const execFileAsync = promisify(execFile);
 const BUMPS = ["patch", "minor", "major"] as const;
@@ -31,6 +32,13 @@ async function cleanHead(cwd: string): Promise<string> {
   }
   if (status.trim()) throw new Error("Commit or stash existing changes first. The worktree and index must be clean.");
   return `${branch.trim()} ${head.trim()}`;
+}
+
+async function getPushTarget(cwd: string, branch: string): Promise<{ remote: string; ref: string } | undefined> {
+  const output = await execGit(["for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", "--", branch], cwd);
+  const [remote, ref] = output.trimEnd().split("\t");
+  if (!remote || remote === "." || !ref?.startsWith("refs/heads/") || /[\p{Cc}\p{Bidi_Control}]/u.test(remote + ref)) return undefined;
+  return { remote, ref };
 }
 
 function readVersion(files: string[]): string {
@@ -85,9 +93,12 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
 
   let directory: string | undefined;
   let applied = false;
+  let committed = false;
+  let progress: ReturnType<typeof startGitProgress> | undefined;
   try {
     const root = (await execGit(["rev-parse", "--show-toplevel"], ctx.cwd)).trim();
     const head = await cleanHead(root);
+    const [branch, parent] = head.split(" ");
     await execGit(["ls-files", "--error-unmatch", "--", ...FILES], root).catch(() => {
       throw new Error("Track both package.json and package-lock.json at the repository root first.");
     });
@@ -100,7 +111,7 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
     const bump = requested || await ctx.ui.select(`Version bump (current: ${previous})`, [...BUMPS]);
     if (!isBump(bump)) return;
 
-    ctx.ui.setWorkingMessage?.("Preparing npm version diff…");
+    progress = startGitProgress(ctx, "git-npm-version", "Preparing npm version diff…");
     directory = await fs.mkdtemp(join(tmpdir(), "pi-npm-version-"));
     const beforeDir = join(directory, "before");
     const afterDir = join(directory, "after");
@@ -130,10 +141,19 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
       return `${FILES[index]}\n${changed.join("\n")}`;
     });
     const message = `chore(release): v${next}`;
-    ctx.ui.setWorkingMessage?.();
-    if (!(await ctx.ui.confirm("Create npm version commit?", [
-      `${previous} → ${next} (${bump})`, message, ...preview, "No tag, push, or npm staging.",
-    ].join("\n\n")))) return;
+    const target = await getPushTarget(root, branch);
+    const destination = target ? `${target.remote}/${target.ref.slice("refs/heads/".length)}` : undefined;
+    const commitOnly = "Commit only";
+    const commitAndPush = "Commit & Push";
+    progress.close();
+    const choice = await ctx.ui.select([
+      "Review npm version commit",
+      `${previous} → ${next} (${bump})`, message, ...preview,
+      destination ? `Push target: ${destination}. An ordinary push can include earlier unpushed commits.` : "No upstream branch configured. Commit locally or set an upstream first.",
+      "No tag or npm staging.",
+    ].join("\n"), [commitOnly, ...(target ? [commitAndPush] : [])]);
+    const push = choice === commitAndPush && target;
+    if (choice !== commitOnly && !push) return;
     if (plan.isEnabled()) throw new Error("Plan Mode is active. No version files were changed.");
 
     const patch = join(directory, "version.patch");
@@ -141,17 +161,41 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
     if (await cleanHead(root) !== head) throw new Error("The branch or commit changed during review. Run the bump again.");
     const current = await Promise.all(FILES.map((file) => fs.readFile(join(root, file), "utf8")));
     if (current.some((file, i) => file !== before[i])) throw new Error("The version files changed during review. Run the bump again.");
-    ctx.ui.setWorkingMessage?.("Creating npm version commit…");
+    if (push && !isDeepStrictEqual(await getPushTarget(root, branch), push)) {
+      throw new Error("The upstream changed during review. Run the bump again.");
+    }
+    if (plan.isEnabled()) throw new Error("Plan Mode is active. No version files were changed.");
+    progress = startGitProgress(ctx, "git-npm-version", "Creating npm version commit…");
     await execGit(["apply", "--index", "--", patch], root);
     applied = true;
     await execGit(["commit", "--only", "-m", message, "--", ...FILES], root);
-    ctx.ui.notify(`Created ${message}. Push or merge it to main, then run /git release npm.`, "info");
+    committed = true;
+    if (!push) {
+      ctx.ui.notify(`Created ${message} locally. Push or merge it to main, then run /git release npm.`, "info");
+      return;
+    }
+
+    const [currentBranch, sha] = (await cleanHead(root)).split(" ");
+    const [commitParent, subject] = (await execGit(["show", "-s", "--format=%P%n%s", sha], root)).trimEnd().split("\n");
+    if (currentBranch !== branch || commitParent !== parent || subject !== message || !isDeepStrictEqual(await getPushTarget(root, branch), push)) {
+      throw new Error("The branch, commit, or upstream changed. Check Git status before pushing.");
+    }
+    if (plan.isEnabled()) throw new Error("Plan Mode is active. Nothing was pushed.");
+    progress.update(`Pushing version commit to ${destination}…`);
+    try {
+      await execGit(["push", "--no-follow-tags", "--recurse-submodules=no", "--", push.remote, `${sha}:${push.ref}`], root);
+    } catch {
+      throw new Error(`Git could not confirm the push to ${destination}. Check the upstream and push the existing commit manually; do not rerun the bump.`);
+    }
+    ctx.ui.notify(`Created ${message} and pushed it to ${destination}. ${push.remote === "origin" && push.ref === "refs/heads/main" ? "Run /git release npm when ready." : "Merge it to origin/main before running /git release npm."}`, "info");
   } catch (error) {
     const reason = error instanceof SyntaxError ? "Could not parse the npm manifests."
       : error instanceof Error ? error.message : "Unexpected error.";
-    ctx.ui.notify(`npm version: ${applied ? "Git did not complete the commit. Review git status before retrying." : reason}`, "error");
+    const message = committed ? `Version commit created locally. ${reason}`
+      : applied ? "Git did not complete the commit. Review git status before retrying." : reason;
+    ctx.ui.notify(`npm version: ${message}`, "error");
   } finally {
+    progress?.close();
     if (directory) await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
-    ctx.ui.setWorkingMessage?.();
   }
 }
