@@ -96,17 +96,28 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           case "release":
           case "changelog": {
-            if (sub === "release" && /^npm(?:\s|$)/.test(subArgs)) {
-              const npmArgs = subArgs.slice(3).trim();
-              if (!npmArgs) {
+            const [action, ...rest] = subArgs.split(/\s+/);
+            if (sub === "release" && action === "npm") {
+              const [npmAction, ...npmArgs] = rest;
+              if (!npmAction) {
                 const { handleNpmReleaseCommand } = await import("./npm-release-runner.js");
                 await handleNpmReleaseCommand(ctx);
-              } else if (/^bump(?:\s|$)/.test(npmArgs)) {
+              } else if (npmAction === "bump") {
                 const { handleNpmVersionCommand } = await import("./npm-version-runner.js");
-                await handleNpmVersionCommand(ctx, npmArgs.slice(4));
+                await handleNpmVersionCommand(ctx, npmArgs.join(" "));
               } else {
                 ctx.ui.notify("Usage: /git release npm [bump [patch|minor|major]]", "warning");
               }
+              break;
+            }
+            if (sub === "release" && (action === "ship" || action === "push" || action === "status")) {
+              const { PlanModeManager } = await import("../../ux/plan/manager.js");
+              if (action !== "status" && PlanModeManager.getInstance().isEnabled()) {
+                ctx.ui.notify("Switch to implement mode before shipping a release.", "warning");
+                break;
+              }
+              const { handleReleaseWorkflow } = await import("./release-workflow.js");
+              await handleReleaseWorkflow(action, rest.join(" "), ctx, pi.exec.bind(pi));
               break;
             }
             const { handleReleaseCommand } = await import("./release-runner.js");

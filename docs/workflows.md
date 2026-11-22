@@ -110,10 +110,14 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git worktree [list|add|rm]   # Git worktree manager for parallel task isolation
 /git resolve [file]           # Autonomous merge conflict analyzer & hunk resolver
 /git release [tag]            # Release notes & changelog drafter grouped by conventional types
-/git release npm              # Review and start the GitHub Actions npm staging workflow
-/git release npm bump [patch|minor|major] # Review and create a local npm version commit
 
 # Instant Routine Helpers (0 LLM Tokens)
+/git release npm              # Review and start the GitHub Actions npm staging workflow
+/git release npm bump [patch|minor|major] # Review and create a local npm version commit
+/git release ship             # Pick a version, review optional notes, then approve the release
+/git release ship patch       # Same flow, skipping the version picker
+/git release push v0.2.3      # Retry a local release tag without bumping again
+/git release status v0.2.3    # Check the tag and CI/release status
 /git sync                     # Safe pull --rebase & push to upstream
 /git undo                     # Soft-undo last commit, keeping changes in working tree
 /git unstage                  # Unstage all changes; keep working-tree files unchanged
@@ -123,6 +127,8 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git summary [staged|unstaged] # AI summary with selectable topic-based commit proposals
 ```
 
+- **[npm release staging](npm-releases.md)**: Use `/git release npm` when GitHub Actions stages a package for separate npm approval with 2FA. No Git tag is required.
+- **[Tag-triggered releases](git-releases.md)**: Use `/git release ship` when pushing a version tag starts CI, as in Volt. It uses the existing `package.json` and `origin` without a Pi-specific config. Draft notes with AI if you want, or skip them without calling a model.
 - **Pull Requests**: Check out the feature branch and run `/git pr main` (replace `main` with the target branch), or choose **Draft Pull Request** in `/git` to use the detected default branch. The active Pi model drafts a title and body from committed changes on the checked-out branch. The comparison prefers the locally cached `origin/<base>` ref and does not fetch. View or edit the body, print the draft to the transcript, or explicitly create the PR using an installed, authenticated GitHub CLI. For GitHub creation, push the branch and set its upstream first (`git push -u origin HEAD`).
 - **Review a PR**: In Pi's TUI, run `/git pr review 123`, pass a full GitHub.com PR URL, or choose **Review Pull Request** from `/git`. With no target, `gh` looks up the PR for the checked-out branch. This sends the remote PR description, paged diff, and reported check statuses to the active model; it does not check out the branch or run tests. Review and edit the proposed Markdown (Enter keeps the draft locally), browse the patch with **View PR diff** (←/→ to change pages), then choose whether to print the draft locally, approve, request changes, or comment. Nothing is posted without a separate confirmation. Pi rechecks the PR head, diff, and open state before submitting with `gh pr review`. This check is not atomic with submission; GitHub still enforces permissions and disallows self-approval. Plan Mode permits drafting but not submission. For a manual look at the patch or CI, use `gh pr diff` or `gh pr checks` with the same PR number or URL.
 - **[npm release staging](npm-releases.md)**: Prepare and approve a local version commit separately from staging the exact remote commit in GitHub Actions. npm approval and 2FA remain separate.
