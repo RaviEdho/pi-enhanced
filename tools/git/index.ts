@@ -42,7 +42,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
 
   // Comprehensive /git command suite
   pi.registerCommand("git", {
-    description: "Intelligent Git assistant: init, commit, pr, branch, worktree, resolve, release, sync, undo, unstage, discard, status, summary",
+    description: "Intelligent Git assistant: init, commit, pr, pr review, branch, worktree, resolve, release, sync, undo, unstage, discard, status, summary",
     handler: async (args, ctx) => {
       if (isGitBusy) {
         ctx.ui.notify("A git operation is already in progress.", "warning");
@@ -68,8 +68,14 @@ export function registerGitCommands(pi: ExtensionAPI): void {
             break;
           }
           case "pr": {
-            const { handlePrCommand } = await import("./pr-runner.js");
-            await handlePrCommand(subArgs, ctx, pi);
+            const review = /^review(?:\s+([\s\S]*))?$/i.exec(subArgs);
+            if (review) {
+              const { handlePrReviewCommand } = await import("./pr-review-runner.js");
+              await handlePrReviewCommand(review[1]?.trim() ?? "", ctx, pi);
+            } else {
+              const { handlePrCommand } = await import("./pr-runner.js");
+              await handlePrCommand(subArgs, ctx, pi);
+            }
             break;
           }
           case "resolve": {

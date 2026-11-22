@@ -270,13 +270,16 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     const changes = await getSummaryChanges(root);
     const stageNpm = "Stage npm release (/git release npm)";
     const bumpNpm = "Prepare npm version commit (/git release npm bump)";
+    const draftPr = "Draft Pull Request (/git pr)";
+    const reviewPr = "Review Pull Request (/git pr review)";
     const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
       ...(changes.staged.length ? ["Summarize staged changes (/git summary staged)"] : []),
       ...(changes.unstaged.length || changes.untracked.length ? ["Summarize unstaged and untracked changes (/git summary unstaged)"] : []),
       "Commit changes (/git commit)",
       ...(changes.staged.length ? ["Unstage all changes (/git unstage)"] : []),
       "Sync with remote (/git sync)",
-      "Draft Pull Request (/git pr)",
+      draftPr,
+      ...(ctx.mode === "tui" ? [reviewPr] : []),
       ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [bumpNpm, stageNpm] : []),
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
@@ -305,9 +308,15 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       await handleUnstageCommand(ctx);
     } else if (choice?.includes("Sync")) {
       await handleSyncCommand(ctx);
-    } else if (choice?.includes("Pull Request")) {
+    } else if (choice === draftPr) {
       const { handlePrCommand } = await import("./pr-runner.js");
       await handlePrCommand("", ctx, pi);
+    } else if (choice === reviewPr) {
+      const target = await ctx.ui.input("Review GitHub PR (leave blank for current branch)", "PR number or GitHub.com URL");
+      if (target !== undefined) {
+        const { handlePrReviewCommand } = await import("./pr-review-runner.js");
+        await handlePrReviewCommand(target.trim(), ctx, pi);
+      }
     } else if (choice?.includes("Branch")) {
       const { handleBranchCommand } = await import("./branch-runner.js");
       await handleBranchCommand("", ctx);
