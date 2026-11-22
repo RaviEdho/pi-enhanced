@@ -163,6 +163,6 @@ pi -e ./index.ts -p "/usage"
 
 ## Distribution
 
-Distributed directly via GitHub: `pi install git:github.com/RaviEdho/pi-enhanced`.
+GitHub installs (`pi install git:github.com/RaviEdho/pi-enhanced`) follow the default branch on update. npm installs (`pi install npm:pi-enhanced`) follow approved registry versions.
 
-There is no npm packaging, version-bump, or GitHub release pipeline. Do not run `npm version` or create releases; `package.json`'s version is informational. Shipping means merging to the default branch; users receive changes on their next install/update.
+The manual **Stage npm release** workflow packages `main` and stages it with npm Trusted Publishing. An npm maintainer must approve the staged version with 2FA. Keep `package.json` and `package-lock.json` versions in sync. Do not bump versions, stage/publish packages, or create tags or GitHub releases without separate approval. See [npm releases](docs/npm-releases.md) for bootstrap and release steps.

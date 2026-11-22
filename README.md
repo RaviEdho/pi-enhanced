@@ -13,6 +13,8 @@ pi install git:github.com/RaviEdho/pi-enhanced
 pi
 ```
 
+To install a published npm version instead, use `pi install npm:pi-enhanced`. Use only one install source at a time.
+
 In Pi, keep your current model or use `/login` to connect a provider and `/model` to pick a model. Try a read-only task first:
 
 ```text
@@ -41,4 +43,4 @@ When you’re ready to make changes, use `/implement` with your instructions. Af
 
 ## Development
 
-From a checkout, run `npm run typecheck` to check TypeScript or `pi -e ./index.ts` to try the extension without installing it. See [UPSTREAM.md](UPSTREAM.md) for the origins of Scout search and the output compressor.
+From a checkout, run `npm run typecheck` to check TypeScript or `pi -e ./index.ts` to try the extension without installing it. See [UPSTREAM.md](UPSTREAM.md) for the origins of Scout search and the output compressor, and [npm releases](docs/npm-releases.md) for the maintainer guide.
