@@ -165,7 +165,7 @@ class DiscordSettingsPage implements Component, Focusable {
   }
 
   invalidate(): void { this.container.invalidate(); }
-  render(width: number): string[] { return this.container.render(width); }
+  render(width: number): ReturnType<Component["render"]> { return this.container.render(width); }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined { return this.container.handleMouse(event); }
   handleInput(data: string): void {
     if (data === "\x03" || this.keybindings.matches(data, "app.interrupt")) this.onCancel?.();

@@ -67,7 +67,7 @@ export class ModelPickerComponent implements Component, Focusable {
     this.tui.requestRender();
   }
 
-  render(width: number): string[] {
+  render(width: number): ReturnType<Component["render"]> {
     this.container = new Container();
     if (this.options.bordered !== false) this.container.addChild(new DynamicBorder());
     this.container.addChild(new Text(this.theme.bold(this.theme.fg("accent", this.options.title)), 0, 0));

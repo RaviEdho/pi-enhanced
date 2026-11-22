@@ -90,7 +90,7 @@ export class PairingQrView {
     const chromeRows = 5; // two borders, title, instructions and key hint
     const available = height - chromeRows;
     const textFits = available >= this.lines.length && this.columns <= width;
-    let body: string[] = [];
+    let body: readonly string[] = [];
     if (this.lines.length && textFits) {
       const padding = " ".repeat(Math.floor((width - this.columns) / 2));
       body = this.lines.map((line) => padding + line);

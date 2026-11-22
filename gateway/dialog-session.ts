@@ -99,7 +99,7 @@ export class DiscordDialogSession implements Component, Focusable {
     });
   }
 
-  render(width: number): string[] {
+  render(width: number): ReturnType<Component["render"]> {
     // Like native SettingsList submenus, render only the active page at its
     // natural height. Keeping the host mounted must not reserve empty rows.
     return this.component?.render(width) ?? [];
