@@ -1,5 +1,4 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -42,6 +41,7 @@ import {
 import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from "./prompt.js";
 import { createCommitTools } from "./tools.js";
 import { resolveGitAgentOptions } from "./model.js";
+import { startGitProgress } from "./progress.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -389,130 +389,27 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       });
 
       let activeSession: any = undefined;
-      const abortController = new AbortController();
-      let isAborting = false;
-
-      const handleAbort = async () => {
-        if (isAborting) return;
-        isAborting = true;
-        abortController.abort();
-        broadcaster.update("Cancelling commit agent…");
-        if (activeSession) {
-          try {
-            await activeSession.abort();
-          } catch {
-            // ignore
-          }
-        }
-      };
-
-      const startTime = Date.now();
-      const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-      let frameIndex = 0;
-      let transientWarningTimer: NodeJS.Timeout | undefined;
-      let transientWarningText: string | undefined;
-
-      const triggerTransientWarning = (msg: string) => {
-        transientWarningText = msg;
-        if (transientWarningTimer) {
-          clearTimeout(transientWarningTimer);
-        }
-        updateWorkingIndicator();
-        transientWarningTimer = setTimeout(() => {
-          transientWarningText = undefined;
-          transientWarningTimer = undefined;
-          updateWorkingIndicator();
-        }, 3000);
-        transientWarningTimer.unref?.();
-      };
-
-      const updateWorkingIndicator = () => {
-        if (!ctx.hasUI) return;
-        if (ctx.mode === "rpc") {
+      const progress = startGitProgress(ctx, "commit", broadcaster.status, {
+        cancelMessage: "Cancelling commit agent…",
+        onCancel: () => { void activeSession?.abort().catch(() => {}); },
+        rpcLines: (status, elapsed) => {
           const cost = broadcaster.cost > 0 ? formatCost(broadcaster.cost)
             : broadcaster.isSubscription ? "Included with subscription" : "$0.00";
-          ctx.ui.setWidget("commit", [
-            broadcaster.status,
+          return [
+            status,
             `Model: ${broadcaster.model}`,
-            `Elapsed: ${formatDuration(Date.now() - startTime)}`,
+            `Elapsed: ${formatDuration(elapsed)}`,
             `Usage: ${broadcaster.tokens.toLocaleString()} tokens • ${cost}`,
             ...broadcaster.recentActions.slice(-4).map((action) => `- ${action.description}`),
-          ]);
-          return;
-        }
-
-        let line: string;
-        if (transientWarningText) {
-          const warnIcon = ctx.ui.theme?.fg ? ctx.ui.theme.fg("warning", "⚠") : "⚠";
-          const warnMsg = ctx.ui.theme?.fg ? ctx.ui.theme.fg("warning", transientWarningText) : transientWarningText;
-          line = `  ${warnIcon} ${warnMsg}`;
-        } else {
-          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          const spinner = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("muted", SPINNER_FRAMES[frameIndex])
-            : SPINNER_FRAMES[frameIndex];
-          const statusText = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("muted", broadcaster.status)
-            : broadcaster.status;
-          const elapsedText = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("dim", `(${elapsed}s)`)
-            : `(${elapsed}s)`;
-          const cancelHint = ctx.ui.theme?.fg
-            ? ctx.ui.theme.fg("dim", "• Esc to cancel")
-            : "• Esc to cancel";
-
-          line = `  ${spinner} ${statusText} ${elapsedText}  ${cancelHint}`;
-          frameIndex = (frameIndex + 1) % SPINNER_FRAMES.length;
-        }
-
-        if (typeof ctx.ui.setWidget === "function") {
-          ctx.ui.setWidget("commit", [line]);
-        }
-      };
-
-      updateWorkingIndicator();
-      const workingTimer = setInterval(updateWorkingIndicator, ctx.mode === "rpc" ? 2000 : 80);
-      workingTimer.unref?.();
-      const unsubBroadcaster = broadcaster.subscribe(updateWorkingIndicator);
-
-      const unsubTerminalInput = typeof ctx.ui.onTerminalInput === "function"
-        ? ctx.ui.onTerminalInput((data) => {
-            if (
-              matchesKey(data, "escape") ||
-              matchesKey(data, "esc") ||
-              matchesKey(data, "ctrl+c") ||
-              data === "\x1b" ||
-              data === "\x03"
-            ) {
-              void handleAbort();
-              return { consume: true };
-            }
-            if (matchesKey(data, "enter")) {
-              triggerTransientWarning("Commit in progress. Press Esc to cancel it first.");
-              return { consume: true };
-            }
-            return undefined;
-          })
-        : undefined;
-
+          ];
+        },
+      });
+      const signal = progress.signal;
+      const unsubBroadcaster = broadcaster.subscribe(() => progress.update(broadcaster.status));
       const cleanupWorkingIndicator = () => {
-        if (transientWarningTimer) {
-          clearTimeout(transientWarningTimer);
-          transientWarningTimer = undefined;
-        }
-        clearInterval(workingTimer);
         unsubBroadcaster();
-        unsubTerminalInput?.();
-        if (ctx.hasUI && typeof ctx.ui.setWidget === "function") {
-          ctx.ui.setWidget("commit", undefined);
-        }
+        progress.close();
       };
-
-      if (abortController.signal.aborted) {
-        cleanupWorkingIndicator();
-        await cancelCommit("Commit cancelled by user.");
-        return;
-      }
 
       let plan: CommitPlanProposal | null = null;
       const diffedFiles: string[] = [];
@@ -527,7 +424,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         },
         diffedFiles,
         instruction: selectiveMode ? cleanArgs : undefined,
-        signal: abortController.signal,
+        signal,
       });
 
       let turnCount = 0;
@@ -540,21 +437,15 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       let totalCost = 0;
 
       let unsubscribe: (() => void) | undefined;
-      let overview = selectiveSnapshot
-        ? {
-            stagedFiles: selectiveSnapshot.files,
-            statSummary: selectiveSnapshot.statSummary,
-            label: "Changed",
-          }
-        : await getStagedOverview(cwd);
-
-      if (abortController.signal.aborted) {
-        cleanupWorkingIndicator();
-        await cancelCommit("Commit cancelled by user.");
-        return;
-      }
-
+      let overview: Awaited<ReturnType<typeof getStagedOverview>>;
       try {
+        overview = selectiveSnapshot
+          ? { stagedFiles: selectiveSnapshot.files, statSummary: selectiveSnapshot.statSummary, label: "Changed" }
+          : await getStagedOverview(cwd);
+        if (signal.aborted) {
+          await cancelCommit("Commit cancelled by user.");
+          return;
+        }
         const agentDir = getAgentDir();
         const settingsManager = SettingsManager.create(cwd, agentDir);
         const resourceLoader = new DefaultResourceLoader({
@@ -569,7 +460,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         });
         await resourceLoader.reload();
 
-        if (abortController.signal.aborted) {
+        if (signal.aborted) {
           await cancelCommit("Commit cancelled by user.");
           return;
         }
@@ -589,7 +480,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         });
         activeSession = session;
 
-        if (abortController.signal.aborted) {
+        if (signal.aborted) {
           try {
             session.dispose();
           } catch {
@@ -656,10 +547,10 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         broadcaster.update("Inspecting git diffs…");
 
         const abortPromise = new Promise<void>((_, reject) => {
-          if (abortController.signal.aborted) {
+          if (signal.aborted) {
             reject(new Error("Commit cancelled by user."));
           } else {
-            abortController.signal.addEventListener(
+            signal.addEventListener(
               "abort",
               () => reject(new Error("Commit cancelled by user.")),
               { once: true }
@@ -670,7 +561,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         try {
           await Promise.race([session.prompt(userPrompt), abortPromise]);
         } finally {
-          if (abortController.signal.aborted) {
+          if (signal.aborted) {
             void session.abort().catch(() => {}).finally(() => {
               try {
                 session.dispose();
@@ -685,7 +576,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           }
         }
       } catch (err) {
-        if (abortController.signal.aborted) {
+        if (signal.aborted) {
           await cancelCommit("Commit cancelled by user.");
           return;
         }
@@ -698,7 +589,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
         cleanupWorkingIndicator();
       }
 
-      if (abortController.signal.aborted) {
+      if (signal.aborted) {
         await cancelCommit("Commit cancelled by user.");
         return;
       }
@@ -740,7 +631,7 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
           (cacheWriteTokens / 1_000_000) * (model.cost.cacheWrite || 0);
       }
 
-      const durationMs = Date.now() - startTime;
+      const durationMs = progress.elapsedMs();
       const usage: CommitUsageCost = {
         inputTokens,
         outputTokens,

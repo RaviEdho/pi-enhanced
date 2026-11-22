@@ -14,6 +14,7 @@ import {
 } from "./git.js";
 import { PR_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
 import { createPrTools, type PullRequestProposal } from "./smart-tools.js";
+import { promptWithGitProgress, startGitProgress } from "./progress.js";
 
 /**
  * Executes the PR generation workflow.
@@ -24,37 +25,35 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
     if (ctx.hasUI) ctx.ui.notify(message, level);
     else process.stderr.write(`${message}\n`);
   };
-  const setProgress = (message?: string) => {
-    // The outer session is idle while the isolated PR agent works.
-    if (ctx.hasUI) ctx.ui.setWidget("git-pr", message ? [message] : undefined);
-  };
-
   if (!(await isGitRepository(cwd))) {
     report("Current directory is not inside a git repository. Run '/git init' first.", "error");
     return;
   }
 
-  const baseBranch = args.trim() || await getDefaultBranch(cwd);
-  const branchSummary = await getBranchDiffSummary(baseBranch, cwd);
-  if (branchSummary.error) {
-    report(`Cannot generate PR: ${branchSummary.error}. To choose another base, run /git pr <base-branch>.`, "warning");
-    return;
-  }
-  if (branchSummary.commits.length === 0 && !branchSummary.diffStat) {
-    report(`No committed changes on ${branchSummary.currentBranch || "HEAD"} to propose against ${baseBranch}. Check out your feature branch and pass the target branch as /git pr <base-branch>.`, "info");
-    return;
-  }
-
-  const model = ctx.model;
-  if (!model) {
-    report("No active model selected in Pi session.", "error");
-    return;
-  }
-
+  let baseBranch: string;
+  let branchSummary: Awaited<ReturnType<typeof getBranchDiffSummary>>;
   let finalProposal: PullRequestProposal | undefined;
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
-  setProgress(`Drafting PR: ${branchSummary.currentBranch || "HEAD"} → ${baseBranch}…`);
+  const progress = startGitProgress(ctx, "git-pr", "Reading branch changes…", { cancelMessage: "Cancelling PR draft…" });
   try {
+    baseBranch = args.trim() || await getDefaultBranch(cwd);
+    if (progress.signal.aborted) return;
+    branchSummary = await getBranchDiffSummary(baseBranch, cwd);
+    if (progress.signal.aborted) return;
+    if (branchSummary.error) {
+      report(`Cannot generate PR: ${branchSummary.error}. To choose another base, run /git pr <base-branch>.`, "warning");
+      return;
+    }
+    if (branchSummary.commits.length === 0 && !branchSummary.diffStat) {
+      report(`No committed changes on ${branchSummary.currentBranch || "HEAD"} to propose against ${baseBranch}. Check out your feature branch and pass the target branch as /git pr <base-branch>.`, "info");
+      return;
+    }
+    const model = ctx.model;
+    if (!model) {
+      report("No active model selected in Pi session.", "error");
+      return;
+    }
+    progress.update(`Drafting PR: ${branchSummary.currentBranch || "HEAD"} → ${baseBranch}…`);
     const tools = createPrTools(baseBranch, cwd, (pr) => { finalProposal = pr; });
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
@@ -73,20 +72,21 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
       customTools: tools,
     }));
 
-    await session.prompt(
+    await promptWithGitProgress(session, progress.signal,
       `Please inspect the branch commits and diff relative to base branch "${baseBranch}". ` +
       `Generate an impactful PR title, summary, key changes, and testing instructions. Call propose_pr.\n\n` +
       PR_AGENT_SYSTEM_PROMPT,
     );
+    if (progress.signal.aborted) return;
     if (!finalProposal) {
       const last = session.messages.findLast((message) => message.role === "assistant");
       if (last?.stopReason === "error") throw new Error(last.errorMessage || "Model error");
     }
   } catch (err) {
-    report(`PR generation failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    if (!progress.signal.aborted) report(`PR generation failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     return;
   } finally {
-    setProgress();
+    progress.close();
     session?.dispose();
   }
 
@@ -117,7 +117,7 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
       if (ctx.mode === "tui") pi.appendEntry("git-pr", { title, summary: markdown });
       else report(`${title}\n\n${markdown}`, "info");
     } else if (choice === create) {
-      setProgress("Creating pull request via GitHub CLI…");
+      const publishing = startGitProgress(ctx, "git-pr", "Creating pull request…");
       try {
         const { execFile } = await import("node:child_process");
         const { promisify } = await import("node:util");
@@ -132,7 +132,7 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
         report(`gh pr create failed: ${err?.stderr?.trim() || err?.message || String(err)}`, "error");
         continue;
       } finally {
-        setProgress();
+        publishing.close();
       }
     }
     return;

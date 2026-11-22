@@ -312,11 +312,8 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       const { handlePrCommand } = await import("./pr-runner.js");
       await handlePrCommand("", ctx, pi);
     } else if (choice === reviewPr) {
-      const target = await ctx.ui.input("Review GitHub PR (leave blank for current branch)", "PR number or GitHub.com URL");
-      if (target !== undefined) {
-        const { handlePrReviewCommand } = await import("./pr-review-runner.js");
-        await handlePrReviewCommand(target.trim(), ctx, pi);
-      }
+      const { handlePrReviewCommand } = await import("./pr-review-runner.js");
+      await handlePrReviewCommand("", ctx, pi);
     } else if (choice?.includes("Branch")) {
       const { handleBranchCommand } = await import("./branch-runner.js");
       await handleBranchCommand("", ctx);
