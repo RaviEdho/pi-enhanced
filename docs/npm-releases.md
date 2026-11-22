@@ -1,14 +1,41 @@
 # npm releases
 
-The **Stage npm release** workflow packages `main` and submits the tarball to npm using [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/). It runs only when manually dispatched. An npm maintainer must approve the staged version with 2FA before users can install it. No npm token, Git tag, or GitHub Release is needed.
+Pushing to `main` does **not** publish to npm. Stage a version first, then approve it with npm two-factor authentication (2FA) to make it live. No Git tag or GitHub Release is required.
 
-## First release (one time)
+## First release from your terminal (one time)
 
-1. Merge the workflow and package changes to `main`. On a clean checkout of `main`, use Node 24 and npm 11.15 or newer. Confirm your npm account has 2FA enabled.
-2. Run `npm ci`, `npm run typecheck`, and `npm pack --dry-run`. Review the version and files to be shipped.
-3. Run `npm login`, then `npm stage publish --ignore-scripts`. For a new name this creates a public placeholder (`0.0.0-stage`); the actual version and contents are not live yet. Review and approve the staged release in **Staged Packages** on npmjs.com, or use `npm stage list pi-enhanced` and `npm stage approve <stage-id>`.
+Commit the changes you want to ship and push them with `git push origin main`, or merge a PR into `main`. Start from a clean local checkout of the exact commit on `origin/main`. Use Node 24, npm 11.15 or newer, and an npm account with 2FA enabled.
 
-The initial staging is local because there is no package settings page to configure the workflow's trust relationship before the package exists.
+**1. Check the package before staging.**
+
+```bash
+npm ci
+npm run typecheck
+npm audit
+npm pack --dry-run --ignore-scripts
+```
+
+Stop if a check fails. Review the version and file list from `npm pack`; investigate any audit findings before approving a release. Deprecation and pending install-script notices are not audit findings. Don't approve dependency hooks just to silence a warning.
+
+**2. Stage the package.**
+
+```bash
+npm login
+npm stage publish --ignore-scripts
+npm stage list pi-enhanced
+```
+
+The first staging can create a public `0.0.0-stage` placeholder, but the staged version and contents are not live. This step starts locally because the package must exist before you can configure its trusted publisher.
+
+**3. Review, approve, and verify.** Review the version and contents under **Staged Packages** on npmjs.com, or replace `STAGE_ID` below with the ID from `npm stage list`. Approval requires 2FA.
+
+```bash
+npm stage view STAGE_ID
+npm stage approve STAGE_ID
+npm view pi-enhanced version
+```
+
+`npm view` should report the version you just approved.
 
 ## Configure Trusted Publishing
 
@@ -26,8 +53,17 @@ Configure it when the next release is ready: npm expires unvalidated trust confi
 
 ## Subsequent releases
 
-1. Update the version in `package.json` and `package-lock.json` together (for example with `npm version patch --no-git-tag-version`). Review and merge the version change to `main`.
-2. On GitHub, go to **Actions → Stage npm release → Run workflow** and select `main`. The workflow runs type checking, packs the project, and stages that tarball.
-3. Review the staged version on npmjs.com and approve it with 2FA. Verify the published version with `npm view pi-enhanced version`.
+1. Bump the version in `package.json` and `package-lock.json` together. For a bug-fix release, run `npm version patch --no-git-tag-version`. Review and commit the changes, then push or merge them into `main`.
+2. With the [GitHub CLI](https://cli.github.com/) signed in, start the workflow from the repo directory and wait for it to succeed:
 
-Users can install the published version with `pi install npm:pi-enhanced`.
+   ```bash
+   gh workflow run npm-release.yml --ref main
+   gh run list --workflow npm-release.yml --limit 5
+   gh run watch RUN_ID --exit-status
+   ```
+
+   Replace `RUN_ID` with the ID of the new run from the list. You can also use **Actions → Stage npm release → Run workflow** on GitHub. The workflow type-checks, packs, and stages the tarball without a stored npm token; success means **staged**, not published.
+
+3. Run `npm stage list pi-enhanced`, review and approve the new stage as above, then check `npm view pi-enhanced version`.
+
+Users can install the approved version with `pi install npm:pi-enhanced`.
