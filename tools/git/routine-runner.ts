@@ -268,6 +268,8 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     const root = (await execGit(["rev-parse", "--show-toplevel"], cwd)).trim();
     const { getSummaryChanges } = await import("./summary-runner.js");
     const changes = await getSummaryChanges(root);
+    const stageNpm = "Stage npm release (/git release npm)";
+    const bumpNpm = "Prepare npm version commit (/git release npm bump)";
     const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
       ...(changes.staged.length ? ["Summarize staged changes (/git summary staged)"] : []),
       ...(changes.unstaged.length || changes.untracked.length ? ["Summarize unstaged and untracked changes (/git summary unstaged)"] : []),
@@ -275,6 +277,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       ...(changes.staged.length ? ["Unstage all changes (/git unstage)"] : []),
       "Sync with remote (/git sync)",
       "Create Pull Request (/git pr)",
+      ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [bumpNpm, stageNpm] : []),
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
       ...(changes.staged.length || changes.unstaged.length || changes.untracked.length
@@ -289,6 +292,12 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
         const { handleCommitCommand } = await import("./runner.js");
         await handleCommitCommand(instruction, ctx);
       }
+    } else if (choice === bumpNpm) {
+      const { handleNpmVersionCommand } = await import("./npm-version-runner.js");
+      await handleNpmVersionCommand(ctx);
+    } else if (choice === stageNpm) {
+      const { handleNpmReleaseCommand } = await import("./npm-release-runner.js");
+      await handleNpmReleaseCommand(ctx);
     } else if (choice?.includes("Commit")) {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);

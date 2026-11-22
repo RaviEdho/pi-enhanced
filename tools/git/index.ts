@@ -88,6 +88,19 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           case "release":
           case "changelog": {
+            if (sub === "release" && /^npm(?:\s|$)/.test(subArgs)) {
+              const npmArgs = subArgs.slice(3).trim();
+              if (!npmArgs) {
+                const { handleNpmReleaseCommand } = await import("./npm-release-runner.js");
+                await handleNpmReleaseCommand(ctx);
+              } else if (/^bump(?:\s|$)/.test(npmArgs)) {
+                const { handleNpmVersionCommand } = await import("./npm-version-runner.js");
+                await handleNpmVersionCommand(ctx, npmArgs.slice(4));
+              } else {
+                ctx.ui.notify("Usage: /git release npm [bump [patch|minor|major]]", "warning");
+              }
+              break;
+            }
             const { handleReleaseCommand } = await import("./release-runner.js");
             await handleReleaseCommand(subArgs, ctx);
             break;
