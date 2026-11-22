@@ -10,14 +10,16 @@ import { GIT_COMMAND_FINISHED } from "./events.js";
 export function registerGitCommands(pi: ExtensionAPI): void {
   let isGitBusy = false;
 
-  // Durable transcript output without adding the summary to the model's context.
-  pi.registerEntryRenderer<{ title: string; summary: string }>("git-summary", (entry, _options, theme) => {
-    if (!entry.data) return undefined;
-    const content = new Container();
-    content.addChild(new Text(theme.fg("accent", theme.bold(entry.data.title)), 1, 0));
-    content.addChild(new Markdown(entry.data.summary, 1, 1, getMarkdownTheme()));
-    return content;
-  });
+  // Durable transcript output without adding the draft or summary to the model's context.
+  for (const type of ["git-summary", "git-pr"]) {
+    pi.registerEntryRenderer<{ title: string; summary: string }>(type, (entry, _options, theme) => {
+      if (!entry.data) return undefined;
+      const content = new Container();
+      content.addChild(new Text(theme.fg("accent", theme.bold(entry.data.title)), 1, 0));
+      content.addChild(new Markdown(entry.data.summary, 1, 1, getMarkdownTheme()));
+      return content;
+    });
+  }
 
   // Direct first-class /commit command (backward-compatible)
   pi.registerCommand("commit", {
@@ -67,7 +69,7 @@ export function registerGitCommands(pi: ExtensionAPI): void {
           }
           case "pr": {
             const { handlePrCommand } = await import("./pr-runner.js");
-            await handlePrCommand(subArgs, ctx);
+            await handlePrCommand(subArgs, ctx, pi);
             break;
           }
           case "resolve": {

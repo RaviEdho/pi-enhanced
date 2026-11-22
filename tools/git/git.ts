@@ -86,7 +86,7 @@ export interface BranchCommitSummary {
   currentBranch: string;
   commits: string[];
   diffStat: string;
-  /** Set when the base ref could not be resolved; commits/diffStat are then meaningless. */
+  /** Set when the branch comparison failed; commits/diffStat are then meaningless. */
   error?: string;
 }
 
@@ -135,27 +135,21 @@ export async function getBranchDiffSummary(baseBranch: string, cwd: string): Pro
     };
   }
 
-  let commits: string[] = [];
   try {
-    const logOutput = await execGit(["log", `${baseRef}..HEAD`, "--oneline", "--no-merges"], cwd);
-    commits = logOutput.split("\n").map(l => l.trim()).filter(Boolean);
-  } catch {
-    commits = [];
+    const [log, diffStat] = await Promise.all([
+      execGit(["log", `${baseRef}..HEAD`, "--oneline", "--no-merges"], cwd),
+      execGit(["diff", `${baseRef}...HEAD`, "--stat"], cwd),
+    ]);
+    return {
+      baseBranch,
+      currentBranch,
+      commits: log.split("\n").map(l => l.trim()).filter(Boolean),
+      diffStat: diffStat.trim(),
+    };
+  } catch (err) {
+    const details = (err as { stderr?: string }).stderr?.trim();
+    return { baseBranch, currentBranch, commits: [], diffStat: "", error: `Could not compare HEAD with ${baseRef}${details ? `: ${details}` : ""}` };
   }
-
-  let diffStat = "";
-  try {
-    diffStat = (await execGit(["diff", `${baseRef}...HEAD`, "--stat"], cwd)).trim();
-  } catch {
-    diffStat = "";
-  }
-
-  return {
-    baseBranch,
-    currentBranch,
-    commits,
-    diffStat,
-  };
 }
 
 export async function getBranchFullDiff(baseBranch: string, cwd: string): Promise<string> {

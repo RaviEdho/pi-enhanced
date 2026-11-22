@@ -276,7 +276,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       "Commit changes (/git commit)",
       ...(changes.staged.length ? ["Unstage all changes (/git unstage)"] : []),
       "Sync with remote (/git sync)",
-      "Create Pull Request (/git pr)",
+      "Draft Pull Request (/git pr)",
       ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [bumpNpm, stageNpm] : []),
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
@@ -307,7 +307,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       await handleSyncCommand(ctx);
     } else if (choice?.includes("Pull Request")) {
       const { handlePrCommand } = await import("./pr-runner.js");
-      await handlePrCommand("", ctx);
+      await handlePrCommand("", ctx, pi);
     } else if (choice?.includes("Branch")) {
       const { handleBranchCommand } = await import("./branch-runner.js");
       await handleBranchCommand("", ctx);
