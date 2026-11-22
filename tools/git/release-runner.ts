@@ -1,11 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
-  execGit,
   getCommitsSinceTag,
   getLatestTag,
   isGitRepository,
 } from "./git.js";
-import { RELEASE_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
+import { draftReleaseNotes } from "./release-notes.js";
 
 /**
  * Handles changelog & release note generation.
@@ -24,8 +23,7 @@ export async function handleReleaseCommand(args: string, ctx: ExtensionCommandCo
     return;
   }
 
-  let tagArg = args.trim();
-  let latestTag = tagArg || (await getLatestTag(cwd));
+  const latestTag = args.trim() || (await getLatestTag(cwd));
 
   const commits = await getCommitsSinceTag(latestTag, cwd);
   if (commits.length === 0) {
@@ -33,26 +31,8 @@ export async function handleReleaseCommand(args: string, ctx: ExtensionCommandCo
     return;
   }
 
-  ctx.ui.setWorkingMessage?.(`Analyzing ${commits.length} commits since ${latestTag || "beginning"}…`);
-
   try {
-    const { complete } = await import("@earendil-works/pi-ai/compat");
-    const res = await complete(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: `Here are the git commits since ${latestTag || "the start"}:\n\n${commits.join("\n")}\n\nPlease generate a release note in markdown categorizing the changes.`,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      { systemPrompt: RELEASE_AGENT_SYSTEM_PROMPT }
-    );
-
-    const firstMsg = res.content?.[0];
-    const markdown = firstMsg && firstMsg.type === "text" ? firstMsg.text : "";
+    const markdown = await draftReleaseNotes(ctx, commits);
     if (!markdown) {
       ctx.ui.notify("No release notes were generated.", "warning");
       return;
@@ -63,9 +43,7 @@ export async function handleReleaseCommand(args: string, ctx: ExtensionCommandCo
     } else {
       process.stdout.write(`\n=== Release Notes ===\n\n${markdown}\n\n`);
     }
-  } catch (err: any) {
-    ctx.ui.notify(`Release drafting failed: ${err?.message}`, "error");
-  } finally {
-    ctx.ui.setWorkingMessage?.();
+  } catch {
+    ctx.ui.notify("Could not draft release notes. Check your selected model and try again.", "error");
   }
 }

@@ -109,10 +109,14 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git worktree [list|add|rm]   # Git worktree manager for parallel task isolation
 /git resolve [file]           # Autonomous merge conflict analyzer & hunk resolver
 /git release [tag]            # Release notes & changelog drafter grouped by conventional types
-/git release npm              # Review and start the GitHub Actions npm staging workflow
-/git release npm bump [patch|minor|major] # Review and create a local npm version commit
 
 # Instant Routine Helpers (0 LLM Tokens)
+/git release npm              # Review and start the GitHub Actions npm staging workflow
+/git release npm bump [patch|minor|major] # Review and create a local npm version commit
+/git release ship             # Pick a version, review optional notes, then approve the release
+/git release ship patch       # Same flow, skipping the version picker
+/git release push v0.2.3      # Retry a local release tag without bumping again
+/git release status v0.2.3    # Check the tag and CI/release status
 /git sync                     # Safe pull --rebase & push to upstream
 /git undo                     # Soft-undo last commit, keeping changes in working tree
 /git unstage                  # Unstage all changes; keep working-tree files unchanged
@@ -122,7 +126,8 @@ Run `/git` or `/commit` to autonomously inspect changes and manage git workflows
 /git summary [staged|unstaged] # AI summary with selectable topic-based commit proposals
 ```
 
-- **[npm release staging](npm-releases.md)**: Prepare and approve a local version commit separately from staging the exact remote commit in GitHub Actions. npm approval and 2FA remain separate.
+- **[npm release staging](npm-releases.md)**: Use `/git release npm` when GitHub Actions stages a package for separate npm approval with 2FA. No Git tag is required.
+- **[Tag-triggered releases](git-releases.md)**: Use `/git release ship` when pushing a version tag starts CI, as in Volt. It uses the existing `package.json` and `origin` without a Pi-specific config. Draft notes with AI if you want, or skip them without calling a model.
 - **Change Summaries**: `/git summary` groups inspected changes into coherent commit proposals with **Commit <topic>** actions. Select a topic with `↑`/`↓` and `Enter` (or click it in fullscreen mode) to forward its detailed instruction to `/git commit <instruction>`, which re-inspects current changes and asks for final approval. `PgUp`/`PgDn` or the mouse wheel scroll the summary independently; `Esc` closes without starting a commit. Press `p` to close the dialog and print the entire summary and proposed commits in the transcript. The printed summary persists with the session but is not added to the model's context.
 - **Unstage All**: `/git unstage` removes all staged changes from the index while preserving file contents, including new files (which become untracked). It covers the whole repository even when run from a subdirectory, works before the first commit, and does not move HEAD or discard merge/rebase state. The `/git` status menu offers this action when changes are staged. It requires no model call and reports when nothing is staged; arguments and paths are not supported.
 - **Instruction-Based Selective Commits**: With `/commit <instruction>`, the instruction goes directly to the isolated agent without the staged/unstaged choice prompt. The agent selects relevant whole files or numbered diff hunks; other changes and their staged/unstaged state are preserved. You still review the proposal before committing.
