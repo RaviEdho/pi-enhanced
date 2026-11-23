@@ -6,14 +6,12 @@ An extension suite for the [Pi coding agent](https://github.com/earendil-works/p
 
 ## Quick start
 
-With Pi installed, run this in your terminal:
+With Pi installed, install [`pi-enhanced` from npm](https://www.npmjs.com/package/pi-enhanced), then start Pi:
 
 ```bash
-pi install git:github.com/RaviEdho/pi-enhanced
+pi install npm:pi-enhanced
 pi
 ```
-
-To install a published npm version instead, use `pi install npm:pi-enhanced`. Use only one install source at a time.
 
 In Pi, keep your current model or use `/login` to connect a provider and `/model` to pick a model. Try a read-only task first:
 
@@ -22,6 +20,23 @@ In Pi, keep your current model or use `/login` to connect a provider and `/model
 ```
 
 When you’re ready to make changes, use `/implement` with your instructions. Afterward, `/commit` proposes a commit you can edit, approve, or cancel.
+
+## Updating and switching from GitHub
+
+To update to the latest published npm release:
+
+```bash
+pi update npm:pi-enhanced
+```
+
+If you already installed from GitHub, remove that install before switching to npm:
+
+```bash
+pi remove git:github.com/RaviEdho/pi-enhanced
+pi install npm:pi-enhanced
+```
+
+For a project-local install, add `-l` to both commands. Use only one install source at a time. npm follows published releases; if you prefer to follow the GitHub default branch, use `pi install git:github.com/RaviEdho/pi-enhanced` instead.
 
 ## What else can I do?
 
