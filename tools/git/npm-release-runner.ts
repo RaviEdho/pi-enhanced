@@ -7,6 +7,8 @@ import { execGit, isGitRepository } from "./git.js";
 const execFileAsync = promisify(execFile);
 const WORKFLOW = "npm-release.yml";
 const BRANCH = "main";
+const BUMP_CHOICES = [["Patch", "patch"], ["Minor", "minor"], ["Major", "major"]] as const;
+const STAGE_CURRENT = "Stage current version";
 
 function githubRepository(remote: string): string | undefined {
   const url = URL.parse(remote.replace(/^git@github\.com:/i, "ssh://git@github.com/"));
@@ -36,10 +38,10 @@ async function githubApi(cwd: string, endpoint: string, args: string[] = []): Pr
   }
 }
 
-/** Dispatch only after the maintainer reviews the exact remote commit. Never approve on npm. */
+/** Optionally bump, then dispatch only after review of the exact remote commit. Never approve on npm. */
 export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui") {
-    ctx.ui.notify("Staging an npm release requires confirmation in Pi's terminal UI.", "warning");
+    ctx.ui.notify("Releasing to npm requires confirmation in Pi's terminal UI.", "warning");
     return;
   }
   const plan = PlanModeManager.getInstance();
@@ -59,6 +61,16 @@ export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Pro
     return;
   }
 
+  const choice = await ctx.ui.select("Release to npm", [...BUMP_CHOICES.map(([label]) => label), STAGE_CURRENT]);
+  let bumpedSha: string | undefined;
+  if (choice !== STAGE_CURRENT) {
+    const bump = BUMP_CHOICES.find(([label]) => label === choice)?.[1];
+    if (!bump) return;
+    const { prepareNpmVersion } = await import("./npm-version-runner.js");
+    bumpedSha = await prepareNpmVersion(ctx, bump);
+    if (!bumpedSha) return;
+  }
+
   const endpoint = `repos/${repo}`;
   const workflowPage = `https://github.com/${repo}/actions/workflows/${WORKFLOW}`;
   let dispatchAttempted = false;
@@ -69,6 +81,9 @@ export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Pro
     ])) ?? {};
     if (typeof sha !== "string" || !/^[a-f0-9]{40}$/.test(sha)) {
       throw new Error(`Could not resolve the commit SHA for ${BRANCH}.`);
+    }
+    if (bumpedSha && sha !== bumpedSha) {
+      throw new Error(`The pushed version commit is not the current tip of origin/${BRANCH}. No staging was requested. Run /git release npm and choose ${STAGE_CURRENT} when ready.`);
     }
     const firstLine = typeof message === "string" ? message.trim().split(/[\r\n\u2028\u2029]/, 1)[0] ?? "" : "";
     const subject = [...stripVTControlCharacters(firstLine).replace(/[\p{Cc}\p{Bidi_Control}]/gu, "").trim()];

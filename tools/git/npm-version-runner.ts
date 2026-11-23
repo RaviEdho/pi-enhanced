@@ -5,19 +5,14 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual, promisify } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
-import { execGit, isGitRepository } from "./git.js";
+import { execGit } from "./git.js";
 import { startGitProgress } from "./progress.js";
 
 const execFileAsync = promisify(execFile);
-const BUMPS = ["patch", "minor", "major"] as const;
 const FILES = ["package.json", "package-lock.json"];
 const OPERATION_MARKERS = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"];
 
 type VersionFile = { version?: unknown; packages?: Record<string, { version?: unknown }> };
-
-function isBump(value: string | undefined): value is typeof BUMPS[number] {
-  return BUMPS.some((bump) => bump === value);
-}
 
 async function cleanHead(cwd: string): Promise<string> {
   const [head, branch, status, ...markers] = await Promise.all([
@@ -71,23 +66,11 @@ async function diffVersionFile(directory: string, file: string): Promise<string>
   }
 }
 
-export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
-  if (!ctx.hasUI || ctx.mode !== "tui") {
-    ctx.ui.notify("Creating a version commit requires confirmation in Pi's terminal UI.", "warning");
-    return;
-  }
+/** Return a staging candidate only after a successful push to origin/main. */
+export async function prepareNpmVersion(ctx: ExtensionCommandContext, bump: "patch" | "minor" | "major"): Promise<string | undefined> {
   const plan = PlanModeManager.getInstance();
   if (plan.isEnabled()) {
     ctx.ui.notify("Cannot create a version commit in Plan Mode. Switch with /implement first.", "warning");
-    return;
-  }
-  const requested = args.trim();
-  if (requested && !isBump(requested)) {
-    ctx.ui.notify("Usage: /git release npm bump [patch|minor|major]", "warning");
-    return;
-  }
-  if (!(await isGitRepository(ctx.cwd))) {
-    ctx.ui.notify("Run this command inside a Git repository.", "warning");
     return;
   }
 
@@ -108,8 +91,6 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
       return fs.readFile(path, "utf8");
     }));
     const previous = readVersion(before);
-    const bump = requested || await ctx.ui.select(`Version bump (current: ${previous})`, [...BUMPS]);
-    if (!isBump(bump)) return;
 
     progress = startGitProgress(ctx, "git-npm-version", "Preparing npm version diff…");
     directory = await fs.mkdtemp(join(tmpdir(), "pi-npm-version-"));
@@ -150,7 +131,9 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
       "Review npm version commit",
       `${previous} → ${next} (${bump})`, message, ...preview,
       destination ? `Push target: ${destination}. An ordinary push can include earlier unpushed commits.` : "No upstream branch configured. Commit locally or set an upstream first.",
-      "No tag or npm staging.",
+      destination === "origin/main"
+        ? "After a successful push to origin/main, review npm staging separately. No Git tag is created."
+        : "Push or merge the commit to origin/main before staging. No Git tag is created.",
     ].join("\n"), [commitOnly, ...(target ? [commitAndPush] : [])]);
     const push = choice === commitAndPush && target;
     if (choice !== commitOnly && !push) return;
@@ -171,7 +154,7 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
     await execGit(["commit", "--only", "-m", message, "--", ...FILES], root);
     committed = true;
     if (!push) {
-      ctx.ui.notify(`Created ${message} locally. Push or merge it to main, then run /git release npm.`, "info");
+      ctx.ui.notify(`Created ${message} locally. Once it reaches origin/main, run /git release npm and choose Stage current version.`, "info");
       return;
     }
 
@@ -187,7 +170,11 @@ export async function handleNpmVersionCommand(ctx: ExtensionCommandContext, args
     } catch {
       throw new Error(`Git could not confirm the push to ${destination}. Check the upstream and push the existing commit manually; do not rerun the bump.`);
     }
-    ctx.ui.notify(`Created ${message} and pushed it to ${destination}. ${push.remote === "origin" && push.ref === "refs/heads/main" ? "Run /git release npm when ready." : "Merge it to origin/main before running /git release npm."}`, "info");
+    if (push.remote === "origin" && push.ref === "refs/heads/main") {
+      ctx.ui.notify(`Created ${message} and pushed it to ${destination}.`, "info");
+      return sha;
+    }
+    ctx.ui.notify(`Created ${message} and pushed it to ${destination}. Once it reaches origin/main, run /git release npm and choose Stage current version.`, "info");
   } catch (error) {
     const reason = error instanceof SyntaxError ? "Could not parse the npm manifests."
       : error instanceof Error ? error.message : "Unexpected error.";

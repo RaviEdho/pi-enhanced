@@ -269,8 +269,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     const { getSummaryChanges } = await import("./summary-runner.js");
     const changes = await getSummaryChanges(root);
     const shipRelease = "Ship release tag (/git release ship)";
-    const stageNpm = "Stage npm release (/git release npm)";
-    const bumpNpm = "Prepare npm version commit (/git release npm bump)";
+    const npmRelease = "Release to npm (/git release npm)";
     const draftPr = "Draft Pull Request (/git pr)";
     const reviewPr = "Review Pull Request (/git pr review)";
     const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
@@ -282,7 +281,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       draftPr,
       ...(ctx.mode === "tui" ? [reviewPr] : []),
       shipRelease,
-      ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [bumpNpm, stageNpm] : []),
+      ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [npmRelease] : []),
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
       ...(changes.staged.length || changes.unstaged.length || changes.untracked.length
@@ -300,10 +299,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     } else if (choice === shipRelease) {
       const { handleReleaseWorkflow } = await import("./release-workflow.js");
       await handleReleaseWorkflow("ship", "", ctx, pi.exec.bind(pi));
-    } else if (choice === bumpNpm) {
-      const { handleNpmVersionCommand } = await import("./npm-version-runner.js");
-      await handleNpmVersionCommand(ctx);
-    } else if (choice === stageNpm) {
+    } else if (choice === npmRelease) {
       const { handleNpmReleaseCommand } = await import("./npm-release-runner.js");
       await handleNpmReleaseCommand(ctx);
     } else if (choice?.includes("Commit")) {
