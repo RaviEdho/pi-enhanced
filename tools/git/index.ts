@@ -111,11 +111,6 @@ export function registerGitCommands(pi: ExtensionAPI): void {
               break;
             }
             if (sub === "release" && (action === "ship" || action === "push" || action === "status")) {
-              const { PlanModeManager } = await import("../../ux/plan/manager.js");
-              if (action !== "status" && PlanModeManager.getInstance().isEnabled()) {
-                ctx.ui.notify("Switch to implement mode before shipping a release.", "warning");
-                break;
-              }
               const { handleReleaseWorkflow } = await import("./release-workflow.js");
               await handleReleaseWorkflow(action, rest.join(" "), ctx, pi.exec.bind(pi));
               break;

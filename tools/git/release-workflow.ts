@@ -2,6 +2,7 @@ import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { PlanModeManager } from "../../ux/plan/manager.js";
 import { chooseReleaseNotes, type ReleaseNotesContext } from "./release-notes.js";
 
 const USAGE = "/git release ship [patch|minor|major|X.Y.Z], push <tag>, or status <tag>";
@@ -312,6 +313,10 @@ function report(ctx: Context, message: string, level: "info" | "error"): void {
 }
 
 export async function handleReleaseWorkflow(action: Action, argument: string, ctx: Context, exec: Exec): Promise<void> {
+  if (action !== "status" && PlanModeManager.getInstance().isEnabled()) {
+    ctx.ui.notify("Switch to implement mode before shipping a release.", "warning");
+    return;
+  }
   if (!ctx.hasUI && action !== "status") {
     report(ctx, "Shipping a release requires interactive approval.", "error");
     return;

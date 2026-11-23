@@ -268,6 +268,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     const root = (await execGit(["rev-parse", "--show-toplevel"], cwd)).trim();
     const { getSummaryChanges } = await import("./summary-runner.js");
     const changes = await getSummaryChanges(root);
+    const shipRelease = "Ship release tag (/git release ship)";
     const stageNpm = "Stage npm release (/git release npm)";
     const bumpNpm = "Prepare npm version commit (/git release npm bump)";
     const draftPr = "Draft Pull Request (/git pr)";
@@ -280,6 +281,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       "Sync with remote (/git sync)",
       draftPr,
       ...(ctx.mode === "tui" ? [reviewPr] : []),
+      shipRelease,
       ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [bumpNpm, stageNpm] : []),
       "Smart Branching (/git branch)",
       "Undo last commit (/git undo)",
@@ -295,6 +297,9 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
         const { handleCommitCommand } = await import("./runner.js");
         await handleCommitCommand(instruction, ctx);
       }
+    } else if (choice === shipRelease) {
+      const { handleReleaseWorkflow } = await import("./release-workflow.js");
+      await handleReleaseWorkflow("ship", "", ctx, pi.exec.bind(pi));
     } else if (choice === bumpNpm) {
       const { handleNpmVersionCommand } = await import("./npm-version-runner.js");
       await handleNpmVersionCommand(ctx);
