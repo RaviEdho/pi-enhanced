@@ -42,7 +42,7 @@ import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from
 import { createCommitTools } from "./tools.js";
 import { resolveGitAgentOptions } from "./model.js";
 import { startGitProgress } from "./progress.js";
-import { confirmGitReview } from "./review-dialog.js";
+import { confirmGitReview, selectGitPicker } from "./review-dialog.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -69,10 +69,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       const isRepo = await isGitRepository(cwd);
       if (!isRepo) {
         if (ctx.hasUI) {
-          const shouldInit = await ctx.ui.confirm(
-            "Git Repository Required",
-            "Current directory is not a git repository. Initialize git now (git init)?"
-          );
+          const shouldInit = await confirmGitReview(ctx, "Git Repository Required", [
+            "Current directory is not a git repository. Initialize git now (git init)?",
+          ], "Initialize repository");
           if (!shouldInit) {
             ctx.ui.notify("Commit aborted: not a git repository.", "info");
             return;
@@ -270,10 +269,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             return;
           }
         } else {
-          const shouldStage = await ctx.ui.confirm(
-            "Stage Changes",
-            `No changes are currently staged (${unstaged.length} unstaged). Stage all files (git add -A)?`
-          );
+          const shouldStage = await confirmGitReview(ctx, "Stage Changes", [
+            `No changes are currently staged (${unstaged.length} unstaged). Stage all files (git add -A)?`,
+          ], "Stage all files");
           if (!shouldStage) {
             ctx.ui.notify("Commit aborted (no staged changes).", "info");
             return;
@@ -293,14 +291,14 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
       } else if (!selectiveMode && unstaged.length > 0) {
         // Both staged AND unstaged changes exist: ask user preference
         if (ctx.hasUI) {
-          const optOnlyStaged = `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
-          const optOnlyUnstaged = `Commit only unstaged changes (${unstaged.length} file${unstaged.length === 1 ? "" : "s"}, stash staged)`;
-          const optStageAll = `Stage all and commit everything (${staged.length} staged + ${unstaged.length} unstaged)`;
+          const tui = ctx.mode === "tui";
+          const optOnlyStaged = tui ? "Commit staged only" : `Commit only staged changes (${staged.length} file${staged.length === 1 ? "" : "s"})`;
+          const optOnlyUnstaged = tui ? "Commit unstaged only (stash staged)" : `Commit only unstaged changes (${unstaged.length} file${unstaged.length === 1 ? "" : "s"}, stash staged)`;
+          const optStageAll = tui ? "Stage and commit all" : `Stage all and commit everything (${staged.length} staged + ${unstaged.length} unstaged)`;
 
-          const choice = await ctx.ui.select(
-            "Staged and unstaged changes detected",
-            [optOnlyStaged, optOnlyUnstaged, optStageAll]
-          );
+          const choice = await selectGitPicker(ctx, "Choose changes to commit", [
+            ["Staged", String(staged.length)], ["Unstaged", String(unstaged.length)],
+          ], [optOnlyStaged, optOnlyUnstaged, optStageAll], "Staged and unstaged changes detected");
 
           if (!choice) {
             ctx.ui.notify("Commit cancelled.", "info");

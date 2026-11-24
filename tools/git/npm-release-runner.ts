@@ -66,7 +66,7 @@ export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Pro
   const current = await execGit(["show", "HEAD:package.json"], ctx.cwd)
     .then(text => (JSON.parse(text) as { version?: unknown } | null)?.version)
     .catch(() => undefined);
-  const choice = await selectReleaseVersion(ctx.ui, current, STAGE_CURRENT);
+  const choice = await selectReleaseVersion(ctx, current, STAGE_CURRENT);
   if (!choice) return;
   let bumpedSha: string | undefined;
   if (choice !== STAGE_CURRENT) {

@@ -54,7 +54,7 @@ function targetVersion(current: string, choice: string): string {
 
 async function chooseTargetVersion(ctx: Context, current: string): Promise<string | undefined> {
   const custom = "Custom version…";
-  const selected = await selectReleaseVersion(ctx.ui, current, custom, version => stable.test(version));
+  const selected = await selectReleaseVersion(ctx, current, custom, version => stable.test(version));
   return selected === custom ? (await ctx.ui.input("Release version (X.Y.Z)", "e.g. 1.2.3"))?.trim() : selected;
 }
 

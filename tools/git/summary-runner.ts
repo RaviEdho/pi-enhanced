@@ -5,6 +5,7 @@ import {
 import { execGit, isGitRepository } from "./git.js";
 import { resolveGitAgentOptions } from "./model.js";
 import { promptWithGitProgress, startGitProgress } from "./progress.js";
+import { selectGitPicker } from "./review-dialog.js";
 import { GitSummaryDialog, type GitSummaryAction } from "./summary-dialog.js";
 import { createSummaryProposalTool, createSummaryTools } from "./summary-tools.js";
 import type { GitSummaryProposal } from "./types.js";
@@ -46,7 +47,9 @@ export async function handleSummaryCommand(ctx: ExtensionCommandContext, pi: Ext
           ctx.ui.notify("Choose /git summary staged or /git summary unstaged.", "info");
           return;
         }
-        const choice = await ctx.ui.select("Summarize changes", ["Staged changes", "Unstaged and untracked changes"]);
+        const choice = await selectGitPicker(ctx, "Summarize changes", [["Staged", String(changes.staged.length)],
+          ["Unstaged", String(changes.unstaged.length)], ["Untracked", String(changes.untracked.length)]],
+        ["Staged changes", "Unstaged and untracked changes"], "Summarize changes");
         if (!choice) return;
         kind = choice.startsWith("Staged") ? "staged" : "unstaged";
       } else kind = changes.staged.length ? "staged" : "unstaged";

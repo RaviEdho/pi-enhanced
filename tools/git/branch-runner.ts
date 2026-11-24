@@ -5,6 +5,31 @@ import {
   getWorkingTreeStatus,
   isGitRepository,
 } from "./git.js";
+import { selectGitPicker, showGitDetails } from "./review-dialog.js";
+
+async function pickLocalBranch(ctx: ExtensionCommandContext, currentBranch: string, rpcTitle: string, print = false): Promise<void> {
+  const branches = (await execGit(["for-each-ref", "--sort=-committerdate", "--format=%(refname:lstrip=2)", "refs/heads/"], ctx.cwd))
+    .trimEnd().split("\n").filter(Boolean);
+  const labels = branches.map(branch => branch === currentBranch ? `${branch} (current)` : branch);
+  if (!ctx.hasUI) {
+    if (print) process.stdout.write(`Current branch: ${currentBranch}\n\n${labels.join("\n")}\n`);
+    return;
+  }
+  if (!labels.length) {
+    ctx.ui.notify("No local branches to switch to.", "info");
+    return;
+  }
+  const selected = await selectGitPicker(ctx, "Switch branch", [["Current", currentBranch || "Detached HEAD"], ["Local branches", String(labels.length)]], labels, rpcTitle);
+  if (selected === undefined) return;
+  const branch = branches[labels.indexOf(selected)];
+  if (!branch) return;
+  if (branch === currentBranch) {
+    ctx.ui.notify(`Already on branch '${branch}'`, "info");
+  } else {
+    await execGit(["switch", "--", branch], ctx.cwd);
+    ctx.ui.notify(`Switched to '${branch}'`, "info");
+  }
+}
 
 /**
  * Handles smart branching: name suggestion, switching, creation.
@@ -43,31 +68,7 @@ export async function handleBranchCommand(args: string, ctx: ExtensionCommandCon
   // If user provided a descriptive task or requested suggestions:
   const model = ctx.model;
   if (!model) {
-    // Just list local branches
-    const branches = (await execGit(["branch", "--sort=-committerdate"], cwd))
-      .split("\n")
-      .map((b) => b.trim())
-      .filter(Boolean)
-      .map((b) => {
-        const isCurrent = b.startsWith("*");
-        const clean = b.replace(/^\*\s*/, "").trim();
-        return isCurrent ? `${clean} (current)` : clean;
-      });
-
-    if (ctx.hasUI) {
-      const selected = await ctx.ui.select(`Current branch: ${currentBranch}. Switch to:`, branches);
-      if (selected) {
-        const cleanName = selected.replace(/\s+\(current\)$/, "").trim();
-        if (cleanName === currentBranch) {
-          ctx.ui.notify(`Already on branch '${cleanName}'`, "info");
-        } else {
-          await execGit(["switch", cleanName], cwd);
-          ctx.ui.notify(`Switched to '${cleanName}'`, "info");
-        }
-      }
-    } else {
-      process.stdout.write(`Current branch: ${currentBranch}\n\n${branches.join("\n")}\n`);
-    }
+    await pickLocalBranch(ctx, currentBranch, `Current branch: ${currentBranch}. Switch to:`, true);
     return;
   }
 
@@ -77,28 +78,7 @@ export async function handleBranchCommand(args: string, ctx: ExtensionCommandCon
     const { staged, unstaged } = await getWorkingTreeStatus(cwd);
     if (staged.length === 0 && unstaged.length === 0) {
       // No diff and no prompt -> interactive branch picker
-      const rawBranches = (await execGit(["branch", "--sort=-committerdate"], cwd))
-        .split("\n")
-        .map((b) => b.trim())
-        .filter(Boolean)
-        .map((b) => {
-          const isCurrent = b.startsWith("*");
-          const clean = b.replace(/^\*\s*/, "").trim();
-          return isCurrent ? `${clean} (current)` : clean;
-        });
-
-      if (ctx.hasUI && rawBranches.length > 0) {
-        const selected = await ctx.ui.select(`Switch branch (current: ${currentBranch}):`, rawBranches);
-        if (selected) {
-          const cleanName = selected.replace(/\s+\(current\)$/, "").trim();
-          if (cleanName === currentBranch) {
-            ctx.ui.notify(`Already on branch '${cleanName}'`, "info");
-          } else {
-            await execGit(["switch", cleanName], cwd);
-            ctx.ui.notify(`Switched to '${cleanName}'`, "info");
-          }
-        }
-      }
+      if (ctx.hasUI) await pickLocalBranch(ctx, currentBranch, `Switch branch (current: ${currentBranch}):`);
       return;
     }
     const diffStat = (await execGit(["diff", "HEAD", "--stat"], cwd)).trim();
@@ -141,7 +121,8 @@ export async function handleBranchCommand(args: string, ctx: ExtensionCommandCon
   }
 
   if (ctx.hasUI) {
-    const chosen = await ctx.ui.select("Choose branch to create & switch:", suggestedBranches);
+    const chosen = await selectGitPicker(ctx, "Create branch", [["Current", currentBranch || "Detached HEAD"], ["Action", "Create and switch to the selected branch"]],
+      suggestedBranches, "Choose branch to create & switch:");
     if (chosen) {
       try {
         await execGit(["switch", "-c", chosen], cwd);
@@ -170,7 +151,7 @@ export async function handleWorktreeCommand(args: string, ctx: ExtensionCommandC
   if (!trimmed) {
     const worktreeList = await execGit(["worktree", "list"], cwd);
     if (ctx.hasUI) {
-      await ctx.ui.editor("Git Worktrees", worktreeList);
+      await showGitDetails(ctx, "Git Worktrees", worktreeList);
     } else {
       process.stdout.write(worktreeList);
     }

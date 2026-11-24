@@ -30,6 +30,8 @@ export interface DialogOptions {
   actions?: string[];
   /** Selected row within actions; always kept visible, even while paging the body. */
   actionFocusLine?: number;
+  /** Keep a compact summary visible before allocating space to more actions. */
+  preferFullBody?: boolean;
   hints: string[];
   /** Keep a body control visible when it changes (prefer actions for controls). */
   focusLine?: number;
@@ -54,6 +56,8 @@ export class DialogFrame {
   private visibleContentRows: number[] = [];
   private visibleActionRows: number[] = [];
   private actionTop = 0;
+  private maxActionScroll = 0;
+  private followActionFocus = true;
 
   constructor(private readonly tui: TUI, private readonly theme: any) {}
 
@@ -90,6 +94,23 @@ export class DialogFrame {
   scrollTo(row: number): void {
     this.top = Math.max(0, Math.min(this.maxScroll, row));
     this.tui.requestRender();
+  }
+
+  /** Let pickers inspect disabled rows without moving the keyboard selection. */
+  scrollActionsBy(rows: number): void {
+    this.followActionFocus = false;
+    this.actionTop = Math.max(0, Math.min(this.maxActionScroll, this.actionTop + rows));
+  }
+
+  followActions(): void {
+    this.followActionFocus = true;
+  }
+
+  /** Refocus instead of confirming an action that's been scrolled out of view. */
+  refocusScrolledAction(index: number): boolean {
+    if (this.followActionFocus || this.visibleActionRows.includes(index)) return false;
+    this.followActions();
+    return true;
   }
 
   /** Scroll only the body; consume boundary events so they cannot move the transcript. */
@@ -186,8 +207,11 @@ export class DialogFrame {
       const available = Math.max(0, height - chromeHeight - hintRows - (spacious ? 2 : 0) - gap);
       // Keep controls independent from the body. If controls alone overflow,
       // their own bounded window follows the selected row, not the body scroll.
+      const bodyReserve = hasBody && available > 1
+        ? Math.min(available - 1, options.preferFullBody ? content.lines.length : 1)
+        : 0;
       const actionHeight = hasActions
-        ? Math.min(actions.lines.length, Math.max(1, available - (hasBody && available > 1 ? 1 : 0)))
+        ? Math.min(actions.lines.length, Math.max(1, available - bodyReserve))
         : 0;
       return { spacious, gap, actionHeight, bodyHeight: Math.max(0, available - actionHeight) };
     };
@@ -218,10 +242,12 @@ export class DialogFrame {
     }
     // Keep the dock height stable when scroll-range digits wrap the footer.
     while (hints.length < reservedHintRows) hints.push("");
-    this.actionTop = Math.max(0, Math.min(this.actionTop, actions.lines.length - actionHeight));
-    if (selectedAction < this.actionTop) this.actionTop = selectedAction;
-    if (selectedAction >= this.actionTop + actionHeight) this.actionTop = selectedAction - actionHeight + 1;
-    this.actionTop = Math.max(0, this.actionTop);
+    this.maxActionScroll = Math.max(0, actions.lines.length - actionHeight);
+    this.actionTop = Math.max(0, Math.min(this.actionTop, this.maxActionScroll));
+    if (this.followActionFocus && actionHeight > 0) {
+      if (selectedAction < this.actionTop) this.actionTop = selectedAction;
+      if (selectedAction >= this.actionTop + actionHeight) this.actionTop = selectedAction - actionHeight + 1;
+    }
 
     const lines = [...header, ...(spacious ? [""] : [])];
     this.bodyStart = lines.length;

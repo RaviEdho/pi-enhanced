@@ -6,18 +6,21 @@ const execFileAsync = promisify(execFile);
 
 export interface GitStatus {
   branch: string;
+  detached: boolean;
+  unborn: boolean;
+  upstream?: string;
   staged: number;
   unstaged: number;
   untracked: number;
   conflicts: number;
-  ahead: number;
-  behind: number;
+  ahead?: number;
+  behind?: number;
 }
 
 /** Parse NUL-delimited porcelain v2; paths may contain spaces, newlines, or status-like text. */
 export function parseGitStatus(output: string): GitStatus {
   const status: GitStatus = {
-    branch: "", staged: 0, unstaged: 0, untracked: 0, conflicts: 0, ahead: 0, behind: 0,
+    branch: "", detached: false, unborn: false, staged: 0, unstaged: 0, untracked: 0, conflicts: 0,
   };
   let oid = "";
   const records = output.split("\0");
@@ -25,6 +28,7 @@ export function parseGitStatus(output: string): GitStatus {
     const record = records[i];
     if (record.startsWith("# branch.head ")) status.branch = record.slice(14);
     else if (record.startsWith("# branch.oid ")) oid = record.slice(13);
+    else if (record.startsWith("# branch.upstream ")) status.upstream = record.slice(18);
     else if (record.startsWith("# branch.ab ")) {
       const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(record);
       if (match) {
@@ -41,7 +45,9 @@ export function parseGitStatus(output: string): GitStatus {
       if (record.startsWith("2 ")) i++;
     }
   }
-  if (status.branch === "(detached)") status.branch = `@${oid.slice(0, 7)}`;
+  status.unborn = oid === "(initial)";
+  status.detached = status.branch === "(detached)";
+  if (status.detached) status.branch = `@${oid.slice(0, 7)}`;
   return status;
 }
 
@@ -68,7 +74,7 @@ export async function readGitStatus(cwd: string, signal?: AbortSignal): Promise<
   const { stdout } = await execFileAsync("git", [
     "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z",
     "--untracked-files=all", "--ignore-submodules=none",
-  ], { cwd, timeout: 3000, maxBuffer: 2 * 1024 * 1024, signal });
+  ], { cwd, timeout: 3000, maxBuffer: 2 * 1024 * 1024, signal, env: { ...process.env, GIT_NO_LAZY_FETCH: "1" } });
   return parseGitStatus(stdout);
 }
 

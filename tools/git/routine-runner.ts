@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { PlanModeManager } from "../../ux/plan/manager.js";
+import { readGitStatus, type GitStatus } from "../../ux/usage/git-status.js";
 import {
   execGit,
   getCurrentBranch,
   isGitRepository,
   pushCommit,
 } from "./git.js";
-import { confirmGitReview } from "./review-dialog.js";
+import { confirmGitReview, selectGitMenu } from "./review-dialog.js";
+import { gitStatusActions, readMenuContext } from "./status-menu.js";
 
 /** Unstage the entire repository without changing files, HEAD, or operation metadata. */
 export async function handleUnstageCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
@@ -240,14 +243,31 @@ export async function handleInitCommand(ctx: ExtensionCommandContext, args?: str
   }
 }
 
+function gitMenuRows(status: GitStatus | undefined): Array<[label: string, value: string]> {
+  if (!status) return [["Status", "Repository details unavailable"]];
+  const { branch, detached, unborn, upstream, ahead, behind, staged, unstaged, untracked, conflicts } = status;
+  const head = detached ? `Detached HEAD at ${branch.slice(1)}` : `${branch}${unborn ? " (no commits yet)" : ""}`;
+  const sync = !upstream ? "None configured"
+    : ahead === undefined || behind === undefined ? `${upstream} · comparison unavailable`
+    : ahead || behind ? `${upstream} · ${ahead} ahead, ${behind} behind (local)`
+    : `${upstream} · locally up to date`;
+  const changes = staged || unstaged || untracked || conflicts
+    ? `${staged} staged · ${unstaged} unstaged · ${untracked} untracked${conflicts ? ` · ${conflicts} conflicted` : ""}`
+    : "Working tree clean";
+  const rows: Array<[string, string]> = [["Branch", head]];
+  if (!detached) rows.push(["Upstream", sync]);
+  rows.push(["Changes", changes]);
+  return rows;
+}
+
 export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
   const cwd = ctx.cwd;
   if (!(await isGitRepository(cwd))) {
     if (ctx.hasUI) {
-      const choice = await ctx.ui.select("Git (Not Initialized)", [
-        "Initialize Git repository (/git init)",
+      const choice = await selectGitMenu(ctx, "Git Status", [["Status", "Not a Git repository"]], [
+        ["Initialize Git repository", "/git init"],
       ]);
-      if (choice?.includes("Initialize")) {
+      if (choice === "/git init") {
         await handleInitCommand(ctx);
       }
     } else {
@@ -256,74 +276,67 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     return;
   }
 
-  const [branch, statusRaw, lastCommits] = await Promise.all([
-    getCurrentBranch(cwd),
-    execGit(["status", "-sb"], cwd),
-    execGit(["log", "-3", "--oneline"], cwd).catch(() => "(No commits yet)"),
-  ]);
-
-  const summary = `Branch: ${branch || "unborn"}\n\n${statusRaw.trim()}\n\nRecent Commits:\n${lastCommits.trim()}`;
-
   if (ctx.hasUI) {
-    const root = (await execGit(["rev-parse", "--show-toplevel"], cwd)).trim();
-    const { getSummaryChanges } = await import("./summary-runner.js");
-    const changes = await getSummaryChanges(root);
-    const shipRelease = "Ship release tag (/git release ship)";
-    const npmRelease = "Release to npm (/git release npm)";
-    const draftPr = "Draft Pull Request (/git pr)";
-    const reviewPr = "Review Pull Request (/git pr review)";
-    const choice = await ctx.ui.select(`Git Status (${branch || "main"})`, [
-      ...(changes.staged.length ? ["Summarize staged changes (/git summary staged)"] : []),
-      ...(changes.unstaged.length || changes.untracked.length ? ["Summarize unstaged and untracked changes (/git summary unstaged)"] : []),
-      "Commit changes (/git commit)",
-      ...(changes.staged.length ? ["Unstage all changes (/git unstage)"] : []),
-      "Sync with remote (/git sync)",
-      draftPr,
-      ...(ctx.mode === "tui" ? [reviewPr] : []),
-      shipRelease,
-      ...(existsSync(resolve(root, ".github/workflows/npm-release.yml")) ? [npmRelease] : []),
-      "Smart Branching (/git branch)",
-      "Undo last commit (/git undo)",
-      ...(changes.staged.length || changes.unstaged.length || changes.untracked.length
-        ? ["Discard uncommitted changes (/git discard)"]
-        : []),
+    const [root, status, local] = await Promise.all([
+      execGit(["rev-parse", "--show-toplevel"], cwd).then(out => out.trimEnd()),
+      readGitStatus(cwd).catch(() => undefined),
+      readMenuContext(cwd),
     ]);
+    const actions = gitStatusActions({
+      ...local,
+      status,
+      hasModel: Boolean(ctx.model),
+      isTui: ctx.mode === "tui",
+      npmWorkflow: existsSync(resolve(root, ".github/workflows/npm-release.yml")),
+      planMode: PlanModeManager.getInstance().isEnabled(),
+      trusted: ctx.isProjectTrusted(),
+    });
+    const choice = await selectGitMenu(ctx, "Git Status", gitMenuRows(status), actions);
 
-    if (choice?.startsWith("Summarize")) {
+    if (choice === "/git resolve") {
+      const { handleResolveCommand } = await import("./resolve-runner.js");
+      await handleResolveCommand("", ctx);
+    } else if (choice === "/git summary staged" || choice === "/git summary unstaged") {
       const { handleSummaryCommand } = await import("./summary-runner.js");
-      const instruction = await handleSummaryCommand(ctx, pi, choice.startsWith("Summarize staged") ? "staged" : "unstaged");
+      const instruction = await handleSummaryCommand(ctx, pi, choice === "/git summary staged" ? "staged" : "unstaged");
       if (instruction) {
         const { handleCommitCommand } = await import("./runner.js");
         await handleCommitCommand(instruction, ctx);
       }
-    } else if (choice === shipRelease) {
+    } else if (choice === "/git release ship") {
       const { handleReleaseWorkflow } = await import("./release-workflow.js");
       await handleReleaseWorkflow("ship", "", ctx, pi.exec.bind(pi));
-    } else if (choice === npmRelease) {
+    } else if (choice === "/git release npm") {
       const { handleNpmReleaseCommand } = await import("./npm-release-runner.js");
       await handleNpmReleaseCommand(ctx);
-    } else if (choice?.includes("Commit")) {
+    } else if (choice === "/git commit") {
       const { handleCommitCommand } = await import("./runner.js");
       await handleCommitCommand("", ctx);
-    } else if (choice?.startsWith("Unstage")) {
+    } else if (choice === "/git unstage") {
       await handleUnstageCommand(ctx);
-    } else if (choice?.includes("Sync")) {
+    } else if (choice === "/git sync") {
       await handleSyncCommand(ctx);
-    } else if (choice === draftPr) {
+    } else if (choice === "/git pr") {
       const { handlePrCommand } = await import("./pr-runner.js");
       await handlePrCommand("", ctx, pi);
-    } else if (choice === reviewPr) {
+    } else if (choice === "/git pr review") {
       const { handlePrReviewCommand } = await import("./pr-review-runner.js");
       await handlePrReviewCommand("", ctx, pi);
-    } else if (choice?.includes("Branch")) {
+    } else if (choice === "/git branch") {
       const { handleBranchCommand } = await import("./branch-runner.js");
       await handleBranchCommand("", ctx);
-    } else if (choice?.includes("Undo")) {
+    } else if (choice === "/git undo") {
       await handleUndoCommand(ctx);
-    } else if (choice?.includes("Discard")) {
+    } else if (choice === "/git discard") {
       await handleDiscardCommand(ctx);
     }
   } else {
+    const [branch, statusRaw, lastCommits] = await Promise.all([
+      getCurrentBranch(cwd),
+      execGit(["status", "-sb"], cwd),
+      execGit(["log", "-3", "--oneline"], cwd).catch(() => "(No commits yet)"),
+    ]);
+    const summary = `Branch: ${branch || "unborn"}\n\n${statusRaw.trim()}\n\nRecent Commits:\n${lastCommits.trim()}`;
     process.stdout.write(`\n=== Git Status ===\n${summary}\n\n`);
   }
 }

@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { selectGitPicker } from "./review-dialog.js";
 
 const bumps = [
   { kind: "patch", label: "Patch", part: 2 },
@@ -38,7 +39,7 @@ export function nextReleaseVersion(current: string, bump: ReleaseBump): string |
 }
 
 export async function selectReleaseVersion<Extra extends string>(
-  ui: Pick<ExtensionCommandContext["ui"], "select">,
+  ctx: Pick<ExtensionCommandContext, "ui" | "mode">,
   current: unknown,
   extra: Extra,
   acceptsVersion?: (version: string) => boolean,
@@ -49,7 +50,8 @@ export async function selectReleaseVersion<Extra extends string>(
     if (acceptsVersion && (!next || !acceptsVersion(next))) return [];
     return [{ kind, label: next ? `${label} → ${next}` : label }];
   });
-  const title = version ? `Release version (current: ${version.value})` : "Release version";
-  const selected = await ui.select(title, [...choices.map(({ label }) => label), extra]);
+  const title = "Release version";
+  const selected = await selectGitPicker(ctx, title, [["Current", version?.value ?? "Unavailable"]],
+    [...choices.map(({ label }) => label), extra], version ? `${title} (current: ${version.value})` : title);
   return selected === extra ? extra : choices.find(({ label }) => label === selected)?.kind;
 }

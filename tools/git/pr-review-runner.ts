@@ -10,7 +10,7 @@ import { TaskLoader } from "../../ux/task-loader.js";
 import { DiffPageProperties, GitDiffPager, SUMMARY_DIFF_PAGE_CHARS, type DiffPageInput } from "./diff.js";
 import { showPrReviewDiff } from "./pr-review-diff.js";
 import { promptWithGitProgress, startGitProgress } from "./progress.js";
-import { confirmGitReview, selectGitReview } from "./review-dialog.js";
+import { confirmGitReview, selectGitPicker } from "./review-dialog.js";
 
 const execGh = promisify(execFile);
 const PR_URL = /^https:\/\/github\.com\/[\w-]+\/[\w.-]+\/pull\/([1-9]\d*)\/?$/i;
@@ -218,9 +218,9 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
         ctx.ui.notify("No open pull requests found. To review a specific PR, pass its number or URL to /git pr review.", "info");
         return;
       }
-      const choices = new Map(prs.map((pr) => [`#${pr.number}  ${pr.isDraft ? "(draft) " : ""}${prTitle(pr.title) || "Untitled PR"}`, pr.url]));
-      const heading = prs.length >= LIST_LIMIT ? `Review open pull request (showing ${LIST_LIMIT})` : "Review open pull request";
-      const selected = await ctx.ui.select(heading, [...choices.keys()]);
+      const choices = new Map(prs.map((pr) => [`#${pr.number}  ${prTitle(pr.title) || "Untitled PR"}${pr.isDraft ? " (draft)" : ""}`, pr.url]));
+      const count = prs.length >= LIST_LIMIT ? `Showing up to ${LIST_LIMIT}` : String(prs.length);
+      const selected = await selectGitPicker(ctx, "Review open pull request", [["Open PRs", count]], [...choices.keys()]);
       const url = selected === undefined ? undefined : choices.get(selected);
       if (!url) return;
       selectedTarget = url;
@@ -241,7 +241,9 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
     if (!draft || progress.signal.aborted) return;
     const plan = PlanModeManager.getInstance();
     const partial = "The AI did not read every diff page. Review the diff yourself before submitting.";
-    const summary = [pr.url, `${pr.state}${pr.isDraft ? " (draft)" : ""} · ${clean(pr.headRefName)} → ${clean(pr.baseRefName)} · ${pr.headRefOid.slice(0, 12)}`, checkSummary(pr.statusCheckRollup), ...(!draft.complete ? [partial] : [])];
+    const revision = `${pr.state}${pr.isDraft ? " (draft)" : ""} · ${clean(pr.headRefName)} → ${clean(pr.baseRefName)} · ${pr.headRefOid.slice(0, 12)}`;
+    const checks = checkSummary(pr.statusCheckRollup);
+    const summary = [pr.url, revision, checks, ...(!draft.complete ? [partial] : [])];
     if (!draft.complete) ctx.ui.notify(partial, "warning");
     let body = draft.body;
     const edit = () => ctx.ui.editor(`${title} — review draft (not submitted)`, body);
@@ -253,9 +255,11 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
     const printLabel = "Print draft to chat output";
     while (true) {
       const canSubmit = pr.state === "OPEN" && !plan.isEnabled();
-      const choice = await selectGitReview(ctx, title, [...summary, ...(!canSubmit ? ["Submission requires an open PR and Implement Mode."] : [])], [
-        viewLabel, editLabel, printLabel, ...(canSubmit ? REVIEW_ACTIONS.keys() : []),
-      ]);
+      const choice = await selectGitPicker(ctx, `Pull request #${pr.number}`, [
+        ["Title", prTitle(pr.title) || "Untitled PR"], ["URL", pr.url], ["Revision", revision], ["Checks", checks.replace(/^Checks: /, "")],
+        ...(!draft.complete ? [["Coverage", partial] as const] : []),
+        ...(!canSubmit ? [["Submission", "Requires an open PR and Implement Mode."] as const] : []),
+      ], [viewLabel, editLabel, printLabel, ...(canSubmit ? REVIEW_ACTIONS.keys() : [])]);
       if (choice === undefined) return;
       if (choice === viewLabel) {
         await showPrReviewDiff(ctx, title, clean(diff));

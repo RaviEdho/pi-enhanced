@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { selectGitPicker } from "./review-dialog.js";
 import { RELEASE_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
 
 export type ReleaseNotesContext = Pick<ExtensionCommandContext, "model" | "modelRegistry" | "signal" | "ui">;
@@ -32,7 +33,7 @@ export async function draftReleaseNotes(ctx: ReleaseNotesContext, commits: strin
 }
 
 export async function chooseReleaseNotes(
-  ctx: ReleaseNotesContext,
+  ctx: ReleaseNotesContext & Pick<ExtensionCommandContext, "mode">,
   tag: string,
   getCommits: () => Promise<string[]>,
 ): Promise<{ notes?: string } | undefined> {
@@ -40,7 +41,8 @@ export async function chooseReleaseNotes(
   const manual = "Write notes manually";
   const skip = "Skip release notes";
   for (;;) {
-    const selected = await ctx.ui.select(`Release notes for ${tag}`, [skip, ...(ctx.model ? [ai] : []), manual]);
+    const selected = await selectGitPicker(ctx, "Release notes", [["Tag", tag], ["Saved in", "Annotated Git tag"]],
+      [skip, ...(ctx.model ? [ai] : []), manual], `Release notes for ${tag}`);
     if (selected === skip) return {};
     if (selected !== ai && selected !== manual) return undefined;
 
