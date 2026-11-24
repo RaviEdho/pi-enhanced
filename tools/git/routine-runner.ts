@@ -7,6 +7,7 @@ import {
   isGitRepository,
   pushCommit,
 } from "./git.js";
+import { confirmGitReview } from "./review-dialog.js";
 
 /** Unstage the entire repository without changing files, HEAD, or operation metadata. */
 export async function handleUnstageCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
@@ -158,7 +159,7 @@ export async function handleDiscardCommand(ctx: ExtensionCommandContext, args = 
   const message = `${scope}${detailLines.join("\n")}\n\n${warning}\nThis cannot be undone.`;
 
   if (ctx.hasUI) {
-    const confirmed = await ctx.ui.confirm("Confirm Discard Changes", message);
+    const confirmed = await confirmGitReview(ctx, "Confirm Discard Changes", [message], "Discard changes");
     if (!confirmed) {
       ctx.ui.notify("Discard cancelled.", "info");
       return;
@@ -204,10 +205,9 @@ export async function handleUndoCommand(ctx: ExtensionCommandContext): Promise<v
   try {
     const lastCommit = (await execGit(["log", "-1", "--oneline"], cwd)).trim();
     if (ctx.hasUI) {
-      const confirm = await ctx.ui.confirm(
-        "Confirm Undo Commit",
-        `Undo last commit? Changes will remain in working tree.\n\n${lastCommit}`
-      );
+      const confirm = await confirmGitReview(ctx, "Confirm Undo Commit", [
+        "Undo last commit? Changes will remain in working tree.", "", lastCommit,
+      ], "Undo commit");
       if (!confirm) return;
     }
 

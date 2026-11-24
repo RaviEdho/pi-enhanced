@@ -7,6 +7,8 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
 import { execGit } from "./git.js";
 import { startGitProgress } from "./progress.js";
+import type { ReleaseBump } from "./release-version-selector.js";
+import { selectGitReview } from "./review-dialog.js";
 
 const execFileAsync = promisify(execFile);
 const FILES = ["package.json", "package-lock.json"];
@@ -67,7 +69,7 @@ async function diffVersionFile(directory: string, file: string): Promise<string>
 }
 
 /** Return a staging candidate only after a successful push to origin/main. */
-export async function prepareNpmVersion(ctx: ExtensionCommandContext, bump: "patch" | "minor" | "major"): Promise<string | undefined> {
+export async function prepareNpmVersion(ctx: ExtensionCommandContext, bump: ReleaseBump): Promise<string | undefined> {
   const plan = PlanModeManager.getInstance();
   if (plan.isEnabled()) {
     ctx.ui.notify("Cannot create a version commit in Plan Mode. Switch with /implement first.", "warning");
@@ -127,14 +129,13 @@ export async function prepareNpmVersion(ctx: ExtensionCommandContext, bump: "pat
     const commitOnly = "Commit only";
     const commitAndPush = "Commit & Push";
     progress.close();
-    const choice = await ctx.ui.select([
-      "Review npm version commit",
+    const choice = await selectGitReview(ctx, "Review npm version commit", [
       `${previous} → ${next} (${bump})`, message, ...preview,
       destination ? `Push target: ${destination}. An ordinary push can include earlier unpushed commits.` : "No upstream branch configured. Commit locally or set an upstream first.",
       destination === "origin/main"
         ? "After a successful push to origin/main, review npm staging separately. No Git tag is created."
         : "Push or merge the commit to origin/main before staging. No Git tag is created.",
-    ].join("\n"), [commitOnly, ...(target ? [commitAndPush] : [])]);
+    ], [commitOnly, ...(target ? [commitAndPush] : [])]);
     const push = choice === commitAndPush && target;
     if (choice !== commitOnly && !push) return;
     if (plan.isEnabled()) throw new Error("Plan Mode is active. No version files were changed.");

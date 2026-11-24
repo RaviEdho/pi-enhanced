@@ -3,11 +3,12 @@ import { promisify, stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
 import { execGit, isGitRepository } from "./git.js";
+import { selectReleaseVersion } from "./release-version-selector.js";
+import { confirmGitReview } from "./review-dialog.js";
 
 const execFileAsync = promisify(execFile);
 const WORKFLOW = "npm-release.yml";
 const BRANCH = "main";
-const BUMP_CHOICES = [["Patch", "patch"], ["Minor", "minor"], ["Major", "major"]] as const;
 const STAGE_CURRENT = "Stage current version";
 
 function githubRepository(remote: string): string | undefined {
@@ -61,13 +62,16 @@ export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Pro
     return;
   }
 
-  const choice = await ctx.ui.select("Release to npm", [...BUMP_CHOICES.map(([label]) => label), STAGE_CURRENT]);
+  // The checked-out commit is the bump base. Staging can still work without a local manifest.
+  const current = await execGit(["show", "HEAD:package.json"], ctx.cwd)
+    .then(text => (JSON.parse(text) as { version?: unknown } | null)?.version)
+    .catch(() => undefined);
+  const choice = await selectReleaseVersion(ctx.ui, current, STAGE_CURRENT);
+  if (!choice) return;
   let bumpedSha: string | undefined;
   if (choice !== STAGE_CURRENT) {
-    const bump = BUMP_CHOICES.find(([label]) => label === choice)?.[1];
-    if (!bump) return;
     const { prepareNpmVersion } = await import("./npm-version-runner.js");
-    bumpedSha = await prepareNpmVersion(ctx, bump);
+    bumpedSha = await prepareNpmVersion(ctx, choice);
     if (!bumpedSha) return;
   }
 
@@ -101,13 +105,13 @@ export async function handleNpmReleaseCommand(ctx: ExtensionCommandContext): Pro
     }
     const release = `${name}@${version}`;
     ctx.ui.setWorkingMessage?.();
-    const confirmed = await ctx.ui.confirm("Stage npm release?", [
+    const confirmed = await confirmGitReview(ctx, "Stage npm release?", [
       `${release} from ${repo}:${BRANCH}`,
       `Commit: ${commitTitle || "(no subject)"}`,
       `SHA: ${sha}`,
       "Only the remote commit is included. Local and unpushed changes are not included.",
       "This starts GitHub Actions. Publishing still requires separate approval with npm 2FA.",
-    ].join("\n"));
+    ], "Stage release");
     if (!confirmed) return;
     if (plan.isEnabled()) {
       ctx.ui.notify("Cannot stage an npm release in Plan Mode. Switch with /implement first.", "warning");

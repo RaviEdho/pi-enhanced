@@ -4,6 +4,8 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
 import { chooseReleaseNotes, type ReleaseNotesContext } from "./release-notes.js";
+import { isReleaseBump, nextReleaseVersion, selectReleaseVersion } from "./release-version-selector.js";
+import { confirmGitReview } from "./review-dialog.js";
 
 const USAGE = "/git release ship [patch|minor|major|X.Y.Z], push <tag>, or status <tag>";
 const remote = "origin";
@@ -16,7 +18,7 @@ const stable = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
 type Action = "ship" | "push" | "status";
 type Exec = ExtensionAPI["exec"];
-type Context = Pick<ExtensionCommandContext, "cwd" | "hasUI" | "isProjectTrusted"> & ReleaseNotesContext;
+type Context = Pick<ExtensionCommandContext, "cwd" | "hasUI" | "mode" | "isProjectTrusted"> & ReleaseNotesContext;
 type Adapter = { files: string[]; scripts?: { bump: string; check: string } };
 
 function object(value: unknown): Record<string, unknown> {
@@ -40,19 +42,8 @@ function versionFrom(text: string): string {
   return matching(object(JSON.parse(text)).version, stable, "stable X.Y.Z version");
 }
 
-const bumpChoices = [
-  { kind: "patch", label: "Patch", index: 2 },
-  { kind: "minor", label: "Minor", index: 1 },
-  { kind: "major", label: "Major", index: 0 },
-] as const;
-
-function incrementVersion(current: string, bump: number): string {
-  return current.split(".").map((part, index) => index === bump ? Number(part) + 1 : index > bump ? 0 : part).join(".");
-}
-
 function targetVersion(current: string, choice: string): string {
-  const bump = bumpChoices.find(({ kind }) => kind === choice);
-  if (bump) return matching(incrementVersion(current, bump.index), stable, "next version");
+  if (isReleaseBump(choice)) return matching(nextReleaseVersion(current, choice), stable, "next version");
 
   const desired = matching(choice, stable, "target version (use patch, minor, major, or X.Y.Z)");
   const parts = current.split(".").map(Number);
@@ -62,16 +53,9 @@ function targetVersion(current: string, choice: string): string {
 }
 
 async function chooseTargetVersion(ctx: Context, current: string): Promise<string | undefined> {
-  const choices = bumpChoices.flatMap(({ kind, label, index }) => {
-    const version = incrementVersion(current, index);
-    return stable.test(version) ? [{ kind, label: `${label} → ${version}` }] : [];
-  });
   const custom = "Custom version…";
-  const selected = await ctx.ui.select(`Release version (current: ${current})`, [...choices.map(({ label }) => label), custom]);
-  if (selected === custom) {
-    return (await ctx.ui.input("Release version (X.Y.Z)", "e.g. 1.2.3"))?.trim();
-  }
-  return choices.find(({ label }) => label === selected)?.kind;
+  const selected = await selectReleaseVersion(ctx.ui, current, custom, version => stable.test(version));
+  return selected === custom ? (await ctx.ui.input("Release version (X.Y.Z)", "e.g. 1.2.3"))?.trim() : selected;
 }
 
 // Remote URLs can contain credentials or arbitrary helper syntax. Keep them out of logs and previews.
@@ -374,14 +358,14 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
       if (!choice) return;
       notes = choice.notes;
     }
-    if (npm && !await ctx.ui.confirm("Run project release commands?", [
+    if (npm && !await confirmGitReview(ctx, "Run project release commands?", [
       `${current} → ${version} on ${branch}`,
       ...(bump ? [adapter.scripts
         ? `npm run version:set -- ${version}\n  ${preview(adapter.scripts.bump, 220)}`
         : `npm version ${version} --no-git-tag-version --ignore-scripts --workspaces=false`] : []),
       ...(adapter.scripts ? [`npm run version:check -- ${tag}\n  ${preview(adapter.scripts.check, 220)}`] : ["Verify the npm manifest and tracked lockfiles."]),
       "No commit, tag, or push happens until the next approval.",
-    ].join("\n"))) return;
+    ], "Run commands")) return;
 
     const before = await repo.state(branch);
     if (before.head !== head || before.status) throw new Error("The checkout changed. Restart the release command.");
@@ -402,13 +386,14 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
       throw new Error("The version check changed the checkout. Review it before releasing.");
     }
     const commits = (await repo.git(["log", "--oneline", "-12", `${upstream}..${head}`], "Could not review outgoing commits.")).trim();
-    if (!await ctx.ui.confirm(`Push ${tag}?`, [
+    const tuiReview = ctx.mode === "tui";
+    if (!await confirmGitReview(ctx, `Push ${tag}?`, [
       `origin (${destinationLabel(destination)}) · ${branch} · ${head.slice(0, 12)}`,
-      ...(commits ? [`Outgoing commits (up to 12):\n${preview(commits, 800)}`] : []),
-      ...(bump ? [`New commit: Release ${version}\nFiles: ${files.map(file => preview(file, 120)).join(", ")}\n${preview(diff, 1800, "truncated; review with git diff")}`] : []),
-      ...(notes ? [`Release notes in ${tag}:\n${preview(notes, 420)}`] : []),
       "Pushing this tag may publish a release.",
-    ].join("\n"))) {
+      ...(commits ? [`\nOutgoing commits (up to 12):\n${preview(commits, tuiReview ? 4_000 : 800)}`] : []),
+      ...(bump ? [`\nNew commit: Release ${version}\nFiles: ${files.map(file => preview(file, 120)).join(", ")}\n${preview(diff, tuiReview ? 32_000 : 1800, "truncated; review with git diff")}`] : []),
+      ...(notes ? [`\nRelease notes in ${tag}:\n${tuiReview ? notes : preview(notes, 420)}`] : []),
+    ], `Push ${tag}`)) {
       if (bump) ctx.ui.notify("Version edits were kept; nothing was committed or pushed.", "info");
       return;
     }

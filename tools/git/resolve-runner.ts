@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { execGit, getConflictFiles, isGitRepository } from "./git.js";
 import { CONFLICT_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
+import { confirmGitReview } from "./review-dialog.js";
 import {
   createConflictTools,
   type ConflictResolutionProposal,
@@ -113,10 +114,9 @@ export async function handleResolveCommand(args: string, ctx: ExtensionCommandCo
   // Review resolutions one by one
   for (const res of resolutions) {
     if (ctx.hasUI) {
-      const confirm = await ctx.ui.confirm(
-        "Confirm Conflict Resolution",
-        `Apply resolution for ${res.filePath}?\nExplanation: ${res.explanation}`
-      );
+      const confirm = await confirmGitReview(ctx, "Confirm Conflict Resolution", [
+        `Apply resolution for ${res.filePath}?`, `Explanation: ${res.explanation}`,
+      ], "Apply resolution");
       if (!confirm) {
         ctx.ui.notify(`Skipped ${res.filePath}.`, "info");
         continue;

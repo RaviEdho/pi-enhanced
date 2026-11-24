@@ -42,6 +42,7 @@ import { COMMIT_AGENT_SYSTEM_PROMPT, SELECTIVE_COMMIT_AGENT_SYSTEM_PROMPT } from
 import { createCommitTools } from "./tools.js";
 import { resolveGitAgentOptions } from "./model.js";
 import { startGitProgress } from "./progress.js";
+import { confirmGitReview } from "./review-dialog.js";
 import type {
   CommitConfirmationResult,
   CommitPlanProposal,
@@ -221,10 +222,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
             if (state) {
               if (ctx.hasUI && state.overlappingCollisions.length > 0) {
                 const fileList = state.overlappingCollisions.join(", ");
-                const proceed = await ctx.ui.confirm(
-                  "Exact Line Collision Detected",
-                  `"${fileList}" has edits on the exact same line in both staged and unstaged sets and cannot be cleanly separated.\n\nCommit all changes in "${fileList}" (keeping other staged files stashed)?`
-                );
+                const proceed = await confirmGitReview(ctx, "Exact Line Collision Detected", [
+                  `"${fileList}" has edits on the exact same line in both staged and unstaged sets and cannot be cleanly separated.\n\nCommit all changes in "${fileList}" (keeping other staged files stashed)?`,
+                ]);
                 if (!proceed) {
                   await rollbackStashedChanges(state, cwd);
                   ctx.ui.notify("Commit cancelled (overlapping line collision).", "info");
@@ -313,10 +313,9 @@ export async function handleCommitCommand(args: string, ctx: ExtensionCommandCon
               if (state) {
                 if (state.overlappingCollisions.length > 0) {
                   const fileList = state.overlappingCollisions.join(", ");
-                  const proceed = await ctx.ui.confirm(
-                    "Exact Line Collision Detected",
-                    `"${fileList}" has edits on the exact same line in both staged and unstaged sets and cannot be cleanly separated.\n\nCommit all changes in "${fileList}" (keeping other staged files stashed)?`
-                  );
+                  const proceed = await confirmGitReview(ctx, "Exact Line Collision Detected", [
+                    `"${fileList}" has edits on the exact same line in both staged and unstaged sets and cannot be cleanly separated.\n\nCommit all changes in "${fileList}" (keeping other staged files stashed)?`,
+                  ]);
                   if (!proceed) {
                     await rollbackStashedChanges(state, cwd);
                     ctx.ui.notify("Commit cancelled (overlapping line collision).", "info");

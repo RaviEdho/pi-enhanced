@@ -10,6 +10,7 @@ import { TaskLoader } from "../../ux/task-loader.js";
 import { DiffPageProperties, GitDiffPager, SUMMARY_DIFF_PAGE_CHARS, type DiffPageInput } from "./diff.js";
 import { showPrReviewDiff } from "./pr-review-diff.js";
 import { promptWithGitProgress, startGitProgress } from "./progress.js";
+import { confirmGitReview, selectGitReview } from "./review-dialog.js";
 
 const execGh = promisify(execFile);
 const PR_URL = /^https:\/\/github\.com\/[\w-]+\/[\w.-]+\/pull\/([1-9]\d*)\/?$/i;
@@ -240,7 +241,7 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
     if (!draft || progress.signal.aborted) return;
     const plan = PlanModeManager.getInstance();
     const partial = "The AI did not read every diff page. Review the diff yourself before submitting.";
-    const summary = [title, pr.url, `${pr.state}${pr.isDraft ? " (draft)" : ""} · ${clean(pr.headRefName)} → ${clean(pr.baseRefName)} · ${pr.headRefOid.slice(0, 12)}`, checkSummary(pr.statusCheckRollup), ...(!draft.complete ? [partial] : [])];
+    const summary = [pr.url, `${pr.state}${pr.isDraft ? " (draft)" : ""} · ${clean(pr.headRefName)} → ${clean(pr.baseRefName)} · ${pr.headRefOid.slice(0, 12)}`, checkSummary(pr.statusCheckRollup), ...(!draft.complete ? [partial] : [])];
     if (!draft.complete) ctx.ui.notify(partial, "warning");
     let body = draft.body;
     const edit = () => ctx.ui.editor(`${title} — review draft (not submitted)`, body);
@@ -252,7 +253,7 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
     const printLabel = "Print draft to chat output";
     while (true) {
       const canSubmit = pr.state === "OPEN" && !plan.isEnabled();
-      const choice = await ctx.ui.select([...summary, ...(!canSubmit ? ["Submission requires an open PR and Implement Mode."] : [])].join("\n"), [
+      const choice = await selectGitReview(ctx, title, [...summary, ...(!canSubmit ? ["Submission requires an open PR and Implement Mode."] : [])], [
         viewLabel, editLabel, printLabel, ...(canSubmit ? REVIEW_ACTIONS.keys() : []),
       ]);
       if (choice === undefined) return;
@@ -266,7 +267,7 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
         continue;
       }
       if (choice === printLabel) {
-        pi.appendEntry("git-pr", { title: `${title} — review draft`, summary: `${summary.slice(1).join("\n\n")}\n\n${body}` });
+        pi.appendEntry("git-pr", { title: `${title} — review draft`, summary: `${summary.join("\n\n")}\n\n${body}` });
         return;
       }
       const flag = REVIEW_ACTIONS.get(choice);
@@ -275,7 +276,10 @@ export async function handlePrReviewCommand(target: string, ctx: ExtensionComman
         ctx.ui.notify(`Keep the review body under ${MAX_REVIEW_CHARS} characters and provide text for comments or change requests.`, "warning");
         continue;
       }
-      if (!(await ctx.ui.confirm(`${choice}?`, `${pr.url}\nHead: ${pr.headRefOid}\nGitHub will publish the edited review under your signed-in account.${draft.complete ? "" : `\n${partial}`}`))) continue;
+      if (!await confirmGitReview(ctx, `${choice}?`, [
+        pr.url, `Head: ${pr.headRefOid}`, "GitHub will publish the edited review under your signed-in account.",
+        ...(!draft.complete ? [partial] : []),
+      ], choice)) continue;
       if (plan.isEnabled()) throw new Error("Cannot submit a PR review in Plan Mode.");
       progress = startGitProgress(ctx, "git-pr-review", `Rechecking PR #${pr.number} before submission…`);
       const fresh = await snapshot(ctx.cwd, pr.url);

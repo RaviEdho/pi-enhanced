@@ -15,6 +15,7 @@ import {
 import { PR_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
 import { createPrTools, type PullRequestProposal } from "./smart-tools.js";
 import { promptWithGitProgress, startGitProgress } from "./progress.js";
+import { selectGitReview } from "./review-dialog.js";
 
 /**
  * Executes the PR generation workflow.
@@ -107,7 +108,9 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
   const create = "Create PR via GitHub CLI (gh pr create)";
   const options = [edit, print, ...((await hasGitHubCli()) ? [create] : [])];
   while (true) {
-    const choice = await ctx.ui.select(`Pull Request: ${title}\n${branchSummary.currentBranch || "HEAD"} → ${baseBranch}`, options);
+    const choice = await selectGitReview(ctx, "Pull Request Proposal", [
+      title, `${branchSummary.currentBranch || "HEAD"} → ${baseBranch}`,
+    ], options);
     if (choice === edit) {
       const edited = await ctx.ui.editor(`PR: ${title}`, markdown);
       if (edited !== undefined) markdown = edited;
