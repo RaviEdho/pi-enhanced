@@ -350,6 +350,7 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
     if (remote) throw new Error(`Tag ${tag} already exists on origin. It will not be overwritten.`);
     const upstream = await repo.requireAncestor(destination, branch, head);
     const bump = action === "ship" && current !== version;
+    const commitMessage = `chore(release): ${tag}`;
     const adapter = await repo.adapter(head, manifest);
     const npm = bump || adapter.scripts ? await npmCommand() : undefined;
     let notes: string | undefined;
@@ -391,7 +392,7 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
       `origin (${destinationLabel(destination)}) · ${branch} · ${head.slice(0, 12)}`,
       "Pushing this tag may publish a release.",
       ...(commits ? [`\nOutgoing commits (up to 12):\n${preview(commits, tuiReview ? 4_000 : 800)}`] : []),
-      ...(bump ? [`\nNew commit: Release ${version}\nFiles: ${files.map(file => preview(file, 120)).join(", ")}\n${preview(diff, tuiReview ? 32_000 : 1800, "truncated; review with git diff")}`] : []),
+      ...(bump ? [`\nNew commit: ${commitMessage}\nFiles: ${files.map(file => preview(file, 120)).join(", ")}\n${preview(diff, tuiReview ? 32_000 : 1800, "truncated; review with git diff")}`] : []),
       ...(notes ? [`\nRelease notes in ${tag}:\n${tuiReview ? notes : preview(notes, 420)}`] : []),
     ], `Push ${tag}`)) {
       if (bump) ctx.ui.notify("Version edits were kept; nothing was committed or pushed.", "info");
@@ -410,7 +411,7 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
       await repo.git(["--literal-pathspecs", "add", "--", ...files], "Could not stage the version files.");
       if (await repo.diff(true) !== diff) throw new Error("Staged version changes differ from the approved diff. Review the index.");
       const tree = (await repo.git(["write-tree"], "Could not verify the release index.")).trim();
-      await repo.git(["commit", "-m", `Release ${version}`], "Release commit failed. Review Git hooks and the index.");
+      await repo.git(["commit", "-m", commitMessage], "Release commit failed. Review Git hooks and the index.");
       commit = (await repo.state(branch)).head;
       const parents = (await repo.git(["show", "-s", "--format=%P", commit], "Could not verify release commit ancestry.")).trim();
       const committedTree = (await repo.git(["show", "-s", "--format=%T", commit], "Could not verify release commit contents.")).trim();
