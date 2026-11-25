@@ -29,7 +29,8 @@ export interface ConflictResolutionProposal {
 export function createPrTools(
   baseBranch: string,
   cwd: string,
-  onProposal: (pr: PullRequestProposal) => void
+  onProposal: (pr: PullRequestProposal) => void,
+  explicitBaseRef?: string,
 ): ToolDefinition<any, unknown>[] {
   let diffPages: Promise<GitDiffPager> | undefined;
   const branchOverviewTool: ToolDefinition<any, unknown> = {
@@ -38,7 +39,7 @@ export function createPrTools(
     description: "Inspect branch commits and diffstat relative to base branch",
     parameters: Type.Object({}),
     execute: async () => {
-      const summary = await getBranchDiffSummary(baseBranch, cwd);
+      const summary = await getBranchDiffSummary(baseBranch, cwd, explicitBaseRef);
       return {
         content: [
           {
@@ -58,7 +59,7 @@ export function createPrTools(
     parameters: Type.Object(DiffPageProperties),
     execute: async (_toolCallId, params: DiffPageInput) => {
       if (!diffPages) {
-        diffPages = getBranchFullDiff(baseBranch, cwd).then((diff) => new GitDiffPager(diff, "git diff (PR)"));
+        diffPages = getBranchFullDiff(baseBranch, cwd, explicitBaseRef).then((diff) => new GitDiffPager(diff, "git diff (PR)"));
         void diffPages.catch(() => { diffPages = undefined; });
       }
       return (await diffPages).read(params, "git_branch_diff", {}, SUMMARY_DIFF_PAGE_CHARS);

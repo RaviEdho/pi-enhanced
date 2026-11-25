@@ -7,9 +7,10 @@ import type { CommitProposal, GitStagedOverview } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export async function execGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
+export async function execGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv, timeout?: number): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
+    timeout,
     maxBuffer: 10 * 1024 * 1024,
     ...(env ? { env: { ...process.env, ...env } } : {}),
   });
@@ -108,22 +109,15 @@ function expandPorcelainPath(rawPath: string): string[] {
   return [oldPath, newPath];
 }
 
-export async function getBranchDiffSummary(baseBranch: string, cwd: string): Promise<BranchCommitSummary> {
-  const currentBranch = await getCurrentBranch(cwd);
-
-  // Resolve base ref (prefer origin/base if exists, else local base)
-  let baseRef: string | null = null;
-  try {
-    await execGit(["rev-parse", "--verify", `origin/${baseBranch}`], cwd);
-    baseRef = `origin/${baseBranch}`;
-  } catch {
-    try {
-      await execGit(["rev-parse", "--verify", baseBranch], cwd);
-      baseRef = baseBranch;
-    } catch {
-      baseRef = null;
-    }
+async function resolvePrBase(baseBranch: string, cwd: string): Promise<string | undefined> {
+  for (const ref of [`origin/${baseBranch}`, baseBranch]) {
+    if (await execGit(["rev-parse", "--verify", "--end-of-options", ref], cwd).then(() => true, () => false)) return ref;
   }
+}
+
+export async function getBranchDiffSummary(baseBranch: string, cwd: string, explicitBaseRef?: string): Promise<BranchCommitSummary> {
+  const currentBranch = await getCurrentBranch(cwd);
+  const baseRef = explicitBaseRef ?? await resolvePrBase(baseBranch, cwd);
 
   if (!baseRef) {
     return {
@@ -152,14 +146,8 @@ export async function getBranchDiffSummary(baseBranch: string, cwd: string): Pro
   }
 }
 
-export async function getBranchFullDiff(baseBranch: string, cwd: string): Promise<string> {
-  let baseRef = baseBranch;
-  try {
-    await execGit(["rev-parse", "--verify", `origin/${baseBranch}`], cwd);
-    baseRef = `origin/${baseBranch}`;
-  } catch {
-    // use baseBranch
-  }
+export async function getBranchFullDiff(baseBranch: string, cwd: string, explicitBaseRef?: string): Promise<string> {
+  const baseRef = explicitBaseRef ?? await resolvePrBase(baseBranch, cwd) ?? baseBranch;
 
   try {
     return await execGit(["diff", "--no-ext-diff", "--no-color", `${baseRef}...HEAD`], cwd);

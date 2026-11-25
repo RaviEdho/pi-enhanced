@@ -322,9 +322,9 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
     } else if (choice === "/git pr review") {
       const { handlePrReviewCommand } = await import("./pr-review-runner.js");
       await handlePrReviewCommand("", ctx, pi);
-    } else if (choice === "/git branch") {
-      const { handleBranchCommand } = await import("./branch-runner.js");
-      await handleBranchCommand("", ctx);
+    } else if (choice === "/git branches") {
+      const { handleBranchesMenu } = await import("./branch-menu.js");
+      await handleBranchesMenu(ctx, pi);
     } else if (choice === "/git undo") {
       await handleUndoCommand(ctx);
     } else if (choice === "/git discard") {

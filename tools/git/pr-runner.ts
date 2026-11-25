@@ -16,11 +16,18 @@ import { PR_AGENT_SYSTEM_PROMPT } from "./smart-prompts.js";
 import { createPrTools, type PullRequestProposal } from "./smart-tools.js";
 import { promptWithGitProgress, startGitProgress } from "./progress.js";
 import { selectGitPicker } from "./review-dialog.js";
+import { PlanModeManager } from "../../ux/plan/manager.js";
 
-/**
- * Executes the PR generation workflow.
- */
-export async function handlePrCommand(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
+interface PrDestination {
+  baseRef: string;
+  headBranch: string;
+  repository: string;
+}
+
+/** Executes the PR generation workflow. */
+export async function handlePrCommand(
+  args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI, destination?: PrDestination,
+): Promise<void> {
   const cwd = ctx.cwd;
   const report = (message: string, level: "info" | "warning" | "error") => {
     if (ctx.hasUI) ctx.ui.notify(message, level);
@@ -39,8 +46,12 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
   try {
     baseBranch = args.trim() || await getDefaultBranch(cwd);
     if (progress.signal.aborted) return;
-    branchSummary = await getBranchDiffSummary(baseBranch, cwd);
+    branchSummary = await getBranchDiffSummary(baseBranch, cwd, destination?.baseRef);
     if (progress.signal.aborted) return;
+    if (destination && branchSummary.currentBranch !== destination.headBranch) {
+      report("The current branch changed. Switch back to the pushed branch to draft its PR.", "warning");
+      return;
+    }
     if (branchSummary.error) {
       report(`Cannot generate PR: ${branchSummary.error}. To choose another base, run /git pr <base-branch>.`, "warning");
       return;
@@ -55,7 +66,7 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
       return;
     }
     progress.update(`Drafting PR: ${branchSummary.currentBranch || "HEAD"} → ${baseBranch}…`);
-    const tools = createPrTools(baseBranch, cwd, (pr) => { finalProposal = pr; });
+    const tools = createPrTools(baseBranch, cwd, (pr) => { finalProposal = pr; }, destination?.baseRef);
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
       retry: { enabled: false },
@@ -109,8 +120,9 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
   const options = [edit, print, ...((await hasGitHubCli()) ? [create] : [])];
   while (true) {
     const branches = `${branchSummary.currentBranch || "HEAD"} → ${baseBranch}`;
-    const choice = await selectGitPicker(ctx, "Pull Request Proposal", [["Title", title], ["Branches", branches]],
-      options, ["Pull Request Proposal", title, branches].join("\n"));
+    const rows: [string, string][] = [["Title", title], ["Branches", branches]];
+    if (destination) rows.push(["Repository", destination.repository]);
+    const choice = await selectGitPicker(ctx, "Pull Request Proposal", rows, options);
     if (choice === edit) {
       const edited = await ctx.ui.editor(`PR: ${title}`, markdown);
       if (edited !== undefined) markdown = edited;
@@ -120,12 +132,17 @@ export async function handlePrCommand(args: string, ctx: ExtensionCommandContext
       if (ctx.mode === "tui") pi.appendEntry("git-pr", { title, summary: markdown });
       else report(`${title}\n\n${markdown}`, "info");
     } else if (choice === create) {
+      if (destination && (PlanModeManager.getInstance().isEnabled() || !ctx.isProjectTrusted())) {
+        report("Creating this PR requires a trusted project in Implement Mode.", "warning");
+        return;
+      }
       const publishing = startGitProgress(ctx, "git-pr", "Creating pull request…");
       try {
         const { execFile } = await import("node:child_process");
         const { promisify } = await import("node:util");
         const { stdout } = await promisify(execFile)("gh", [
           "pr", "create",
+          ...(destination ? ["--repo", `github.com/${destination.repository}`, "--head", destination.headBranch] : []),
           "--base", baseBranch,
           "--title", title,
           "--body", markdown,

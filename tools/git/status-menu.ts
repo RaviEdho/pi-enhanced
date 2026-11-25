@@ -64,7 +64,7 @@ export function gitStatusActions(context: MenuContext): GitMenuAction[] {
     (changed ? "Clean the working tree first" : undefined)]);
   if (isTui && npmWorkflow) actions.push(["Release to npm", "/git release npm", needImplement ??
     (origin === false ? "Configure a GitHub origin first" : undefined)]);
-  actions.push(["Smart Branching", "/git branch"]);
+  actions.push(["Branches", "/git branches"]);
   if (!status?.unborn && hasParent !== false) actions.push(["Undo last commit", "/git undo", conflicts ?? inProgress]);
   if (staged || unstaged || conflicted) actions.push(["Discard uncommitted changes", "/git discard", conflicts ?? inProgress]);
   return actions;
