@@ -11,6 +11,7 @@ import {
 } from "./git.js";
 import { confirmGitReview, selectGitMenu } from "./review-dialog.js";
 import { gitStatusActions, readMenuContext } from "./status-menu.js";
+import { readTagPushWorkflow, type TagPushWorkflow } from "./tag-workflows.js";
 
 /** Unstage the entire repository without changing files, HEAD, or operation metadata. */
 export async function handleUnstageCommand(ctx: ExtensionCommandContext, args = ""): Promise<void> {
@@ -243,8 +244,10 @@ export async function handleInitCommand(ctx: ExtensionCommandContext, args?: str
   }
 }
 
-function gitMenuRows(status: GitStatus | undefined): Array<[label: string, value: string]> {
-  if (!status) return [["Status", "Repository details unavailable"]];
+function gitMenuRows(status: GitStatus | undefined, tagPush: TagPushWorkflow): Array<[label: string, value: string]> {
+  const warnings: Array<[string, string]> = tagPush === "found" || status?.unborn ? [] : [["Release tag",
+    tagPush === "missing" ? "No tag-push workflow found in local HEAD" : "Could not check tag-push workflows in local HEAD"]];
+  if (!status) return [["Status", "Repository details unavailable"], ...warnings];
   const { branch, detached, unborn, upstream, ahead, behind, staged, unstaged, untracked, conflicts } = status;
   const head = detached ? `Detached HEAD at ${branch.slice(1)}` : `${branch}${unborn ? " (no commits yet)" : ""}`;
   const sync = !upstream ? "None configured"
@@ -256,7 +259,7 @@ function gitMenuRows(status: GitStatus | undefined): Array<[label: string, value
     : "Working tree clean";
   const rows: Array<[string, string]> = [["Branch", head]];
   if (!detached) rows.push(["Upstream", sync]);
-  rows.push(["Changes", changes]);
+  rows.push(["Changes", changes], ...warnings);
   return rows;
 }
 
@@ -277,10 +280,11 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
   }
 
   if (ctx.hasUI) {
-    const [root, status, local] = await Promise.all([
+    const [root, status, local, tagPush] = await Promise.all([
       execGit(["rev-parse", "--show-toplevel"], cwd).then(out => out.trimEnd()),
       readGitStatus(cwd).catch(() => undefined),
       readMenuContext(cwd),
+      readTagPushWorkflow(cwd),
     ]);
     const actions = gitStatusActions({
       ...local,
@@ -291,7 +295,7 @@ export async function handleStatusCommand(ctx: ExtensionCommandContext, pi: Exte
       planMode: PlanModeManager.getInstance().isEnabled(),
       trusted: ctx.isProjectTrusted(),
     });
-    const choice = await selectGitMenu(ctx, "Git Status", gitMenuRows(status), actions);
+    const choice = await selectGitMenu(ctx, "Git Status", gitMenuRows(status, tagPush), actions);
 
     if (choice === "/git resolve") {
       const { handleResolveCommand } = await import("./resolve-runner.js");
