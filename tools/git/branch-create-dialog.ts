@@ -1,8 +1,7 @@
 import { getSettingsListTheme, keyHint, rawKeyHint, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Input, Loader, matchesKey, visibleWidth, type Component, type Focusable, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { DialogFrame, renderDialogActions } from "../../ux/dialog.js";
-import { branchNameProblem, suggestBranchNames } from "./branch-runner.js";
-import { execGit } from "./git.js";
+import { branchNameProblem } from "./branch-runner.js";
 import { selectGitMenu, type GitMenuAction } from "./review-dialog.js";
 
 const SUGGEST = "Suggest branch names";
@@ -10,14 +9,12 @@ const PLACEHOLDER = "Type a custom branch name…";
 const SUGGESTION_ERROR = "Could not generate branch names. Try again or type your own.";
 const NO_NAMES = "No usable branch names suggested. Try again or type your own.";
 
-async function namesFromChanges(ctx: ExtensionCommandContext, signal?: AbortSignal): Promise<string[]> {
-  const diff = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--stat=100,70,40"];
-  const [staged, unstaged] = await Promise.all([
-    execGit([...diff, "--cached"], ctx.cwd), execGit(diff, ctx.cwd),
-  ]);
-  if (signal?.aborted || (!staged.trim() && !unstaged.trim())) return [];
-  return suggestBranchNames(ctx, `Staged change stats:\n${staged}\nUnstaged change stats:\n${unstaged}`.slice(0, 8_000), signal);
-}
+type BranchNamePrompt = {
+  title: string;
+  current: string;
+  confirmHint: string;
+  suggestions: { load: (signal?: AbortSignal) => Promise<string[]> } | { disabled: string };
+};
 
 class ActionSpinner extends Loader {
   indicator(): string {
@@ -25,14 +22,16 @@ class ActionSpinner extends Loader {
   }
 }
 
-export async function promptCreateBranch(ctx: ExtensionCommandContext, current: string, suggestDisabled?: string): Promise<string | undefined> {
+export async function promptBranchName(ctx: ExtensionCommandContext, options: BranchNamePrompt): Promise<string | undefined> {
+  const { title, current, confirmHint, suggestions } = options;
+  const suggestDisabled = "disabled" in suggestions ? suggestions.disabled : undefined;
   if (ctx.mode !== "tui") {
     let names: string[] = [];
     while (true) {
       const actions: GitMenuAction[] = [["Type a custom branch name", "custom"], ...(names.length
         ? names.map((name, index): GitMenuAction => [name, `name-${index}`])
         : [[SUGGEST, "suggest", suggestDisabled] as const])];
-      const choice = await selectGitMenu(ctx, "Create branch here", [["Current", current]], actions);
+      const choice = await selectGitMenu(ctx, title, [["Current", current]], actions);
       if (!choice) return;
       if (choice === "custom") {
         const name = (await ctx.ui.input("New branch name", PLACEHOLDER))?.trim();
@@ -40,10 +39,10 @@ export async function promptCreateBranch(ctx: ExtensionCommandContext, current: 
         const problem = await branchNameProblem(ctx.cwd, name);
         if (!problem) return name;
         ctx.ui.notify(problem, "warning");
-      } else if (choice === "suggest") {
+      } else if (choice === "suggest" && "load" in suggestions) {
         ctx.ui.setWorkingMessage?.("Suggesting branch names…");
         try {
-          names = await namesFromChanges(ctx);
+          names = await suggestions.load();
           if (!names.length) ctx.ui.notify(NO_NAMES, "warning");
         } catch {
           ctx.ui.notify(SUGGESTION_ERROR, "warning");
@@ -95,11 +94,11 @@ export async function promptCreateBranch(ctx: ExtensionCommandContext, current: 
     };
 
     const suggest = async () => {
-      if (suggestDisabled || spinner) return;
+      if (!("load" in suggestions) || spinner) return;
       suggestionProblem = undefined;
       spinner = new ActionSpinner(tui, text => theme.fg("accent", text), text => text);
       try {
-        const result = await namesFromChanges(ctx, controller.signal);
+        const result = await suggestions.load(controller.signal);
         if (controller.signal.aborted) return;
         names = result;
         suggestionProblem = names.length ? undefined : NO_NAMES;
@@ -169,17 +168,17 @@ export async function promptCreateBranch(ctx: ExtensionCommandContext, current: 
           actions[1] = `  ${arrow}${detail}`;
         }
         return frame.render(width, {
-          title: "Create branch here",
+          title,
           content: [`  ${theme.fg("muted", "Current:")} ${current.replace(/\p{Bidi_Control}/gu, "")}`,
             ...[nameProblem, suggestionProblem].flatMap(problem => problem ? [`  ${theme.fg("warning", problem)}`] : [])],
           actions,
           actionFocusLine: selected,
           hints: [rawKeyHint("↑/↓", "choose"),
-            ...(spinner && selected !== 0 ? [] : [keyHint("tui.select.confirm", selected === 0 || names.length ? "create" : "suggest")]),
+            ...(spinner && selected !== 0 ? [] : [keyHint("tui.select.confirm", selected === 0 || names.length ? confirmHint : "suggest")]),
             keyHint("tui.select.cancel", "close")],
         });
       },
     };
     return component;
-  }, { blocked: { kind: "question", message: "Create branch here" } });
+  }, { blocked: { kind: "question", message: title } });
 }

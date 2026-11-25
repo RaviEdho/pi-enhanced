@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { PlanModeManager } from "../../ux/plan/manager.js";
 import { readGitStatus, type GitStatus } from "../../ux/usage/git-status.js";
-import { promptCreateBranch } from "./branch-create-dialog.js";
-import { branchNameProblem, pickLocalBranch } from "./branch-runner.js";
+import { promptBranchName } from "./branch-create-dialog.js";
+import { pickLocalBranch, suggestBranchNames } from "./branch-runner.js";
 import { execGit, hasGitHubCli, isGitRepository } from "./git.js";
 import { confirmGitReview, selectGitMenu, type GitMenuAction } from "./review-dialog.js";
 import { readMenuContext } from "./status-menu.js";
@@ -43,12 +43,13 @@ async function readCommit(cwd: string, ref: string): Promise<string> {
   return (await execGit(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], cwd)).trimEnd();
 }
 
-async function inputBranchName(ctx: ExtensionCommandContext): Promise<string | undefined> {
-  const name = (await ctx.ui.input("New branch name", "e.g. feat/my-change"))?.trim();
-  if (!name) return;
-  const problem = await branchNameProblem(ctx.cwd, name);
-  if (problem) ctx.ui.notify(problem, "warning");
-  else return name;
+async function namesFromChanges(ctx: ExtensionCommandContext, signal?: AbortSignal): Promise<string[]> {
+  const diff = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--stat=100,70,40"];
+  const [staged, unstaged] = await Promise.all([
+    execGit([...diff, "--cached"], ctx.cwd), execGit(diff, ctx.cwd),
+  ]);
+  if (signal?.aborted || (!staged.trim() && !unstaged.trim())) return [];
+  return suggestBranchNames(ctx, `Staged change stats:\n${staged}\nUnstaged change stats:\n${unstaged}`.slice(0, 8_000), signal);
 }
 
 function runRemoteGit(cwd: string, args: string[]): Promise<string> {
@@ -129,8 +130,6 @@ async function moveCommits(ctx: ExtensionCommandContext, pi: ExtensionAPI): Prom
     return ctx.ui.notify("This branch needs a remote-tracking upstream.", "warning");
   }
 
-  const name = await inputBranchName(ctx);
-  if (!name) return;
   const blocked = mutationBlocker(ctx);
   if (blocked) return ctx.ui.notify(blocked, "warning");
 
@@ -159,7 +158,16 @@ async function moveCommits(ctx: ExtensionCommandContext, pi: ExtensionAPI): Prom
     execGit(["rev-list", "--count", range], cwd).then(Number),
     execGit(["log", "--format=%h %s", "--no-notes", "--no-show-signature", "-n", "25", range], cwd),
   ]);
-  if (!await confirmGitReview(ctx, "Move unpushed commits to a new branch", [
+  const title = "Move unpushed commits to a new branch";
+  const name = await promptBranchName(ctx, {
+    title, current: status.branch, confirmHint: "preview move",
+    suggestions: !ctx.model ? { disabled: "Select a model first" } : {
+      load: signal => suggestBranchNames(ctx,
+        `Subjects of the verified unpushed commits being moved (${count} total, newest first):\n${preview}`.slice(0, 8_000), signal),
+    },
+  });
+  if (!name) return;
+  if (!await confirmGitReview(ctx, title, [
     `${name} → ${upstream.head.slice(0, 12)} (create and switch)`,
     `${status.branch} → ${trackingName} at ${base.slice(0, 12)} (local branch only)`,
     "No commits will be pushed by this step.", "", `${count} commit${count === 1 ? "" : "s"}:`, preview.trimEnd(),
@@ -226,8 +234,12 @@ export async function handleBranchesMenu(ctx: ExtensionCommandContext, pi: Exten
     if (choice === "switch") await pickLocalBranch(ctx, status.detached ? "" : status.branch, "Switch branch");
     else if (choice === "move") await moveCommits(ctx, pi);
     else if (choice === "create") {
-      const suggestionBlocker = !ctx.model ? "Select a model first" : !status.staged && !status.unstaged ? "No tracked changes" : undefined;
-      const name = await promptCreateBranch(ctx, current, suggestionBlocker);
+      const name = await promptBranchName(ctx, {
+        title: "Create branch here", current, confirmHint: "create",
+        suggestions: !ctx.model ? { disabled: "Select a model first" }
+          : !status.staged && !status.unstaged ? { disabled: "No tracked changes" }
+          : { load: signal => namesFromChanges(ctx, signal) },
+      });
       if (!name) return;
       const blocked = mutationBlocker(ctx);
       if (blocked) return ctx.ui.notify(blocked, "warning");
