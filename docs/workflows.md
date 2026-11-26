@@ -188,6 +188,14 @@ The tool is enabled by default, but can be completely disabled via `/settings-en
 
 Set the model with `/settings-enhanced set subagent.model <provider/model>` or choose **Subagent Model** in the settings picker. Set it to `session` to inherit the parent model again. Choose **Subagent Thinking** to override the parent's thinking level. These settings apply to new background and synchronous runs without changing the parent session or jobs already running. If the saved model becomes unavailable, new runs stop with an error rather than silently using a different model.
 
+**Scout `find` examples** (tool arguments):
+
+- `{"path":"~","type":"directory"}` lists top-level folders without scanning their files. Use `"depth":2` to include grandchildren (maximum 15).
+- `{"path":"~","type":"directory","patterns":["bibit-web","chat-app","gateway","portfolio","projects"]}` fuzzy-matches any of those names. `pattern` is a single query even when it contains spaces. If both fields are set, `pattern` is an additional alternative; each alternative has its own constraints, and each matching path appears once.
+- `{"path":"src","patterns":["auth *.ts","session *.tsx"]}` finds files under `src` matching either query. Use the returned `cursor` to continue the same search.
+
+Directory mode lists physical folders, including empty ones. It skips fixed exclusions and most hidden folders (controlled by `scout.includeHidden`), does not follow child symlinks, and does not apply Git ignore rules or Git status filters. Use file mode for `git:modified` and similar queries.
+
 ## Session shortcuts and telemetry
 
 - **Automatic Session Titles**: Uses a configurable model to create a concise, action-oriented title (up to 36 characters) from the first user message, with toggles and model selection in `/settings-enhanced`. In the Discord gateway, the generated name is also applied to its server thread.
@@ -203,7 +211,7 @@ Credential helpers do not load browser OAuth implementations. Login, token refre
 
 Repeated display reads of settings and credentials share a 250ms file-check window. Local updates are immediate; explicit settings/usage commands, inference credential checks, and native logout synchronization bypass the polling window. External file edits are picked up on the next read after that window expires. Expired, missing, and corrupt Codex catalogs also coalesce metadata checks instead of repeatedly reading/parsing JSON; a successful discovery save updates the in-memory catalog immediately.
 
-Scout honors Git ignore rules by default while retaining fixed exclusions (`node_modules`, build/cache directories, and most hidden directories). Configure `scout.respectGitIgnore` and `scout.includeHidden` in `/settings-enhanced`; changes apply on the next search. In Git workspaces, a read-only `git ls-files` call per scan evaluates nested `.gitignore`, negations, repository/global excludes and tracked exceptions. Non-Git workspaces or Git failures retain fixed exclusions. Explicit external/unindexed-directory searches retain their broad inspection behavior.
+Scout honors Git ignore rules by default while retaining fixed exclusions (`node_modules`, build/cache directories, and most hidden directories). Configure `scout.respectGitIgnore` and `scout.includeHidden` in `/settings-enhanced`; changes apply on the next search. In Git workspaces, a read-only `git ls-files` call per scan evaluates nested `.gitignore`, negations, repository/global excludes and tracked exceptions. Non-Git workspaces or Git failures retain fixed exclusions. File and content searches targeting external or unindexed paths retain their broad inspection behavior.
 
 Reviewed upstream SHAs, adopted behavior, licensing boundaries, and the next-update procedure are recorded in [UPSTREAM.md](../UPSTREAM.md).
 

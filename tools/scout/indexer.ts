@@ -7,8 +7,9 @@ import { rankFirstBatch, TopK } from "./ranking.js";
 import { classifyLine } from "./classifier.js";
 import { FileContentCache, type FileContent } from "./content-cache.js";
 import { FrecencyTracker } from "./frecency.js";
-import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
+import { fuzzyMatch, matchesConstraints, parseQueryConstraints, scoreFindPath } from "./matcher.js";
 import type { GitFileStatus, IndexedFile, SearchMatch, SearchQueryConstraints } from "./types.js";
+import { DEFAULT_IGNORED_DIRS, isHiddenDirectory } from "./visibility.js";
 
 const execFileAsync = promisify(execFile);
 const GIT_REFRESH_INTERVAL_MS = 10_000;
@@ -20,21 +21,6 @@ interface DirectorySnapshot {
   signature: string;
   entries: fs.Dirent[];
 }
-
-const DEFAULT_IGNORED_DIRS = new Set([
-  ".git",
-  "node_modules",
-  "dist",
-  "build",
-  "target",
-  ".next",
-  ".turbo",
-  ".cache",
-  ".venv",
-  "venv",
-  "__pycache__",
-  "coverage",
-]);
 
 const BINARY_EXTENSIONS = new Set([
   // Images
@@ -316,7 +302,7 @@ export class FileIndexer {
     for (const entry of snapshot.entries) {
       const name = entry.name;
       if (DEFAULT_IGNORED_DIRS.has(name)) continue;
-      if (!this.includeHidden && entry.isDirectory() && name.startsWith(".") && name !== ".github") continue;
+      if (!this.includeHidden && entry.isDirectory() && isHiddenDirectory(name)) continue;
       if (entry.isFile() && name === ".DS_Store") continue;
       const relPath = relDir ? `${relDir}/${name}` : name;
       const fullPath = path.join(currentDir, name);
@@ -401,48 +387,24 @@ export class FileIndexer {
    * Search files by path (fuzzy matching + constraints + frecency ranking)
    */
   public async findFiles(
-    query: string,
+    query: string | readonly SearchQueryConstraints[],
     options?: { limit?: number; offset?: number; path?: string }
   ): Promise<{ files: IndexedFile[]; totalMatched: number }> {
-    const constraints = parseQueryConstraints(query);
+    const queries = typeof query === "string" ? [parseQueryConstraints(query)] : query;
     await this.scan();
     // Explicit Git filters should reflect staging/deletion changes immediately.
-    if (constraints.gitFilter) await this.refreshGitStatus();
-    if (options?.path && options.path !== "." && options.path !== "./") {
-      let p = options.path.trim().replace(/\\/g, "/");
-      if (path.isAbsolute(p)) {
-        p = path.relative(this.cwd, p).replace(/\\/g, "/");
-      }
-      p = p.replace(/^\.\//, "");
-      if (p.endsWith("/")) p = p.slice(0, -1);
-      if (p && p !== ".") {
-        constraints.includePaths = constraints.includePaths || [];
-        if (!constraints.includePaths.includes(p)) {
-          constraints.includePaths.push(p);
-        }
-      }
-    }
-
-    const pattern = constraints.pattern;
+    if (queries.some((query) => query.gitFilter)) await this.refreshGitStatus();
+    const scope = options?.path ? path.relative(this.cwd, path.resolve(this.cwd, options.path)).replace(/\\/g, "/") : "";
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
 
     const scored = new TopK<{ file: IndexedFile; score: number }>(Math.max(0, offset + limit), (a, b) => b.score - a.score);
     let totalMatched = 0;
 
-    const considerFile = (file: IndexedFile) => {
-      if (!matchesConstraints(file.relativePath, constraints, file.gitStatus)) {
-        return;
-      }
-
-      let matchScore = 0;
-      if (pattern) {
-        const match = fuzzyMatch(pattern, file.relativePath);
-        if (!match) return;
-        matchScore = match.score;
-      } else {
-        matchScore = 50; // Base score if no pattern (list files matching constraints)
-      }
+    const considerFile = (file: IndexedFile, matchingQueries = queries) => {
+      if (scope && file.relativePath !== scope && !file.relativePath.startsWith(`${scope}/`)) return;
+      const matchScore = scoreFindPath(file.relativePath, matchingQueries, file.gitStatus);
+      if (matchScore === undefined) return;
 
       // Combine fuzzy match score with frecency score
       const totalScore = matchScore + file.frecencyScore;
@@ -456,7 +418,8 @@ export class FileIndexer {
 
     // Deleted-but-tracked files are not on disk and therefore not indexed by
     // walkDir; surface them as synthetic candidates so `git:deleted` queries work.
-    if (constraints.gitFilter === "deleted") {
+    const deletedQueries = queries.filter((query) => query.gitFilter === "deleted");
+    if (deletedQueries.length) {
       for (const relPath of this.deletedPaths) {
         if (this.files.has(relPath)) continue;
         considerFile({
@@ -466,7 +429,7 @@ export class FileIndexer {
           mtime: 0,
           gitStatus: "deleted",
           frecencyScore: 0,
-        });
+        }, deletedQueries);
       }
     }
 

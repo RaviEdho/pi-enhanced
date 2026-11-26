@@ -199,6 +199,21 @@ export function matchesConstraints(
   return true;
 }
 
+/** Score a path once using the best matching OR branch, or reject it. */
+export function scoreFindPath(
+  filePath: string,
+  queries: readonly SearchQueryConstraints[],
+  gitStatus?: GitFileStatus,
+): number | undefined {
+  let best: number | undefined;
+  for (const constraints of queries) {
+    if (!matchesConstraints(filePath, constraints, gitStatus)) continue;
+    const score = constraints.pattern ? fuzzyMatch(constraints.pattern, filePath)?.score : 50;
+    if (score !== undefined && (best === undefined || score > best)) best = score;
+  }
+  return best;
+}
+
 export interface FuzzyScoreResult {
   score: number;
   matchRanges: Array<[number, number]>;

@@ -60,15 +60,17 @@ export function formatFileSuffix(gitStatus?: GitFileStatus, frecencyTag?: string
 export function formatFindOutput(
   items: FindResultItem[],
   totalMatched: number,
-  cursor?: string
+  cursor?: string,
+  type: "file" | "directory" = "file",
 ): string {
+  const noun = type === "directory" ? "directories" : "files";
   if (items.length === 0) {
-    return "No matching files found.";
+    return `No matching ${noun} found.`;
   }
 
   const lines: string[] = [];
   for (const item of items) {
-    const suffix = formatFileSuffix(item.gitStatus, item.frecencyTag);
+    const suffix = type === "directory" ? "/" : formatFileSuffix(item.gitStatus, item.frecencyTag);
     lines.push(`${item.relativePath}${suffix}`);
   }
 
@@ -76,7 +78,7 @@ export function formatFindOutput(
   const notices: string[] = [];
 
   if (totalMatched > items.length) {
-    notices.push(`Showing ${items.length} of ${totalMatched} files`);
+    notices.push(`Showing ${items.length} of ${totalMatched} ${noun}`);
   }
   if (cursor) {
     notices.push(`use cursor="${cursor}" for next page`);

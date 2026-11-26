@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import { classifyLine } from "./classifier.js";
-import { fuzzyMatch, matchesConstraints, parseQueryConstraints } from "./matcher.js";
+import { parseQueryConstraints, scoreFindPath } from "./matcher.js";
 import { TopK } from "./ranking.js";
-import type { FindResultItem, SearchMatch } from "./types.js";
+import type { FindResultItem, SearchMatch, SearchQueryConstraints } from "./types.js";
+import { DEFAULT_IGNORED_DIRS, isHiddenDirectory } from "./visibility.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -479,14 +482,20 @@ export interface ExternalFindOptions {
   offset?: number;
 }
 
+// External scans are not guaranteed to enumerate paths in the same order per page.
+function compareFindResults(a: FindResultItem, b: FindResultItem): number {
+  return b.score - a.score || (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0);
+}
+
 /**
  * Execute ripgrep --files (or find) on an external directory, ranked with FFF fuzzy matcher
  */
 export async function externalFind(
-  query: string,
+  query: string | readonly SearchQueryConstraints[],
   options: ExternalFindOptions,
   cwd: string
 ): Promise<{ items: FindResultItem[]; totalMatched: number }> {
+  const queries = typeof query === "string" ? [parseQueryConstraints(query)] : query;
   const targetDir = resolveTargetPath(options.path || cwd, cwd);
   const limit = options.limit ?? 30;
   const offset = options.offset ?? 0;
@@ -514,38 +523,59 @@ export async function externalFind(
       );
       rawOutput = stdout;
     } catch {
-      return { items: [], totalMatched: 0 };
+      throw new Error(`Could not scan files in ${formatDisplayPath(targetDir, cwd)}. Check that the path is readable or try a narrower directory.`);
     }
   }
 
   const rawFiles = rawOutput.split(/\r?\n/).filter(Boolean);
-  const scored = new TopK<{ relativePath: string; score: number }>(Math.max(0, offset + limit), (a, b) => b.score - a.score);
+  const scored = new TopK<FindResultItem>(Math.max(0, offset + limit), compareFindResults);
   let totalMatched = 0;
-
-  const constraints = parseQueryConstraints(query);
-  const pattern = constraints.pattern;
 
   for (const rawFile of rawFiles) {
     const displayPath = formatDisplayPath(rawFile, cwd);
-
-    if (!matchesConstraints(displayPath, constraints)) {
-      continue;
-    }
-
-    if (pattern) {
-      const match = fuzzyMatch(pattern, displayPath);
-      if (!match) continue;
-      scored.add({ relativePath: displayPath, score: match.score });
-    } else {
-      scored.add({ relativePath: displayPath, score: 50 });
-    }
+    const score = scoreFindPath(displayPath, queries);
+    if (score === undefined) continue;
+    scored.add({ relativePath: displayPath, score });
     totalMatched++;
   }
 
-  const paginated = scored.sorted().slice(offset, offset + limit).map((s) => ({
-    relativePath: s.relativePath,
-    score: s.score,
-  }));
+  return { items: scored.sorted().slice(offset, offset + limit), totalMatched };
+}
 
-  return { items: paginated, totalMatched };
+/** List physical directories, including empty ones, without building a file index. */
+export async function findDirectories(
+  queries: readonly SearchQueryConstraints[],
+  options: ExternalFindOptions & { depth: number },
+  cwd: string,
+): Promise<{ items: FindResultItem[]; totalMatched: number }> {
+  const root = resolveTargetPath(options.path || cwd, cwd);
+  const limit = options.limit ?? 30;
+  const offset = options.offset ?? 0;
+  const includeHidden = EnhancedSettingsStore.getInstance().get("scout.includeHidden");
+  const scored = new TopK<FindResultItem>(Math.max(0, offset + limit), compareFindResults);
+  let totalMatched = 0;
+
+  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      // A child can disappear between reading its parent and descending.
+      if (prefix && error.code === "ENOENT") return [];
+      throw new Error(`Could not read directory ${formatDisplayPath(dir, cwd)}${error.code ? ` (${error.code})` : ""}.`);
+    });
+    for (const entry of entries) {
+      // Do not follow child symlinks or walk dependency/cache trees.
+      if (!entry.isDirectory() || DEFAULT_IGNORED_DIRS.has(entry.name) ||
+        (!includeHidden && isHiddenDirectory(entry.name))) continue;
+      const relativePath = prefix + entry.name;
+      const absolutePath = path.join(dir, entry.name);
+      const score = scoreFindPath(relativePath, queries);
+      if (score !== undefined) {
+        scored.add({ relativePath: formatDisplayPath(absolutePath, cwd), score });
+        totalMatched++;
+      }
+      if (depth < options.depth) await walk(absolutePath, `${relativePath}/`, depth + 1);
+    }
+  }
+
+  await walk(root, "", 1);
+  return { items: scored.sorted().slice(offset, offset + limit), totalMatched };
 }

@@ -2,11 +2,14 @@ import os from "node:os";
 import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { parseQueryConstraints } from "./matcher.js";
 import { isScoutActive } from "./register.js";
+import type { FindResultItem } from "./types.js";
 
 const PAGE_SIZE_FIND = 30;
 const PAGE_SIZE_GREP = 35;
+const MAX_DIRECTORY_DEPTH = 15;
 let loadedIndexer: typeof import("./indexer.js") | undefined;
 let indexerPromise: Promise<typeof import("./indexer.js")> | undefined;
 let indexerGeneration = 0;
@@ -76,94 +79,67 @@ export function shouldDelegateToExternal(targetPath: string | undefined, cwd: st
   return false;
 }
 
-export async function executeFind(
-  params: {
-    pattern?: string;
-    path?: string;
-    limit?: number;
-    cursor?: string;
-  },
-  cwd: string
-): Promise<{ output: string; details: any }> {
-  const [modules, { FileIndexer }] = await Promise.all([loadScoutModules(), loadFileIndexer()]);
-  const [{ CursorStore }, { externalFind }, { formatFindOutput }, { FrecencyTracker }] = modules;
+type FindParams = Static<typeof findToolSchema>;
+
+function findPatterns(params: Pick<FindParams, "pattern" | "patterns">): string[] {
+  const candidates = Array.isArray(params.patterns) ? [params.pattern, ...params.patterns] : [params.pattern];
+  const patterns = new Set<string>();
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) patterns.add(candidate.trim());
+  }
+  return [...patterns];
+}
+
+export async function executeFind(params: FindParams, cwd: string): Promise<{ output: string; details: any }> {
+  const [{ CursorStore }, { externalFind, findDirectories, resolveTargetPath }, { formatFindOutput }, { FrecencyTracker }] =
+    await loadScoutModules();
   const cursorStore = CursorStore.getInstance();
-  let offset = 0;
-  let limit = params.limit ?? PAGE_SIZE_FIND;
+  const stored = params.cursor ? cursorStore.get(params.cursor) : undefined;
+  const previous = stored?.type === "find" ? stored : undefined;
+  const search = previous ? previous.options as FindParams : params;
+  const patterns = findPatterns(search);
+  const queries = (patterns.length ? patterns : [""]).map(parseQueryConstraints);
+  const type = search.type ?? "file";
+  const depth = search.depth ?? 1;
+  const targetPath = search.path?.trim() ? resolveTargetPath(search.path, cwd) : undefined;
+  const limit = params.limit ?? search.limit ?? PAGE_SIZE_FIND;
+  const offset = previous?.nextOffset ?? 0;
+  const options = { path: targetPath, limit, offset };
 
-  let query = (params.pattern || "").trim();
-  let targetPath = params.path;
-
-  if (params.cursor) {
-    const stored = cursorStore.get(params.cursor);
-    if (stored && stored.type === "find") {
-      offset = stored.nextOffset;
-      query = stored.query;
-      targetPath = targetPath ?? stored.options?.path;
-      if (params.limit === undefined && typeof stored.options?.limit === "number") {
-        limit = stored.options.limit;
-      }
+  let items: FindResultItem[];
+  let totalMatched: number;
+  const external = shouldDelegateToExternal(targetPath, cwd);
+  if (type === "directory") {
+    if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DIRECTORY_DEPTH) {
+      throw new Error(`Directory search depth must be an integer from 1 to ${MAX_DIRECTORY_DEPTH}.`);
     }
-  }
-
-  if (targetPath && shouldDelegateToExternal(targetPath, cwd)) {
-    const { items, totalMatched } = await externalFind(
-      query,
-      {
-        path: targetPath,
-        limit,
-        offset,
-      },
-      cwd
-    );
-
-    let nextCursor: string | undefined;
-    if (offset + items.length < totalMatched) {
-      nextCursor = cursorStore.store("find", query, offset + items.length, { ...params, path: targetPath });
+    if (queries.some((query) => query.gitFilter)) {
+      throw new Error("Git status filters apply to file searches, not directory searches.");
     }
-
-    const output = formatFindOutput(items, totalMatched, nextCursor);
-    return {
-      output,
-      details: { totalMatched, count: items.length, external: true },
-    };
+    ({ items, totalMatched } = await findDirectories(queries, { ...options, depth }, cwd));
+  } else if (external) {
+    ({ items, totalMatched } = await externalFind(queries, options, cwd));
+  } else {
+    const { FileIndexer } = await loadFileIndexer();
+    const frecency = FrecencyTracker.getInstance();
+    const result = await FileIndexer.getInstance(cwd).findFiles(queries, options);
+    totalMatched = result.totalMatched;
+    // Record access for the top 3 matched files in frecency memory.
+    for (const file of result.files.slice(0, 3)) frecency.recordAccess(file.relativePath);
+    items = result.files.map((file) => ({
+      relativePath: file.relativePath,
+      gitStatus: file.gitStatus,
+      frecencyTag: frecency.getFrecencyTag(file.frecencyScore),
+      score: file.frecencyScore,
+    }));
   }
 
-  const indexer = FileIndexer.getInstance(cwd);
-  const frecency = FrecencyTracker.getInstance();
-
-  let relPath = targetPath;
-  if (relPath && path.isAbsolute(relPath)) {
-    relPath = path.relative(cwd, relPath);
-  }
-
-  const { files, totalMatched } = await indexer.findFiles(query, {
-    limit,
-    offset,
-    path: relPath && relPath !== "." && relPath !== "./" ? relPath : undefined,
-  });
-
-  // Record access for top 3 matched files in frecency memory
-  for (let i = 0; i < Math.min(3, files.length); i++) {
-    frecency.recordAccess(files[i].relativePath);
-  }
-
-  let nextCursor: string | undefined;
-  if (offset + files.length < totalMatched) {
-    nextCursor = cursorStore.store("find", query, offset + files.length, params);
-  }
-
-  const items = files.map((f) => ({
-    relativePath: f.relativePath,
-    gitStatus: f.gitStatus,
-    frecencyTag: frecency.getFrecencyTag(f.frecencyScore),
-    score: f.frecencyScore,
-  }));
-
-  const output = formatFindOutput(items, totalMatched, nextCursor);
+  const nextCursor = items.length && offset + items.length < totalMatched
+    ? cursorStore.store("find", patterns.join(" | "), offset + items.length, { patterns, type, depth, path: targetPath, limit })
+    : undefined;
   return {
-    output,
-    details: { totalMatched, count: items.length },
+    output: formatFindOutput(items, totalMatched, nextCursor, type),
+    details: { totalMatched, count: items.length, ...(external ? { external: true } : {}) },
   };
 }
 
@@ -378,10 +354,17 @@ export async function executeGrep(
 }
 
 export const findToolSchema = Type.Object({
-  pattern: Type.Optional(Type.String({ description: "Fuzzy search query for file paths (supports !exclude, *.ext, git:modified)" })),
-  path: Type.Optional(Type.String({ description: "Directory constraint or subpath" })),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of files to return (default: 30)" })),
-  cursor: Type.Optional(Type.String({ description: "Pagination cursor for fetching the next page" })),
+  pattern: Type.Optional(Type.String({ description: "One fuzzy path query; use patterns for alternatives. Supports !exclude, *.ext, and file-only git:modified." })),
+  patterns: Type.Optional(Type.Array(Type.String(), {
+    description: "Fuzzy path queries matched with OR logic in one pass. Each query can have its own constraints; a path is returned once.",
+  })),
+  path: Type.Optional(Type.String({ description: "Directory or subpath to search (supports ~)" })),
+  type: Type.Optional(Type.Union([Type.Literal("file"), Type.Literal("directory")], {
+    description: "Return files (default) or directories. Omit pattern(s) to list entries of the chosen type.",
+  })),
+  depth: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_DIRECTORY_DEPTH, description: "Directory mode only: max depth below path (default: 1, direct children only)" })),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of results to return (default: 30)" })),
+  cursor: Type.Optional(Type.String({ description: "Pagination cursor for fetching the next page of the same search" })),
 });
 
 export const grepToolSchema = Type.Object({
@@ -426,10 +409,10 @@ export function createFindToolDefinition(name = "find"): ToolDefinition<typeof f
     name,
     label: name,
     description:
-      "Fast, frecency-ranked, typo-tolerant file finder (replaces find, fd, ls -R). Automatically prioritizes modified/staged git files and files you work on most. Supports constraints like 'git:modified', '*.ts', '!test/'.",
+      "Fuzzy path finder for files or directories. File results prioritize recently used and changed files. Use patterns for OR matching or type: 'directory' to find project folders without scanning files.",
     parameters: findToolSchema,
     promptGuidelines: [
-      `Use ${name} to locate files by fuzzy name or path instead of running bash (find, ls, locate, fd). Supports constraints like 'git:modified', '*.ts', '!test/'. Automatically ranks active and recently edited files highest.`,
+      `Use ${name} instead of shell searches. Use type: 'directory' (default depth 1) to list folders, and patterns: [...] to match any of several fuzzy path queries. File searches support constraints like 'git:modified', '*.ts', '!test/'.`,
     ],
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isScoutActive()) {
@@ -447,13 +430,15 @@ export function createFindToolDefinition(name = "find"): ToolDefinition<typeof f
       };
     },
     renderCall(args, theme, context) {
-      const rawPattern = args?.pattern?.trim();
-      const patternText = rawPattern || "*";
+      const patternText = args ? findPatterns(args).join(" | ") || "*" : "*";
       const rawPath = args?.path?.trim();
 
       let text = theme.fg("toolTitle", theme.bold(name)) + " " + theme.fg("accent", patternText);
       if (rawPath) {
         text += theme.fg("toolOutput", ` in ${shortenPath(rawPath)}`);
+      }
+      if (args?.type === "directory") {
+        text += theme.fg("toolOutput", ` (directories, depth ${args.depth ?? 1})`);
       }
       if (args?.limit !== undefined) {
         text += theme.fg("toolOutput", ` (limit ${args.limit})`);
