@@ -5,6 +5,8 @@ import {
   DEFAULT_ENHANCED_SETTINGS,
   SETTING_DEFINITIONS,
   isModelSetting,
+  isNumericSetting,
+  parseNumericSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
 } from "./types.js";
@@ -135,6 +137,10 @@ export class EnhancedSettingsStore {
 
       if (parsed && typeof parsed === "object") {
         for (const key of Object.keys(SETTING_DEFINITIONS) as EnhancedSettingKey[]) {
+          if (isNumericSetting(key)) {
+            this.settings[key] = parseNumericSetting(key, parsed[key]) ?? DEFAULT_ENHANCED_SETTINGS[key];
+            continue;
+          }
           if (key in parsed) {
             const rawVal = parsed[key];
             const def = SETTING_DEFINITIONS[key];

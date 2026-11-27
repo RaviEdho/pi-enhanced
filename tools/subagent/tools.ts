@@ -30,13 +30,13 @@ const SubagentParametersSchema = Type.Object({
   maxTurns: Type.Optional(
     Type.Number({
       description:
-        "Optional maximum turns limit before automatically terminating (default: 25).",
+        "Maximum model turns before stopping. If omitted, uses the default from /settings-enhanced (initially 25). Set 0 for no turn limit.",
     })
   ),
   timeoutMs: Type.Optional(
     Type.Number({
       description:
-        "Optional timeout in milliseconds before automatically terminating (default: 300000 = 5m).",
+        "Timeout in milliseconds before stopping. If omitted, uses the default from /settings-enhanced (initially 300000 = 5m). Set 0 for no timeout.",
     })
   ),
   background: Type.Optional(

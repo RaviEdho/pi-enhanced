@@ -41,6 +41,8 @@ Configurable options include:
 - `web.enabled`: Web Access Tools - multi-provider search & extraction (`web_search`, `web_fetch`) with session cache memory (`enabled` / `disabled`)
 - `subagent.enabled`: Subagent Tools - isolated in-process subagent execution (`subagent`, `/subagent`, `/jobs`) with session cache memory (`enabled` / `disabled`)
 - `subagent.defaultMode`: Subagent Default Mode - default execution mode (`background` / `sync`)
+- `subagent.maxTurns` (Subagent Max Turns): model-turn limit for new runs (default `25`; `0` means no limit)
+- `subagent.timeoutMs` (Subagent Timeout (ms)): execution timeout for new runs in milliseconds (default `300000`, or 5 minutes; `0` means no timeout)
 - `subagent.model`: Subagent Model - one saved model for the `subagent` tool and `/subagent` (an available `provider/model` or `session`, the default)
 - `subagent.thinkingLevel` (Subagent Thinking): Thinking level for both background and synchronous runs; defaults to `session` (inherit the parent session's thinking)
 - `feedback.askUser`: Ask User Tools - interactive clarification & 3-choice decision tool (`ask_user`) with session cache memory (`enabled` / `disabled`)
@@ -187,6 +189,8 @@ The tool is enabled by default, but can be completely disabled via `/settings-en
 - **Autonomous Isolated Subagent Routine (`tools/subagent/`, `/subagent`, `/jobs`)**: In-process subagent execution powered by in-memory sessions (`SessionManager.inMemory`). Defaults to non-blocking background execution (or synchronous blocking with `background: false` / `/subagent --sync`). Uses the saved **Subagent Model** from `/settings-enhanced` (the active parent model by default), inherits the parent's thinking effort where supported, and executes with focused system instructions, guardrails (max turns & timeouts), enhanced tools (`read`, `bash`, `edit`, `write`, `find`, `grep`, `web_search`, `web_fetch`, `escalate`), structured escalation back to the parent agent, context budgeting, cleanly coordinated follow-up delivery into the parent session, and full lifecycle control (`subagent_list`, `subagent_status`, `subagent_cancel`, `/jobs`).
 
 Set the model with `/settings-enhanced set subagent.model <provider/model>` or choose **Subagent Model** in the settings picker. Set it to `session` to inherit the parent model again. Choose **Subagent Thinking** to override the parent's thinking level. These settings apply to new background and synchronous runs without changing the parent session or jobs already running. If the saved model becomes unavailable, new runs stop with an error rather than silently using a different model.
+
+Set the default limits in the settings modal or with `/settings-enhanced set subagent.maxTurns 40` and `/settings-enhanced set subagent.timeoutMs 600000` (10 minutes). They apply to new runs in either mode. Explicit `maxTurns` or `timeoutMs` arguments to the `subagent` tool override the corresponding saved defaults for that run.
 
 **Scout `find` examples** (tool arguments):
 

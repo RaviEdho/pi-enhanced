@@ -20,7 +20,10 @@ import {
   SETTING_DEFINITIONS,
   THINKING_SETTING_MODEL_KEYS,
   isModelSetting,
+  isNumericSetting,
   isThinkingSetting,
+  numericSettingHint,
+  parseNumericSetting,
   type EnhancedSettingKey,
 } from "./types.js";
 
@@ -155,6 +158,15 @@ export async function handleSettingsEnhancedCommand(
       const value = allowed.find((level) => level === rawVal);
       if (!value) {
         const msg = `Invalid value for ${key}. Allowed: ${allowed.join(", ")}`;
+        if (ctx.hasUI) ctx.ui.notify(msg, "error");
+        else console.error(msg);
+        return;
+      }
+      store.set(key, value);
+    } else if (isNumericSetting(key)) {
+      const value = parts.length === 3 ? parseNumericSetting(key, rawValue) : undefined;
+      if (value === undefined) {
+        const msg = `Invalid value for ${key}. ${numericSettingHint(key)}`;
         if (ctx.hasUI) ctx.ui.notify(msg, "error");
         else console.error(msg);
         return;

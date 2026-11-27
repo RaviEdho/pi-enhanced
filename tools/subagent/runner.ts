@@ -7,6 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { EnhancedSettingsStore } from "../../ux/settings/store.js";
 import {
   createFindToolDefinition,
   createGrepToolDefinition,
@@ -102,9 +103,6 @@ function createEscalateToolDefinition(
   };
 }
 
-const DEFAULT_MAX_TURNS = 25;
-const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
-
 function buildEscalationResult(
   escalation: EscalationPayload,
   turns: number,
@@ -140,8 +138,9 @@ export async function runSubagent(options: SubagentRunOptions): Promise<Subagent
   const cwd = options.cwd;
   const agentDir = getAgentDir();
 
-  const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const settings = EnhancedSettingsStore.getInstance().getAll();
+  const maxTurns = options.maxTurns ?? settings["subagent.maxTurns"];
+  const timeoutMs = options.timeoutMs ?? settings["subagent.timeoutMs"];
 
   // Determine allowed tool names
   const baseToolNames = [...ALL_SUBAGENT_TOOL_NAMES];

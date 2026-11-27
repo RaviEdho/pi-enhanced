@@ -34,6 +34,10 @@ export interface EnhancedSettings {
   "subagent.enabled": boolean;
   /** Default execution mode for /subagent tasks (background or sync). */
   "subagent.defaultMode": SubagentExecutionMode;
+  /** Default turn limit for new subagents (0 disables the limit). */
+  "subagent.maxTurns": number;
+  /** Default timeout in milliseconds for new subagents (0 disables the limit). */
+  "subagent.timeoutMs": number;
   /** Model used by new subagents, or "session" for the active Pi model. */
   "subagent.model": string;
   /** Thinking effort used by new subagents, or "session" to inherit it. */
@@ -68,6 +72,29 @@ export interface EnhancedSettings {
 }
 
 export type EnhancedSettingKey = keyof EnhancedSettings;
+
+const NUMERIC_SETTING_MAX = {
+  "subagent.maxTurns": Number.MAX_SAFE_INTEGER,
+  "subagent.timeoutMs": 2_147_483_647, // Node's largest supported setTimeout delay
+} as const;
+
+type NumericSettingKey = keyof typeof NUMERIC_SETTING_MAX;
+
+export function isNumericSetting(key: EnhancedSettingKey): key is NumericSettingKey {
+  return Object.hasOwn(NUMERIC_SETTING_MAX, key);
+}
+
+export function parseNumericSetting(key: NumericSettingKey, raw: unknown): number | undefined {
+  const value = typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw) : raw;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= NUMERIC_SETTING_MAX[key]) {
+    return value;
+  }
+  return undefined;
+}
+
+export function numericSettingHint(key: NumericSettingKey): string {
+  return `Enter a whole number from 0 to ${NUMERIC_SETTING_MAX[key]} (0 means no limit).`;
+}
 
 export interface SettingDefinition<K extends EnhancedSettingKey = EnhancedSettingKey> {
   key: K;
@@ -135,6 +162,22 @@ export const SETTING_DEFINITIONS: { [K in EnhancedSettingKey]: SettingDefinition
     description: "Default execution mode for isolated subagents (non-blocking background vs blocking sync)",
     defaultValue: "background",
     options: ["background", "sync"],
+  },
+  "subagent.maxTurns": {
+    key: "subagent.maxTurns",
+    label: "Subagent Max Turns",
+    category: "Agent Tools",
+    description: "Default model-turn limit for new subagents (0 means no limit)",
+    defaultValue: 25,
+    options: [],
+  },
+  "subagent.timeoutMs": {
+    key: "subagent.timeoutMs",
+    label: "Subagent Timeout (ms)",
+    category: "Agent Tools",
+    description: "Default execution timeout in milliseconds for new subagents (0 means no limit)",
+    defaultValue: 300_000,
+    options: [],
   },
   "subagent.model": {
     key: "subagent.model",
@@ -271,6 +314,8 @@ export const DEFAULT_ENHANCED_SETTINGS: EnhancedSettings = {
   "web.enabled": SETTING_DEFINITIONS["web.enabled"].defaultValue,
   "subagent.enabled": SETTING_DEFINITIONS["subagent.enabled"].defaultValue,
   "subagent.defaultMode": SETTING_DEFINITIONS["subagent.defaultMode"].defaultValue,
+  "subagent.maxTurns": SETTING_DEFINITIONS["subagent.maxTurns"].defaultValue,
+  "subagent.timeoutMs": SETTING_DEFINITIONS["subagent.timeoutMs"].defaultValue,
   "subagent.model": SETTING_DEFINITIONS["subagent.model"].defaultValue,
   "subagent.thinkingLevel": SETTING_DEFINITIONS["subagent.thinkingLevel"].defaultValue,
   "feedback.askUser": SETTING_DEFINITIONS["feedback.askUser"].defaultValue,

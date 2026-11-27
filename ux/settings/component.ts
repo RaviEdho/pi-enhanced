@@ -38,7 +38,10 @@ import {
   SETTING_DEFINITIONS,
   THINKING_SETTING_MODEL_KEYS,
   isModelSetting,
+  isNumericSetting,
   isThinkingSetting,
+  numericSettingHint,
+  parseNumericSetting,
   type EnhancedSettingKey,
   type EnhancedSettings,
   type SettingDefinition,
@@ -75,6 +78,7 @@ export class EnhancedSettingsComponent implements Component {
   private frame: DialogFrame;
   private hasFocus = false;
   private modelMenu?: ModelPickerComponent;
+  private numericInput?: Input;
   private bodyIdentity?: string;
   private listStart = 3;
 
@@ -170,6 +174,48 @@ export class EnhancedSettingsComponent implements Component {
         };
       } else if (isThinkingSetting(def.key)) {
         ({ currentValue, values: options } = this.getThinkingItemState(def.key));
+      } else if (isNumericSetting(def.key)) {
+        const key = def.key;
+        submenu = (currentValue, done) => {
+          const title = new Text(this.theme.fg("accent", def.label), 0, 0);
+          const hintText = numericSettingHint(key);
+          const hint = new Text(this.theme.fg("dim", hintText), 0, 0);
+          const actions = new Text(this.theme.fg("dim", "Enter save · Esc cancel"), 0, 0);
+          const input = new Input({
+            placeholder: currentValue,
+            placeholderStyle: (text) => this.theme.fg("dim", text),
+          });
+          const finish = (value?: string) => {
+            this.numericInput = undefined;
+            done(value);
+          };
+          input.focused = this.hasFocus;
+          this.numericInput = input;
+          input.onSubmit = (raw) => {
+            const value = parseNumericSetting(key, raw);
+            if (value === undefined) {
+              hint.setText(this.theme.fg("error", hintText));
+            } else {
+              finish(String(value));
+            }
+          };
+          input.onEscape = () => finish();
+          return {
+            render: (width) => [
+              ...title.render(width),
+              ...input.render(width),
+              ...hint.render(width),
+              ...actions.render(width),
+            ],
+            handleInput: (data) => data === "\x03" ? finish() : input.handleInput(data),
+            invalidate: () => {
+              title.invalidate();
+              input.invalidate();
+              hint.invalidate();
+              actions.invalidate();
+            },
+          };
+        };
       } else if (def.key === "scout.interceptShell" && !scoutActive) {
         description =
           "Intercept shell grep/find/rg commands (Dormant: requires Scout Search Tools to be enabled)";
@@ -214,6 +260,7 @@ export class EnhancedSettingsComponent implements Component {
     const searchInput = (this.settingsList as any)?.searchInput as Input | undefined;
     if (searchInput) searchInput.focused = value;
     if (this.modelMenu) this.modelMenu.focused = value;
+    if (this.numericInput) this.numericInput.focused = value;
   }
 
   public invalidate(): void {
@@ -549,6 +596,9 @@ export class EnhancedSettingsComponent implements Component {
     } else if (isThinkingSetting(key)) {
       const value = newValue === SESSION_THINKING_LABEL ? SESSION_THINKING_VALUE : THINKING_LEVELS.find((level) => level === newValue);
       if (value) this.store.set(key, value);
+    } else if (isNumericSetting(key)) {
+      const value = parseNumericSetting(key, newValue);
+      if (value !== undefined) this.store.set(key, value);
     } else if (key === "subagent.defaultMode" || key === "usage.contextFormat") {
       this.store.set(key, newValue as any);
     } else {
