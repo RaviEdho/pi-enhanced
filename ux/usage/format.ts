@@ -233,8 +233,9 @@ function formatBucketEntry(
   const timeElapsed = bucketTimeElapsed(bucket, now);
   const bar = makeProgressBar(bucket.usedFraction, barWidth, timeElapsed, theme, true);
 
-  const freePct = Math.max(0, 100 - bucket.usedFraction * 100);
-  const pctStr = `${freePct.toFixed(1)}%`.padStart(6);
+  // Report used percentage so the number agrees with the fill-up bar.
+  const usedPct = Math.min(100, Math.max(0, bucket.usedFraction * 100));
+  const pctStr = `${usedPct.toFixed(1)}%`.padStart(6);
   const pctColored =
     bucket.usedFraction >= 0.95
       ? error(pctStr)

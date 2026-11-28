@@ -138,7 +138,7 @@ Audit checklist:
 ### `/usage`
 
 - Group by provider → account → bucket. Show the active session model/account when available; mark the active account `●` and `[in use]`, others `○`. Lowercase displayed tiers without altering stored identities.
-- Use descriptive labels (`5-Hour`, `Daily`, `Weekly`, `Monthly`) while retaining meaningful provider-specific names. Bars show **remaining** percentage to one decimal; `┃` requires known elapsed-window timing.
+- Use descriptive labels (`5-Hour`, `Daily`, `Weekly`, `Monthly`) while retaining meaningful provider-specific names. Bars **fill with used** percentage to one decimal, matching the footer; `┃` requires known elapsed-window timing.
 - Show verified countdowns or `ready` where appropriate, known-zero balances as named values, and errors/unavailable reasons within the affected account section.
 - Adapt to terminal dimensions; keep each provider's accounts together in multi-column layouts.
 
