@@ -1,6 +1,6 @@
 import { fetchTokenHarborUsage } from "../../ux/usage/tokenharbor.js";
 import { isProviderNetworkEnabled } from "../network.js";
-import { ALLOWANCE_TTL_MS } from "./constants.js";
+import { ALLOWANCE_TTL_MS, VERIFICATION_TTL_MS } from "./constants.js";
 import { tokenHarborCredentialHash } from "./credentials.js";
 import { fetchTokenHarborCatalog, isTokenHarborModelVisible } from "./models.js";
 import { parseTokenHarborReasoning, type TokenHarborReasoning } from "./reasoning.js";
@@ -101,7 +101,7 @@ export async function verifyTokenHarborRequest(key: string, id: string, signal?:
     return undefined;
   }
   const access = await refreshTokenHarborAccess(key, signal, true);
-  if (Date.now() - access.checkedAt >= ALLOWANCE_TTL_MS) throw new Error("Token Harbor Pass verification expired before the request; refresh models.");
+  if (Date.now() - access.checkedAt >= VERIFICATION_TTL_MS) throw new Error("Token Harbor Pass verification expired before the request; refresh models.");
   const model = access.models.get(id);
   if (!access.planName || !model?.coveredByPlans?.includes(access.planName)) {
     throw new Error("Token Harbor model is not verified as covered by this key's active Pass. Unknown and wallet-only access are blocked.");
