@@ -6,6 +6,7 @@ import { PlanModeManager } from "../../ux/plan/manager.js";
 import { chooseReleaseNotes, type ReleaseNotesContext } from "./release-notes.js";
 import { isReleaseBump, nextReleaseVersion, selectReleaseVersion } from "./release-version-selector.js";
 import { confirmGitReview } from "./review-dialog.js";
+import { readTagPushWorkflow } from "./tag-workflows.js";
 
 const USAGE = "/git release ship [patch|minor|major|X.Y.Z], push <tag>, or status <tag>";
 const remote = "origin";
@@ -388,9 +389,14 @@ export async function handleReleaseWorkflow(action: Action, argument: string, ct
     }
     const commits = (await repo.git(["log", "--oneline", "-12", `${upstream}..${head}`], "Could not review outgoing commits.")).trim();
     const tuiReview = ctx.mode === "tui";
+    // Tag-push workflows are GitHub-specific; non-GitHub destinations are not inspected.
+    const tagPush = githubRepo(destination) ? await readTagPushWorkflow(root) : "found";
     if (!await confirmGitReview(ctx, `Push ${tag}?`, [
       `origin (${destinationLabel(destination)}) · ${branch} · ${head.slice(0, 12)}`,
       "Pushing this tag may publish a release.",
+      ...(tagPush === "found" ? [] : [`\n${tagPush === "missing"
+        ? "Warning: no tag-push GitHub Actions workflow was found in the committed HEAD; pushing this tag will not start a build."
+        : "Warning: could not check for a tag-push GitHub Actions workflow in the committed HEAD."}`]),
       ...(commits ? [`\nOutgoing commits (up to 12):\n${preview(commits, tuiReview ? 4_000 : 800)}`] : []),
       ...(bump ? [`\nNew commit: ${commitMessage}\nFiles: ${files.map(file => preview(file, 120)).join(", ")}\n${preview(diff, tuiReview ? 32_000 : 1800, "truncated; review with git diff")}`] : []),
       ...(notes ? [`\nRelease notes in ${tag}:\n${tuiReview ? notes : preview(notes, 420)}`] : []),
