@@ -1,6 +1,6 @@
 import { fetchTokenHarborUsage } from "../../ux/usage/tokenharbor.js";
 import { isProviderNetworkEnabled } from "../network.js";
-import { ALLOWANCE_TTL_MS, VERIFICATION_TTL_MS } from "./constants.js";
+import { VERIFICATION_TTL_MS } from "./constants.js";
 import { tokenHarborCredentialHash } from "./credentials.js";
 import { fetchTokenHarborCatalog, isTokenHarborModelVisible } from "./models.js";
 import { parseTokenHarborReasoning, type TokenHarborReasoning } from "./reasoning.js";
@@ -55,9 +55,12 @@ export function invalidateTokenHarborAccess(key: string): void {
   snapshots.delete(tokenHarborCredentialHash(key));
 }
 
+// The published snapshot inherits the allowance lookup's data age, so its validity
+// window must match the per-request verification budget; a narrower window here would
+// reject mid-request a coverage check that verification just accepted.
 function freshAccess(key: string): TokenHarborAccess | undefined {
   const access = snapshots.get(tokenHarborCredentialHash(key));
-  return isProviderNetworkEnabled() && access && Date.now() - access.checkedAt < ALLOWANCE_TTL_MS ? access : undefined;
+  return isProviderNetworkEnabled() && access && Date.now() - access.checkedAt < VERIFICATION_TTL_MS ? access : undefined;
 }
 
 /** Synchronous account/picker predicate. Unknown paid coverage is never permission. */
