@@ -19,9 +19,26 @@ export function parseTokenHarborReasoning(value: unknown): TokenHarborReasoning 
   };
 }
 
+/**
+ * Direct force-refresh probes on 2026-11-27 showed increasing completion/reasoning
+ * output for none/low/high/max on deepseek-v4.1-flash:free and low/high/max on
+ * glm-5.3-flash. GLM's `none` request still returned reasoning. Token Harbor returned
+ * no applied-effort header; DeepSeek sibling IDs use the requested override but were
+ * not independently probed.
+ */
+function reasoningForModel(id: string, value: unknown): TokenHarborReasoning {
+  const reasoning = parseTokenHarborReasoning(value);
+  const isDeepSeekV41Flash = id === "deepseek-v4.1-flash"
+    || id.startsWith("deepseek-v4.1-flash:")
+    || id.startsWith("deepseek-v4.1-flash-");
+  if (isDeepSeekV41Flash) return { ...reasoning, efforts: ["low", "high", "max"] };
+  if (id === "glm-5.3-flash") return { ...reasoning, efforts: ["low", "high", "max"], can_disable: false };
+  return reasoning;
+}
+
 /** Explicit null mappings prevent Pi from inventing additional effort controls. */
 export function withTokenHarborReasoning<T extends Model<"openai-completions">>(model: T, value: unknown): T & { tokenHarborReasoning: TokenHarborReasoning } {
-  const r = parseTokenHarborReasoning(value);
+  const r = reasoningForModel(model.id, value);
   const thinkingLevelMap = Object.fromEntries(levels.map(level => [level,
     level === "off" ? r.can_disable === true ? "none" : null : r.efforts?.includes(level) ? level : null,
   ])) as ThinkingLevelMap;
